@@ -81,7 +81,11 @@ fn decodes_ten_frames_against_ffmpeg_reference_with_high_psnr() {
     let mut min_y_psnr = f64::INFINITY;
 
     for packet_bytes in iter_packets(PACKETS) {
-        let pkt = Packet::new(frame_idx as u32, TimeBase::new(1, 15), packet_bytes.to_vec());
+        let pkt = Packet::new(
+            frame_idx as u32,
+            TimeBase::new(1, 15),
+            packet_bytes.to_vec(),
+        );
         dec.send_packet(&pkt).expect("send_packet");
         let frame = dec.receive_frame().expect("receive_frame");
         let Frame::Video(vf) = frame else {
@@ -109,9 +113,7 @@ fn decodes_ten_frames_against_ffmpeg_reference_with_high_psnr() {
         // the same widening. The headline `psnr` reflects the merged
         // YUV buffer.
         let y_psnr = psnr_u8(&ref_frame[..W * H], &decoded[..W * H]);
-        eprintln!(
-            "frame {frame_idx}: PSNR = {psnr:.2} dB  (Y-plane only: {y_psnr:.2} dB)"
-        );
+        eprintln!("frame {frame_idx}: PSNR = {psnr:.2} dB  (Y-plane only: {y_psnr:.2} dB)");
         min_psnr = min_psnr.min(psnr);
         min_y_psnr = min_y_psnr.min(y_psnr);
         if psnr.is_finite() {
@@ -167,5 +169,8 @@ fn first_frame_y_plane_is_not_mid_grey() {
         unique_values.len()
     );
     let any_non_128 = y.iter().any(|&v| v != 128);
-    assert!(any_non_128, "first-frame luma is uniformly 128 — placeholder regression");
+    assert!(
+        any_non_128,
+        "first-frame luma is uniformly 128 — placeholder regression"
+    );
 }

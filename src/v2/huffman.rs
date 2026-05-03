@@ -99,7 +99,10 @@ impl HuffTable {
             for i in 0..span {
                 let idx = (base | i) as usize;
                 debug_assert_eq!(lut[idx].length, 0, "canonical Huffman overlap");
-                lut[idx] = LutEntry { symbol: sym, length: len };
+                lut[idx] = LutEntry {
+                    symbol: sym,
+                    length: len,
+                };
             }
         }
         let lut: Box<[LutEntry; 1 << MAX_CODE_LEN]> =
