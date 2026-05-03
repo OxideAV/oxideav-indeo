@@ -8,11 +8,10 @@
 //! 5,412-byte packet (a single intra frame at 160x120) into
 //! `tests/fixtures/rt21_first_frame.bin`.
 //!
-//! Round 1 acceptance: parse the 48-byte frame header and emit a
-//! structurally correct `Yuv420P` `VideoFrame` at the declared
-//! 160x120 dimensions. Pixel-exact match with libavcodec's reference
-//! decoder is the round-2 deliverable once the static codeword and
-//! delta tables are re-derived.
+//! Round-2 acceptance: parse the 48-byte frame header and emit a
+//! `Yuv420P` `VideoFrame` whose Y plane is bit-exact against
+//! `ffmpeg -i VPAR0019.AVI -pix_fmt yuv420p` for every fixture frame.
+//! The PSNR cross-check lives in `psnr_against_ffmpeg.rs`.
 
 use oxideav_core::{CodecId, Decoder, Frame, Packet, TimeBase};
 use oxideav_indeo::v2::{FrameHeader, FrameType, Indeo2Decoder, FRAME_HEADER_BYTES};

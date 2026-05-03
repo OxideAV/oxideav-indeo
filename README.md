@@ -9,17 +9,24 @@ point.
 
 ## Status
 
-| Version | Codec id  | AVI FourCC(s) | Round 1 status |
-|--------:|:----------|:--------------|:---------------|
-| Indeo 2 | `indeo2`  | `RT21`, `IV20` | scaffold + frame-header parse + structurally-valid stub plane decode (full pair / run entropy decode is the round-2 deliverable) |
-| Indeo 3 | `indeo3`  | `IV31`, `IV32` | not yet implemented |
-| Indeo 4 | `indeo4`  | `IV41`, `IV42` | not yet implemented |
-| Indeo 5 | `indeo5`  | `IV50`         | not yet implemented |
+| Version | Codec id  | AVI FourCC(s) | Status |
+|--------:|:----------|:--------------|:-------|
+| Indeo 2 | `indeo2`  | `RT21`, `IV20` | **decode complete** — Y-plane bit-exact vs. ffmpeg, ≈55 dB merged YUV PSNR (chroma upsample-method drift only) |
+| Indeo 3 | `indeo3`  | `IV31`, `IV32` | not yet implemented (round 3 — pending `docs/video/indeo/indeo3/`) |
+| Indeo 4 | `indeo4`  | `IV41`, `IV42` | not yet implemented (round 4 — pending `docs/video/indeo/indeo4/`) |
+| Indeo 5 | `indeo5`  | `IV50`         | not yet implemented (round 5 — pending `docs/video/indeo/indeo5/`) |
 
-Round 1 ships **Indeo 2 only** (codec id `indeo2`). Indeo 3, 4, and 5
-land in subsequent rounds via the same crate's `v3` / `v4` / `v5`
-modules and additional `register()` entries — the public API does
-not change.
+Indeo 2 ships fully decoded: the 143-entry canonical Huffman codebook
+and the four 256-byte delta tables (§8 of the trace doc) drive the
+pair / run plane reader; intra row 0 uses the absolute palette;
+intra rows ≥ 1 add a signed delta to the row above; inter rows add a
+3/4-scaled delta on top of the previous frame's pixel. Y plane is
+byte-exact against `ffmpeg -i VPAR0019.AVI -pix_fmt yuv420p` for
+every frame in the in-tree fixture corpus.
+
+Indeo 3, 4, and 5 land in subsequent rounds via the same crate's
+`v3` / `v4` / `v5` modules and additional `register()` entries —
+the public API does not change.
 
 ## Indeo 2 reference
 
@@ -47,14 +54,13 @@ mapping will switch to it.)
 
 ## Roadmap
 
-- **Round 2 (Indeo 2 entropy decode).** Derive the four 256-byte
-  delta tables and the 143-entry canonical Huffman codebook from a
-  combination of the trace document, real RT21 fixtures, and
-  independent public references; wire them into the pair / run plane
-  reader described in §§3.5–3.7 of the trace doc.
 - **Round 3 (Indeo 3).** `IV31` / `IV32` block-based VQ codec.
-- **Round 4 (Indeo 4).** `IV41` / `IV42` wavelet codec.
-- **Round 5 (Indeo 5).** `IV50` wavelet codec with motion compensation.
+  Pending the trace / reverse-engineering document under
+  `docs/video/indeo/indeo3/`.
+- **Round 4 (Indeo 4).** `IV41` / `IV42` wavelet codec. Pending
+  `docs/video/indeo/indeo4/`.
+- **Round 5 (Indeo 5).** `IV50` wavelet codec with motion
+  compensation. Pending `docs/video/indeo/indeo5/`.
 
 ## License
 

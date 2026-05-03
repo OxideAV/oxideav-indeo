@@ -11,13 +11,23 @@
 /// Indeo 2's entropy payload (per
 /// `docs/video/indeo/indeo2/indeo2-trace-reverse-engineering.md` §3.2)
 /// is read directly with a little-endian bit reader after the 48-byte
-/// frame header. Bits are pulled MSB-first within each byte; the byte
-/// stream is consumed left-to-right.
+/// frame header. The byte stream is consumed left-to-right; bits within
+/// each byte are pulled **LSB-first** (so bit 0 of byte 0 is bit 0 of
+/// the bit-stream, bit 1 of byte 0 is bit 1 of the bit-stream, …, bit
+/// 7 of byte 0 is bit 7, and bit 0 of byte 1 is bit 8). Multi-bit
+/// reads return the bits in the order they were consumed — i.e. for a
+/// 3-bit read, the first-consumed bit lands in the MSB of the result.
+///
+/// This matches FFmpeg's `BitstreamContextLE`: a code that the trace
+/// document writes as a binary string MSB-first (e.g. symbol 0x01 ⇒
+/// `000`) is read by stepping through the LE bit-stream and packing
+/// the consumed bits into a value MSB-first. The 14-bit Huffman
+/// lookup window in `super::v2::huffman` indexes its table with the
+/// resulting MSB-first integer.
 ///
 /// `pos_bits()` reports the current cursor in bits from the start of
-/// the underlying buffer, which is exactly what `[TRACE/code]` lines
-/// in the reference document carry — making the reader directly
-/// auditable against the trace log.
+/// the underlying buffer, which is what `[TRACE/code]` lines in the
+/// reference document carry.
 #[derive(Debug)]
 pub struct BitReader<'a> {
     buf: &'a [u8],
@@ -51,20 +61,29 @@ impl<'a> BitReader<'a> {
     }
 
     /// Pull one bit. Returns `None` past the end of the buffer.
+    ///
+    /// The bit at byte position `b`, intra-byte position `i` (LSB =
+    /// 0) is returned for the `b*8 + i`-th call, matching the LE bit
+    /// reader described in the type-level docs.
     pub fn read_bit(&mut self) -> Option<u8> {
         let byte_idx = self.pos_bits / 8;
         let bit_idx = self.pos_bits % 8;
         let b = *self.buf.get(byte_idx)?;
         self.pos_bits += 1;
-        Some((b >> (7 - bit_idx)) & 1)
+        Some((b >> bit_idx) & 1)
     }
 
-    /// Pull up to 24 bits MSB-first, packed into a `u32`.
+    /// Pull up to 24 bits, packed MSB-first into the returned `u32`.
+    ///
+    /// Successive bits in the bit-stream become successive bits of
+    /// the result *from MSB to LSB*: the first bit consumed lands at
+    /// `1 << (nbits - 1)`, the last bit consumed lands at `1 << 0`.
+    /// Within each byte of the underlying buffer, bits are stepped
+    /// LSB-first.
     ///
     /// Returns `None` if `nbits` is greater than 24 or if there are
-    /// not enough bits in the buffer to cover the request. The 24-bit
-    /// limit fits the longest Indeo 2 codeword (13 bits) with plenty
-    /// of headroom for table-driven 14-bit lookahead reads.
+    /// not enough bits in the buffer. The 24-bit limit fits the
+    /// longest Indeo 2 codeword (14 bits) with comfortable headroom.
     pub fn peek_bits(&self, nbits: u8) -> Option<u32> {
         if nbits == 0 {
             return Some(0);
@@ -75,29 +94,21 @@ impl<'a> BitReader<'a> {
         if self.bits_remaining() < nbits as usize {
             return None;
         }
-        let byte_idx_start = self.pos_bits / 8;
-        let bit_idx = self.pos_bits % 8;
-        // Pull up to 4 bytes into a 32-bit window, MSB-aligned.
-        let mut window: u64 = 0;
-        let mut have = 0u8;
-        // Load enough bytes to cover bit_idx + nbits.
-        let need_bits = bit_idx + nbits as usize;
-        let need_bytes = need_bits.div_ceil(8);
-        for offset in 0..need_bytes {
-            window =
-                (window << 8) | self.buf.get(byte_idx_start + offset).copied().unwrap_or(0) as u64;
-            have = have.saturating_add(8);
+        let mut value: u32 = 0;
+        for i in 0..nbits as usize {
+            let p = self.pos_bits + i;
+            let byte_idx = p / 8;
+            let bit_idx = p % 8;
+            let b = self.buf[byte_idx];
+            let bit = (b >> bit_idx) & 1;
+            // First bit consumed → MSB of `value`.
+            value |= (bit as u32) << (nbits as usize - 1 - i);
         }
-        // Mask off the bit_idx bits we don't want at the top.
-        let total_bits_in_window = have as u32;
-        let shift = total_bits_in_window
-            .checked_sub(bit_idx as u32)
-            .and_then(|v| v.checked_sub(nbits as u32))?;
-        let value = (window >> shift) & ((1u64 << nbits) - 1);
-        Some(value as u32)
+        Some(value)
     }
 
-    /// Read up to 24 bits MSB-first and advance the cursor.
+    /// Read up to 24 bits and advance the cursor. Bits are packed
+    /// MSB-first into the returned value (see [`Self::peek_bits`]).
     pub fn read_bits(&mut self, nbits: u8) -> Option<u32> {
         let v = self.peek_bits(nbits)?;
         self.pos_bits += nbits as usize;
@@ -127,14 +138,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn read_bits_msb_first() {
-        // 0b10110010 0b11001010 = 0xB2 0xCA
+    fn read_bits_le_byte_msb_pack() {
+        // 0xB2 = 0b1011_0010. Bits in the bit-stream order (LSB-first
+        // within byte): 0,1,0,0,1,1,0,1.
+        // 0xCA = 0b1100_1010. Bits in stream order: 0,1,0,1,0,0,1,1.
         let buf = [0xB2, 0xCA];
         let mut br = BitReader::new(&buf);
-        assert_eq!(br.read_bits(3), Some(0b101)); // top 3 of 0xB2
-        assert_eq!(br.read_bits(5), Some(0b10010)); // bottom 5 of 0xB2
-        assert_eq!(br.read_bits(4), Some(0b1100)); // top 4 of 0xCA
-        assert_eq!(br.read_bits(4), Some(0b1010));
+        // First 3 bits consumed = (0,1,0). Packed MSB-first: 0b010 = 2.
+        assert_eq!(br.read_bits(3), Some(0b010));
+        // Next 5 bits = (0,1,1,0,1) MSB-first → 0b01101 = 13.
+        assert_eq!(br.read_bits(5), Some(0b01101));
+        // Next 4 bits = (0,1,0,1) MSB-first → 0b0101 = 5.
+        assert_eq!(br.read_bits(4), Some(0b0101));
+        // Final 4 bits = (0,0,1,1) MSB-first → 0b0011 = 3.
+        assert_eq!(br.read_bits(4), Some(0b0011));
         assert_eq!(br.bits_remaining(), 0);
         assert!(br.at_eof());
     }
@@ -151,13 +168,13 @@ mod tests {
 
     #[test]
     fn read_one_bit_at_a_time() {
+        // 0b1010_0110. LSB-first: 0,1,1,0,0,1,0,1.
         let buf = [0b1010_0110];
         let mut br = BitReader::new(&buf);
-        let mut got = 0u8;
-        for _ in 0..8 {
-            got = (got << 1) | br.read_bit().unwrap();
+        let expected = [0u8, 1, 1, 0, 0, 1, 0, 1];
+        for &e in &expected {
+            assert_eq!(br.read_bit().unwrap(), e);
         }
-        assert_eq!(got, 0b1010_0110);
     }
 
     #[test]

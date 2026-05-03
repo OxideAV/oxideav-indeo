@@ -1,13 +1,12 @@
 //! Indeo 2 packet → video frame decoder.
 //!
-//! Round 1: parses the 48-byte frame header and validates it against
-//! the structural invariants from the reference trace document. The
-//! per-pixel pair / run entropy decode is deferred to round 2 — see
-//! the crate-level docs for the specifics. The decoder still emits a
-//! `VideoFrame` with the correct dimensions / pixel format / plane
-//! layout so it can be wired into the pipeline today; pixel values
-//! are placeholder mid-grey for the luma plane and neutral chroma for
-//! U / V.
+//! Round 2: parses the 48-byte frame header and runs the full pair /
+//! run entropy decode against the 143-entry canonical Huffman codebook
+//! and the four 256-byte delta tables (see `super::tables` and
+//! `super::huffman`). Output is yuv410p internally, expanded to
+//! `Yuv420P` on emission. Inter packets are reconstructed against the
+//! previous decoded frame as required by §3.7 / §3.9 of the trace
+//! document.
 
 use oxideav_core::frame::VideoPlane;
 use oxideav_core::{
@@ -15,15 +14,18 @@ use oxideav_core::{
 };
 
 use crate::common::BitReader;
-use crate::v2::header::{FrameHeader, FRAME_HEADER_BYTES};
+use crate::v2::header::{FrameHeader, FrameType, FRAME_HEADER_BYTES};
+use crate::v2::huffman::HuffTable;
+use crate::v2::plane::decode_plane;
+use crate::v2::tables::DELTA_TABLES;
 
 /// Intel Indeo 2 single-stream decoder.
 ///
 /// One persistent reference buffer (Y, U, V) is retained across
 /// frames so inter packets can be reconstructed against the previous
-/// decoded frame as required by §3.7 / §3.9 of the trace doc. Round 1
-/// allocates the reference buffer but does not yet produce
-/// fully-decoded pixels — see crate docs.
+/// decoded frame as required by §3.7 / §3.9 of the trace doc. The
+/// 14-bit Huffman lookup table is built once and shared across all
+/// frames.
 pub struct Indeo2Decoder {
     codec_id: CodecId,
     pending: Option<Packet>,
@@ -36,6 +38,8 @@ pub struct Indeo2Decoder {
     /// (width, height) of the last decoded frame. Mismatching
     /// dimensions on the next packet invalidate `prev`.
     dims: Option<(u16, u16)>,
+    /// 14-bit Huffman lookup, shared across frames.
+    huff: HuffTable,
 }
 
 impl std::fmt::Debug for Indeo2Decoder {
@@ -57,6 +61,7 @@ impl Indeo2Decoder {
             eof: false,
             prev: None,
             dims: None,
+            huff: HuffTable::build(),
         }
     }
 }
@@ -91,7 +96,7 @@ impl Decoder for Indeo2Decoder {
                 Err(Error::NeedMore)
             };
         };
-        let decoded = decode_packet(&pkt.data, self.prev.as_ref())?;
+        let decoded = decode_packet(&self.huff, &pkt.data, self.prev.as_ref())?;
 
         // Dimension change invalidates the reference buffer for any
         // subsequent inter packet — but the trace doc shows every
@@ -147,6 +152,13 @@ impl DecodedFrame {
             u_plane: vec![128; chroma_w * chroma_h],
             v_plane: vec![128; chroma_w * chroma_h],
         }
+    }
+
+    /// Plane sizes for a (width, height) frame in `yuv410p` layout.
+    fn plane_dims(width: u16, height: u16) -> (usize, usize, usize, usize) {
+        let w = width as usize;
+        let h = height as usize;
+        (w, h, w / 4, h / 4)
     }
 
     /// Expand the native yuv410p planes into a Yuv420P `VideoFrame`.
@@ -205,14 +217,15 @@ impl DecodedFrame {
 
 /// Decode one whole-frame packet.
 ///
-/// Round 1 verifies the frame header, sanity-checks the entropy
-/// payload size, and produces a [`DecodedFrame`] of the correct
-/// dimensions. Pixel values are placeholders (luma 128, chroma 128)
-/// because the static codeword table and the four delta tables are
-/// not yet derived — this is the round-2 deliverable. The bit reader
-/// is exercised over the entropy payload anyway so the wiring is
-/// proven end-to-end against real fixtures.
-pub(crate) fn decode_packet(data: &[u8], _prev: Option<&DecodedFrame>) -> Result<DecodedFrame> {
+/// Verifies the frame header, then runs the pair / run plane decoder
+/// for the on-wire plane order Y, V, U. Inter frames are
+/// reconstructed against `prev` (the previous decoded frame); intra
+/// frames discard `prev`.
+pub(crate) fn decode_packet(
+    huff: &HuffTable,
+    data: &[u8],
+    prev: Option<&DecodedFrame>,
+) -> Result<DecodedFrame> {
     let header = FrameHeader::parse(data)?;
     if data.len() <= FRAME_HEADER_BYTES {
         return Err(Error::invalid(format!(
@@ -245,27 +258,47 @@ pub(crate) fn decode_packet(data: &[u8], _prev: Option<&DecodedFrame>) -> Result
         }
     }
 
-    // Exercise the bit reader to confirm wiring — this is a no-op
-    // proof-of-life pending the real entropy decoder. Without the
-    // codeword tables we can't actually emit pixels here.
-    let mut br = BitReader::new(payload);
-    // Walk a token's worth of bits; this surfaces any underflow
-    // immediately rather than silently returning garbage. Use a small
-    // fixed budget so the test stays deterministic.
-    let walk_bits = std::cmp::min(payload.len() * 8, 64);
-    for _ in 0..walk_bits {
-        if br.read_bit().is_none() {
-            return Err(Error::invalid(
-                "indeo2: bit reader underflow before token budget exhausted",
-            ));
-        }
-    }
+    let intra = matches!(header.frame_type, FrameType::Intra(_));
+    let (yw, yh, cw, ch) = DecodedFrame::plane_dims(header.width, header.height);
 
-    // Round 1: emit a structurally valid placeholder frame at the
-    // bitstream's declared dimensions. The next round wires the
-    // actual pair / run plane decoder into this slot.
-    let frame = DecodedFrame::new(header.width, header.height);
-    let _ = (header.frame_type, header.ltab, header.ctab); // FUTURE
+    // Pick the active delta tables.
+    if header.ltab > 3 || header.ctab > 3 {
+        return Err(Error::invalid(format!(
+            "indeo2: ltab={} ctab={} out of range",
+            header.ltab, header.ctab
+        )));
+    }
+    let l_table = &DELTA_TABLES[header.ltab as usize];
+    let c_table = &DELTA_TABLES[header.ctab as usize];
+
+    // For inter, seed plane buffers from the previous frame; for
+    // intra, discard. If prev's dimensions don't match the header
+    // (e.g. dimension change), fall back to neutral and treat as
+    // intra-style decode is not safe — we error out instead.
+    let mut frame = if intra {
+        DecodedFrame::new(header.width, header.height)
+    } else {
+        match prev {
+            Some(p) if p.width == header.width && p.height == header.height => p.clone(),
+            Some(_) => {
+                return Err(Error::invalid(
+                    "indeo2 inter: previous-frame dimensions disagree with current header",
+                ));
+            }
+            None => {
+                return Err(Error::invalid(
+                    "indeo2 inter: no previous frame available — first frame must be intra",
+                ));
+            }
+        }
+    };
+
+    let mut br = BitReader::new(payload);
+    // Wire-order: Y, V, U (note chroma swap relative to natural YUV).
+    decode_plane(huff, l_table, &mut br, &mut frame.y_plane, yw, yh, intra)?;
+    decode_plane(huff, c_table, &mut br, &mut frame.v_plane, cw, ch, intra)?;
+    decode_plane(huff, c_table, &mut br, &mut frame.u_plane, cw, ch, intra)?;
+
     Ok(frame)
 }
 
@@ -274,87 +307,166 @@ mod tests {
     use super::*;
     use crate::v2::header::{FRAME_HEADER_BYTES, MAGIC_RF, VERSION_CONST};
 
-    fn synth_packet(frame_type: u8, w: u16, h: u16, payload_bytes: usize) -> Vec<u8> {
-        let mut pkt = vec![0u8; FRAME_HEADER_BYTES + payload_bytes];
-        // 'RF' magic
+    /// Build a header-only packet (with the supplied payload appended).
+    fn synth_packet_with_payload(frame_type: u8, w: u16, h: u16, payload: &[u8]) -> Vec<u8> {
+        let mut pkt = vec![0u8; FRAME_HEADER_BYTES + payload.len()];
         pkt[0x0A..0x0C].copy_from_slice(&MAGIC_RF);
-        // version const
         pkt[0x10] = (VERSION_CONST & 0xff) as u8;
         pkt[0x11] = (VERSION_CONST >> 8) as u8;
-        // frame type + dup
         pkt[0x12] = frame_type;
         pkt[0x20] = frame_type;
-        // payload byte count
-        let plb = payload_bytes as u32;
+        let plb = payload.len() as u32;
         pkt[0x0C..0x10].copy_from_slice(&plb.to_le_bytes());
         let plbits = plb.saturating_mul(8);
         pkt[0x14..0x18].copy_from_slice(&plbits.to_le_bytes());
-        // dims
         pkt[0x1C..0x1E].copy_from_slice(&h.to_le_bytes());
         pkt[0x1E..0x20].copy_from_slice(&w.to_le_bytes());
-        // tail
         pkt[0x26..0x30]
             .copy_from_slice(&[0x02, 0x00, 0x02, 0x03, 0x03, 0x04, 0x04, 0x04, 0x06, 0x06]);
-        // Some non-zero payload bytes so the bit reader has work.
-        for (i, b) in pkt[FRAME_HEADER_BYTES..].iter_mut().enumerate() {
-            *b = ((i as u32 * 17) & 0xff) as u8;
-        }
+        pkt[FRAME_HEADER_BYTES..].copy_from_slice(payload);
         pkt
     }
 
-    #[test]
-    fn decodes_synthetic_intra_frame() {
-        // 160x120 intra @ 1024 B payload — comfortably above the
-        // (160*120)/32 = 600 B minimum.
-        let pkt = synth_packet(0x05, 160, 120, 1024);
-        let df = decode_packet(&pkt, None).unwrap();
-        assert_eq!(df.width, 160);
-        assert_eq!(df.height, 120);
-        assert_eq!(df.y_plane.len(), 160 * 120);
-        assert_eq!(df.u_plane.len(), 40 * 30);
-        assert_eq!(df.v_plane.len(), 40 * 30);
+    /// Pack a sequence of bit values into bytes, LSB-first within
+    /// each byte (matching `crate::common::BitReader`'s wire order).
+    fn pack_bits(bits: &[u8]) -> Vec<u8> {
+        let mut out = vec![];
+        let mut acc: u8 = 0;
+        let mut nb = 0u8;
+        for &b in bits {
+            acc |= (b & 1) << nb;
+            nb += 1;
+            if nb == 8 {
+                out.push(acc);
+                acc = 0;
+                nb = 0;
+            }
+        }
+        if nb > 0 {
+            out.push(acc);
+        }
+        out
+    }
+
+    /// Build a payload that's `n` repetitions of pair-symbol-1
+    /// codeword (binary `000`, three bits).
+    fn pair1_payload(n: usize) -> Vec<u8> {
+        let bits: Vec<u8> = (0..n).flat_map(|_| [0, 0, 0]).collect();
+        pack_bits(&bits)
+    }
+
+    /// Build a payload that's `n` repetitions of run-2 codeword
+    /// (binary `010`, three bits — symbol 0x80, run 2 px).
+    fn run2_payload(n: usize) -> Vec<u8> {
+        let bits: Vec<u8> = (0..n).flat_map(|_| [0, 1, 0]).collect();
+        pack_bits(&bits)
     }
 
     #[test]
-    fn decodes_synthetic_inter_frame() {
-        let pkt = synth_packet(0x00, 160, 120, 256);
-        let df = decode_packet(&pkt, None).unwrap();
-        assert_eq!(df.width, 160);
-        assert_eq!(df.height, 120);
+    fn decodes_synthetic_intra_frame_8x8() {
+        // 8×8 intra. Y plane = 64 px = 32 pairs; chroma = 2×2 = 4 px
+        // = 2 pairs each plane. Total 36 pair codewords.
+        let payload = pair1_payload(32 + 2 + 2);
+        let pkt = synth_packet_with_payload(0x05, 8, 8, &payload);
+        let huff = HuffTable::build();
+        let df = decode_packet(&huff, &pkt, None).unwrap();
+        assert_eq!(df.width, 8);
+        assert_eq!(df.height, 8);
+        assert_eq!(df.y_plane.len(), 64);
+        assert_eq!(df.u_plane.len(), 4);
+        assert_eq!(df.v_plane.len(), 4);
+        // Row 0 of Y: every pair-1 emits (0x84, 0x84) into the
+        // absolute palette.
+        assert_eq!(&df.y_plane[..8], &[0x84; 8]);
+        // Row 1 of Y: pair-1 again, treated as +4 delta vs row 0.
+        assert_eq!(&df.y_plane[8..16], &[0x88; 8]);
+    }
+
+    #[test]
+    fn decodes_synthetic_inter_frame_8x8() {
+        // Build a prev frame at 8×8.
+        let prev = DecodedFrame::new(8, 8);
+        // Inter: every codeword uses 3/4 scaled delta vs prev. Pair-1
+        // = +4 delta -> +3 scaled. Y plane = 32 pair codewords;
+        // chroma = 2 each.
+        let payload = pair1_payload(32 + 2 + 2);
+        let pkt = synth_packet_with_payload(0x00, 8, 8, &payload);
+        let huff = HuffTable::build();
+        let df = decode_packet(&huff, &pkt, Some(&prev)).unwrap();
+        // Prev was filled with 128; +3 yields 131 everywhere.
+        assert!(df.y_plane.iter().all(|&v| v == 131));
+    }
+
+    #[test]
+    fn inter_run_skip_preserves_prev_pixels() {
+        let mut prev = DecodedFrame::new(8, 8);
+        // Mark prev with a pattern.
+        for (i, p) in prev.y_plane.iter_mut().enumerate() {
+            *p = (i as u8).wrapping_mul(7).wrapping_add(50);
+        }
+        for p in prev.u_plane.iter_mut() {
+            *p = 100;
+        }
+        for p in prev.v_plane.iter_mut() {
+            *p = 200;
+        }
+        // 8×8 = 64 px, run-2 codeword pixels-per-symbol = 2, need 32
+        // run codewords. Chroma is 2×2 = 4 px = 2 run codewords each.
+        let payload = run2_payload(32 + 2 + 2);
+        let pkt = synth_packet_with_payload(0x00, 8, 8, &payload);
+        let huff = HuffTable::build();
+        let df = decode_packet(&huff, &pkt, Some(&prev)).unwrap();
+        assert_eq!(df.y_plane, prev.y_plane);
+        assert_eq!(df.u_plane, prev.u_plane);
+        assert_eq!(df.v_plane, prev.v_plane);
     }
 
     #[test]
     fn rejects_short_intra() {
         // 160x120 intra needs at least 600 B; give it 100.
-        let pkt = synth_packet(0x05, 160, 120, 100);
-        assert!(decode_packet(&pkt, None).is_err());
+        let payload = vec![0u8; 100];
+        let pkt = synth_packet_with_payload(0x05, 160, 120, &payload);
+        let huff = HuffTable::build();
+        assert!(decode_packet(&huff, &pkt, None).is_err());
     }
 
     #[test]
     fn rejects_packet_with_no_payload() {
-        let pkt = synth_packet(0x00, 160, 120, 0);
-        assert!(decode_packet(&pkt, None).is_err());
+        let pkt = synth_packet_with_payload(0x00, 160, 120, &[]);
+        let huff = HuffTable::build();
+        assert!(decode_packet(&huff, &pkt, None).is_err());
     }
 
     #[test]
-    fn produces_video_frame_with_correct_layout() {
-        let pkt = synth_packet(0x05, 160, 120, 1024);
-        let df = decode_packet(&pkt, None).unwrap();
+    fn rejects_inter_without_prev() {
+        let payload = pair1_payload(32 + 2 + 2);
+        let pkt = synth_packet_with_payload(0x00, 8, 8, &payload);
+        let huff = HuffTable::build();
+        assert!(decode_packet(&huff, &pkt, None).is_err());
+    }
+
+    #[test]
+    fn produces_video_frame_with_correct_layout_8x8() {
+        let payload = pair1_payload(32 + 2 + 2);
+        let pkt = synth_packet_with_payload(0x05, 8, 8, &payload);
+        let huff = HuffTable::build();
+        let df = decode_packet(&huff, &pkt, None).unwrap();
         let vf = df.to_video_frame(Some(42));
         assert_eq!(vf.pts, Some(42));
         assert_eq!(vf.planes.len(), 3);
-        // Yuv420P chroma is (w/2) x (h/2) — 80 x 60 here.
-        assert_eq!(vf.planes[0].data.len(), 160 * 120);
-        assert_eq!(vf.planes[1].data.len(), 80 * 60);
-        assert_eq!(vf.planes[2].data.len(), 80 * 60);
-        assert_eq!(vf.planes[0].stride, 160);
-        assert_eq!(vf.planes[1].stride, 80);
+        // Yuv420P chroma is (w/2) x (h/2) — 4 x 4 here.
+        assert_eq!(vf.planes[0].data.len(), 8 * 8);
+        assert_eq!(vf.planes[1].data.len(), 4 * 4);
+        assert_eq!(vf.planes[2].data.len(), 4 * 4);
+        assert_eq!(vf.planes[0].stride, 8);
+        assert_eq!(vf.planes[1].stride, 4);
     }
 
     #[test]
     fn full_decoder_round_trip_via_trait() {
         use oxideav_core::TimeBase;
-        let pkt_data = synth_packet(0x04, 160, 120, 1024);
+        let payload = pair1_payload(32 + 2 + 2);
+        let pkt_data = synth_packet_with_payload(0x04, 8, 8, &payload);
         let mut dec = Indeo2Decoder::new(CodecId::new("indeo2"));
         // Trying to receive a frame before sending must yield NeedMore.
         match dec.receive_frame() {
@@ -366,7 +478,7 @@ mod tests {
         let frame = dec.receive_frame().unwrap();
         if let Frame::Video(vf) = frame {
             assert_eq!(vf.planes.len(), 3);
-            assert_eq!(vf.planes[0].data.len(), 160 * 120);
+            assert_eq!(vf.planes[0].data.len(), 8 * 8);
         } else {
             panic!("expected Frame::Video");
         }
