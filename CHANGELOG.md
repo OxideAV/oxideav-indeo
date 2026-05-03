@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.1](https://github.com/OxideAV/oxideav-indeo/releases/tag/v0.0.1) - 2026-05-03
+
+### Other
+
+- drop duplicate semver_check key
+- replace never-match regex with semver_check = false
+- cargo fmt: fix rustfmt --check CI gate
+- drop nested [workspace] block (umbrella sweep)
+- round 2 — wire 143-entry Huffman + four delta tables
+- bootstrap oxideav-indeo (Intel Indeo family) — round 1: Indeo 2 scaffold
+- Initial commit
+
 ### Added
 - **Round 2 — Indeo 2 entropy decode lands.** The 143-entry canonical
   Huffman codebook (§8.1 of
