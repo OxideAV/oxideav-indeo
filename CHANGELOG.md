@@ -37,8 +37,9 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as `MacroblockError::{BitstreamTruncated, LeafByteTruncated,
   BitstreamOffsetOutOfRange, DegenerateSplit}`. `LUMA_STRIP_WIDTH`
   / `CHROMA_STRIP_WIDTH` (spec/02 §4.1, 160 / 40) are exposed for
-  the strip-classification consumers. 14 new unit tests cover
-  MSB-first node decode, single INTRA-with-VQ_DATA and single
+  the strip-classification consumers. 15 new unit tests cover
+  the strip-width constants, MSB-first node decode, single
+  INTRA-with-VQ_DATA and single
   INTER leaves (leaf-byte cursor), H_SPLIT / V_SPLIT geometry,
   VQ_NULL copy/skip sub-codes, invalid VQ_NULL sub-codes, nested
   split geometry, all four error variants, odd-dimension halving,
