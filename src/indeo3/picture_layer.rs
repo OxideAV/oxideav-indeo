@@ -1,0 +1,1061 @@
+//! Indeo 3 picture-layer plane prelude parser (per-plane).
+//!
+//! Spec source: `docs/video/indeo/indeo3/spec/02-picture-layer.md`.
+//!
+//! Round 2 lands a structural decode of the per-plane prelude bytes
+//! (`num_vectors` + `mc_vectors[]`) that immediately follow each
+//! plane offset stored in the bitstream header. The binary-tree /
+//! VQ payload that begins after the prelude is not parsed by this
+//! module — that work sits on `spec/03-macroblock-layer.md`.
+//!
+//! The flow:
+//!
+//! 1. Caller already holds a [`FrameHeader`](super::header::FrameHeader)
+//!    obtained from [`FrameHeader::parse`](super::header::FrameHeader::parse).
+//! 2. Caller passes the full codec-frame input buffer (the same
+//!    `lpInput` the §1 host hands the decoder) into
+//!    [`PictureLayer::parse`].
+//! 3. [`PictureLayer::parse`] iterates the three planes in
+//!    spec/02 §2 order (U → V → Y), classifies each plane as
+//!    *present* / *skipped* per the spec/02 §2 range check
+//!    (`offset >= 0` treated as i32 + `offset <= data_size/8`),
+//!    and for the present planes reads the §3.1 `num_vectors` u32
+//!    and the §3.2 `mc_vectors[num_vectors]` two-signed-byte array.
+//! 4. The returned [`PictureLayer`] holds one
+//!    [`PlanePrelude`] per plane in spec/02 §2 iteration order plus
+//!    a precomputed `bitstream_offset` (the absolute offset into
+//!    the codec-frame buffer where each plane's binary-tree /
+//!    VQ payload begins, = `bsh + plane_offset + 4 + 2*num_vectors`,
+//!    per spec/02 §3.4).
+//!
+//! NULL frames (spec/02 §1, `data_size == 0x80`) skip the plane
+//! iteration entirely; in that case [`PictureLayer::parse`] returns
+//! a layer with all three planes marked
+//! [`PlanePresence::NullFrame`].
+//!
+//! Half-pel scaling (spec/02 §3.3) is applied to the
+//! [`MotionVector::vertical_scaled`] / `horizontal_scaled` fields
+//! during parsing; the raw signed bytes are also preserved as
+//! [`MotionVector::vertical_raw`] / `horizontal_raw` so callers can
+//! reconstruct the packed-MV layout (spec/02 §3.3, packing formula)
+//! if they need it.
+
+use super::header::{
+    FrameFlags, FrameHeader, BITSTREAM_HEADER_LEN, FRAME_HEADER_LEN, NULL_FRAME_DATA_SIZE_BITS,
+};
+
+/// Spec/02 §2 — count of planes a codec frame carries.
+pub const PLANE_COUNT: usize = 3;
+
+/// Spec/02 §2 — plane iteration order index for the U (chroma)
+/// plane. Decoded first per the count-down loop.
+pub const PLANE_IDX_U: usize = 2;
+/// Spec/02 §2 — plane iteration order index for the V (chroma)
+/// plane. Decoded second.
+pub const PLANE_IDX_V: usize = 1;
+/// Spec/02 §2 — plane iteration order index for the Y (luma)
+/// plane. Decoded last.
+pub const PLANE_IDX_Y: usize = 0;
+
+/// Spec/02 §3.1 — size in bytes of the `num_vectors` u32 LE.
+pub const NUM_VECTORS_FIELD_LEN: usize = 4;
+
+/// Spec/02 §3.2 — size in bytes of one `mc_vectors[]` entry.
+pub const MC_VECTOR_ENTRY_LEN: usize = 2;
+
+/// Spec/02 §3.4 — minimum plane-prelude size, in bytes
+/// (`num_vectors == 0`, INTRA frame).
+pub const MIN_PRELUDE_LEN: usize = NUM_VECTORS_FIELD_LEN;
+
+/// Errors raised while parsing the spec/02 picture layer (the
+/// per-plane preludes).
+///
+/// The spec/02 §2 plane-offset range check raises
+/// [`PictureLayerError::PlaneOffsetOutOfRange`] for catastrophic
+/// invalid offsets (e.g. an offset that would point past the input
+/// buffer) — note however that an offset which is **negative** (as
+/// i32) OR strictly greater than the spec/02 §2 budget
+/// `data_size/8` is **not** an error: per spec/02 §2 the decoder
+/// silently skips that plane and moves to the next `plane_idx`.
+/// Such planes surface as [`PlanePresence::Skipped`].
+///
+/// Only structurally impossible offsets — those whose computed
+/// plane base lies outside the input buffer, or whose
+/// `num_vectors` field would extend past the input buffer — raise
+/// an error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PictureLayerError {
+    /// The plane's computed base address would extend past the
+    /// end of the input buffer. The decoder cannot read the
+    /// `num_vectors` u32 without overrunning.
+    PlaneOffsetOutOfRange {
+        /// Plane index (0 = Y, 1 = V, 2 = U).
+        plane_idx: usize,
+        /// `plane_offset` value the bitstream header carries.
+        plane_offset: u32,
+        /// Resulting absolute base offset into the input buffer
+        /// (`bsh + plane_offset`).
+        computed_base: usize,
+        /// Length of the input buffer the caller supplied.
+        buffer_len: usize,
+    },
+    /// The plane's motion-vector array would extend past the end
+    /// of the input buffer. `num_vectors * 2` bytes are required
+    /// to follow the `num_vectors` field at `plane_base + 4`.
+    MotionVectorArrayTruncated {
+        /// Plane index (0 = Y, 1 = V, 2 = U).
+        plane_idx: usize,
+        /// `num_vectors` value read from `plane_base + 0`.
+        num_vectors: u32,
+        /// First byte of the motion-vector array.
+        array_start: usize,
+        /// Required end of the array (`array_start + num_vectors * 2`).
+        array_end: usize,
+        /// Length of the input buffer the caller supplied.
+        buffer_len: usize,
+    },
+}
+
+impl core::fmt::Display for PictureLayerError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match *self {
+            PictureLayerError::PlaneOffsetOutOfRange {
+                plane_idx,
+                plane_offset,
+                computed_base,
+                buffer_len,
+            } => write!(
+                f,
+                "plane {plane_idx}: plane_offset 0x{plane_offset:08x} → base offset {computed_base} would overrun a {buffer_len}-byte input buffer"
+            ),
+            PictureLayerError::MotionVectorArrayTruncated {
+                plane_idx,
+                num_vectors,
+                array_start,
+                array_end,
+                buffer_len,
+            } => write!(
+                f,
+                "plane {plane_idx}: mc_vectors[{num_vectors}] = bytes {array_start}..{array_end} overruns a {buffer_len}-byte input buffer"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PictureLayerError {}
+
+/// Spec/02 §3.2 — a single motion-vector entry.
+///
+/// The wire encoding is two signed bytes (vertical, then
+/// horizontal). Spec/02 §3.3 applies a per-component arithmetic
+/// right shift to each byte when the matching half-pel flag is
+/// set in `frame_flags`; the shifted-out LSB is preserved as a
+/// "half-pel offset" sub-field used by the spec/02 §3.3 packing
+/// formula.
+///
+/// For convenience the parsed struct exposes both:
+///
+/// * `vertical_raw` / `horizontal_raw` — the unmodified signed
+///   bytes as they appear on the wire.
+/// * `vertical_scaled` / `horizontal_scaled` — the post-shift
+///   integer component the packing formula uses for the high
+///   bits of the packed-MV index.
+/// * `vertical_halfpel_bit` / `horizontal_halfpel_bit` — the
+///   LSB shifted out by the half-pel scaling (0 in full-pel
+///   paths).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MotionVector {
+    /// Vertical component as it appears on the wire (signed byte
+    /// at `mc_ptr + 0`).
+    pub vertical_raw: i8,
+    /// Horizontal component as it appears on the wire (signed
+    /// byte at `mc_ptr + 1`).
+    pub horizontal_raw: i8,
+    /// Vertical component after the spec/02 §3.3 half-pel right
+    /// shift (= `vertical_raw` when `MV_HALFPEL_VERT` is clear).
+    /// The shift is arithmetic, so sign is preserved.
+    pub vertical_scaled: i16,
+    /// Horizontal component after the spec/02 §3.3 half-pel
+    /// right shift (= `horizontal_raw` when `MV_HALFPEL_HORIZ`
+    /// is clear).
+    pub horizontal_scaled: i16,
+    /// LSB of `vertical_raw` (extracted before the right shift)
+    /// when `MV_HALFPEL_VERT` is set; 0 otherwise.
+    pub vertical_halfpel_bit: u8,
+    /// LSB of `horizontal_raw` (extracted before the right shift)
+    /// when `MV_HALFPEL_HORIZ` is set; 0 otherwise.
+    pub horizontal_halfpel_bit: u8,
+}
+
+impl MotionVector {
+    /// Compute the packed-MV index per the spec/02 §3.3 formula:
+    ///
+    /// ```text
+    /// packed_mv = ((vert_shifted * 11) << 4 + horiz_shifted) << 2
+    ///           + (horiz_lsb << 1)
+    ///           + vert_lsb
+    /// ```
+    ///
+    /// The cast widths (`i32`) match the parser's
+    /// `IR32_32.DLL!0x100043f6`-`0x10004426` register usage.
+    pub fn packed_mv(self) -> i32 {
+        let vert_shifted = self.vertical_scaled as i32;
+        let horiz_shifted = self.horizontal_scaled as i32;
+        let vert_lsb = self.vertical_halfpel_bit as i32;
+        let horiz_lsb = self.horizontal_halfpel_bit as i32;
+        (((vert_shifted * 11) << 4) + horiz_shifted) << 2 | (horiz_lsb << 1) | vert_lsb
+    }
+}
+
+/// Spec/02 §3 — per-plane prelude (motion-vector array) plus the
+/// computed start of the plane's bitstream payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanePrelude {
+    /// Spec/02 §3.1 — `num_vectors` u32 read from
+    /// `plane_base + 0`.
+    pub num_vectors: u32,
+    /// Spec/02 §3.2 — motion-vector array of length
+    /// `num_vectors`. Each entry carries its raw bytes and its
+    /// half-pel-scaled components.
+    pub motion_vectors: Vec<MotionVector>,
+    /// Absolute offset (from the codec-frame buffer start, i.e.
+    /// the same buffer [`PictureLayer::parse`] consumed) where
+    /// the plane's binary-tree / VQ bitstream payload begins.
+    ///
+    /// Per spec/02 §3.4: `bitstream_offset = plane_base + 4 +
+    /// 2*num_vectors = bsh + plane_offset + 4 + 2*num_vectors`.
+    pub bitstream_offset: usize,
+}
+
+impl PlanePrelude {
+    /// Spec/02 §3.4 — total prelude byte length
+    /// (`4 + 2*num_vectors`).
+    pub fn prelude_len(&self) -> usize {
+        NUM_VECTORS_FIELD_LEN + MC_VECTOR_ENTRY_LEN * self.num_vectors as usize
+    }
+}
+
+/// Spec/02 §2 — outcome of the per-plane offset range check.
+///
+/// A plane whose `plane_offset` is negative (i32) or strictly
+/// greater than `data_size/8` is skipped by the decoder per
+/// spec/02 §2. We record the reason it was skipped so callers
+/// can distinguish "the encoder omitted this plane on purpose"
+/// from "no plane data because it's a NULL frame".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanePresence {
+    /// Plane prelude was parsed successfully.
+    Present(PlanePrelude),
+    /// Spec/02 §1 — NULL frame; plane iteration was skipped
+    /// for the entire codec frame.
+    NullFrame,
+    /// Spec/02 §2 — `plane_offset < 0` (interpreted as i32),
+    /// i.e. high bit set. The encoder signalled "omit this
+    /// plane".
+    SkippedNegativeOffset {
+        /// `plane_offset` as it appears on the wire (u32 LE).
+        plane_offset: u32,
+    },
+    /// Spec/02 §2 — `plane_offset > data_size/8`. The plane
+    /// base would lie past the bitstream-data budget; the
+    /// decoder skips this plane.
+    SkippedAboveDataBudget {
+        /// `plane_offset` as it appears on the wire.
+        plane_offset: u32,
+        /// `data_size / 8` — the byte budget the check uses.
+        budget_bytes: u32,
+    },
+}
+
+impl PlanePresence {
+    /// True iff the plane has a parsed prelude.
+    pub fn is_present(&self) -> bool {
+        matches!(self, PlanePresence::Present(_))
+    }
+
+    /// Borrow the underlying [`PlanePrelude`] if the plane was
+    /// parsed.
+    pub fn as_prelude(&self) -> Option<&PlanePrelude> {
+        match self {
+            PlanePresence::Present(p) => Some(p),
+            _ => None,
+        }
+    }
+}
+
+/// Spec/02 picture-layer view of an entire codec frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PictureLayer {
+    /// Per-plane preludes, indexed by spec/02 §2 `plane_idx`
+    /// (0 = Y, 1 = V, 2 = U). The plane iteration order itself
+    /// is reverse of this index — see
+    /// [`PictureLayer::iter_in_decode_order`].
+    pub planes: [PlanePresence; PLANE_COUNT],
+}
+
+impl PictureLayer {
+    /// Decode the picture-layer plane preludes from the full
+    /// codec-frame input buffer (the same buffer
+    /// [`FrameHeader::parse`] consumed).
+    ///
+    /// Per spec/02 §1, NULL frames (`data_size == 0x80`) skip
+    /// the plane iteration entirely; this method returns a
+    /// layer with every plane set to
+    /// [`PlanePresence::NullFrame`] in that case.
+    ///
+    /// For non-NULL frames the method walks the three planes in
+    /// spec/02 §2 order (U → V → Y), classifying each as
+    /// present-or-skipped per the spec/02 §2 range check, and
+    /// for present planes parses the §3.1 `num_vectors` u32 +
+    /// §3.2 `mc_vectors[]` array with the §3.3 half-pel scaling
+    /// applied per [`FrameFlags`].
+    pub fn parse(header: &FrameHeader, input: &[u8]) -> Result<Self, PictureLayerError> {
+        if header.bitstream.is_null_frame() {
+            return Ok(PictureLayer {
+                planes: [
+                    PlanePresence::NullFrame,
+                    PlanePresence::NullFrame,
+                    PlanePresence::NullFrame,
+                ],
+            });
+        }
+
+        // bsh (bitstream-header) base offset into the input
+        // buffer; see spec/01 §3.
+        let bsh_base = FRAME_HEADER_LEN;
+
+        // Spec/02 §2 — byte budget = data_size / 8 (data_size is
+        // in bits; the parser's `sar edx, 0x3` is unsigned-ish
+        // here because data_size's high bit is unused in
+        // practice).
+        let budget_bytes = header.bitstream.data_size / 8;
+
+        // Read offsets in spec/02 §2 order (U, V, Y) but store
+        // each into the array slot matching its plane_idx
+        // (0 = Y, 1 = V, 2 = U).
+        let offsets: [u32; PLANE_COUNT] = [
+            header.bitstream.y_offset,
+            header.bitstream.v_offset,
+            header.bitstream.u_offset,
+        ];
+
+        // Default-initialise; will be overwritten per plane.
+        let mut planes = [
+            PlanePresence::SkippedNegativeOffset { plane_offset: 0 },
+            PlanePresence::SkippedNegativeOffset { plane_offset: 0 },
+            PlanePresence::SkippedNegativeOffset { plane_offset: 0 },
+        ];
+
+        let flags = header.bitstream.frame_flags;
+
+        // Spec/02 §2 — count-down `plane_idx` ∈ {2, 1, 0}.
+        for plane_idx in (0..PLANE_COUNT).rev() {
+            let plane_offset = offsets[plane_idx];
+
+            // Spec/02 §2 — `plane_offset < 0` when interpreted
+            // as i32. The high bit of the u32 being set is
+            // equivalent.
+            if (plane_offset as i32) < 0 {
+                planes[plane_idx] = PlanePresence::SkippedNegativeOffset { plane_offset };
+                continue;
+            }
+
+            // Spec/02 §2 — `plane_offset > data_size/8`.
+            if plane_offset > budget_bytes {
+                planes[plane_idx] = PlanePresence::SkippedAboveDataBudget {
+                    plane_offset,
+                    budget_bytes,
+                };
+                continue;
+            }
+
+            // Plane present — parse the prelude.
+            let prelude = parse_plane_prelude(input, bsh_base, plane_idx, plane_offset, flags)?;
+            planes[plane_idx] = PlanePresence::Present(prelude);
+        }
+
+        Ok(PictureLayer { planes })
+    }
+
+    /// Spec/02 §2 — iterate the planes in decode order
+    /// (`plane_idx = 2, 1, 0` → U, V, Y).
+    pub fn iter_in_decode_order(&self) -> impl Iterator<Item = (usize, &PlanePresence)> + '_ {
+        (0..PLANE_COUNT).rev().map(move |i| (i, &self.planes[i]))
+    }
+
+    /// Borrow the Y-plane (luma) presence record.
+    pub fn y(&self) -> &PlanePresence {
+        &self.planes[PLANE_IDX_Y]
+    }
+
+    /// Borrow the V-plane (chroma) presence record.
+    pub fn v(&self) -> &PlanePresence {
+        &self.planes[PLANE_IDX_V]
+    }
+
+    /// Borrow the U-plane (chroma) presence record.
+    pub fn u(&self) -> &PlanePresence {
+        &self.planes[PLANE_IDX_U]
+    }
+}
+
+fn parse_plane_prelude(
+    input: &[u8],
+    bsh_base: usize,
+    plane_idx: usize,
+    plane_offset: u32,
+    flags: FrameFlags,
+) -> Result<PlanePrelude, PictureLayerError> {
+    // Spec/02 §3 — `plane_base = bsh + plane_offset`.
+    let plane_base = bsh_base.saturating_add(plane_offset as usize);
+
+    // The `num_vectors` u32 starts at `[plane_base + 0]`.
+    let num_vectors_end = plane_base.saturating_add(NUM_VECTORS_FIELD_LEN);
+    if num_vectors_end > input.len() {
+        return Err(PictureLayerError::PlaneOffsetOutOfRange {
+            plane_idx,
+            plane_offset,
+            computed_base: plane_base,
+            buffer_len: input.len(),
+        });
+    }
+
+    let num_vectors = u32::from_le_bytes([
+        input[plane_base],
+        input[plane_base + 1],
+        input[plane_base + 2],
+        input[plane_base + 3],
+    ]);
+
+    let array_start = plane_base + NUM_VECTORS_FIELD_LEN;
+    let array_bytes = (num_vectors as usize)
+        .checked_mul(MC_VECTOR_ENTRY_LEN)
+        .ok_or(PictureLayerError::MotionVectorArrayTruncated {
+            plane_idx,
+            num_vectors,
+            array_start,
+            array_end: usize::MAX,
+            buffer_len: input.len(),
+        })?;
+    let array_end = array_start.checked_add(array_bytes).ok_or(
+        PictureLayerError::MotionVectorArrayTruncated {
+            plane_idx,
+            num_vectors,
+            array_start,
+            array_end: usize::MAX,
+            buffer_len: input.len(),
+        },
+    )?;
+
+    if array_end > input.len() {
+        return Err(PictureLayerError::MotionVectorArrayTruncated {
+            plane_idx,
+            num_vectors,
+            array_start,
+            array_end,
+            buffer_len: input.len(),
+        });
+    }
+
+    let halfpel_vert = flags.mv_halfpel_vert();
+    let halfpel_horiz = flags.mv_halfpel_horiz();
+
+    let mut motion_vectors = Vec::with_capacity(num_vectors as usize);
+    for i in 0..num_vectors as usize {
+        let off = array_start + i * MC_VECTOR_ENTRY_LEN;
+        let vertical_raw = input[off] as i8;
+        let horizontal_raw = input[off + 1] as i8;
+
+        let (vertical_scaled, vertical_halfpel_bit) = scale_component(vertical_raw, halfpel_vert);
+        let (horizontal_scaled, horizontal_halfpel_bit) =
+            scale_component(horizontal_raw, halfpel_horiz);
+
+        motion_vectors.push(MotionVector {
+            vertical_raw,
+            horizontal_raw,
+            vertical_scaled,
+            horizontal_scaled,
+            vertical_halfpel_bit,
+            horizontal_halfpel_bit,
+        });
+    }
+
+    Ok(PlanePrelude {
+        num_vectors,
+        motion_vectors,
+        bitstream_offset: array_end,
+    })
+}
+
+/// Spec/02 §3.3 — half-pel component scaling.
+///
+/// When `halfpel` is true the component undergoes an arithmetic
+/// right-shift by 1 (`sar eax, 0x1` in the parser); the shifted-
+/// out LSB becomes the half-pel offset sub-field used by the
+/// spec/02 §3.3 packing formula. When false the component passes
+/// through unmodified and the LSB sub-field is zero.
+///
+/// The arithmetic shift on a signed byte sign-extends, so −1 (0xff)
+/// becomes −1 (0xffff_ffff sar 1 = 0xffff_ffff = −1).
+fn scale_component(raw: i8, halfpel: bool) -> (i16, u8) {
+    if halfpel {
+        let lsb = (raw as u8) & 0x01;
+        let shifted = (raw as i16) >> 1;
+        (shifted, lsb)
+    } else {
+        (raw as i16, 0)
+    }
+}
+
+// Sanity-check anchor: this module's offsets assume bsh sits at
+// byte `FRAME_HEADER_LEN` of the codec frame (spec/01 §3) and
+// the NULL-frame sentinel is `NULL_FRAME_DATA_SIZE_BITS`.
+#[allow(dead_code)]
+const _SPEC_01_BSH_ANCHOR: usize = FRAME_HEADER_LEN;
+#[allow(dead_code)]
+const _SPEC_01_BSH_LEN: usize = BITSTREAM_HEADER_LEN;
+#[allow(dead_code)]
+const _SPEC_02_NULL_SENTINEL: u32 = NULL_FRAME_DATA_SIZE_BITS;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::indeo3::header::{COMBINED_HEADER_LEN, MAGIC_FRMH, REQUIRED_DEC_VERSION};
+
+    /// Build a codec-frame buffer whose header parses cleanly and
+    /// whose per-plane preludes match the supplied test data.
+    ///
+    /// `plane_offsets` are the three plane offsets to write into
+    /// the bsh `y/v/u` slots (in that order). `plane_data[i]` is
+    /// the raw prelude bytes to splice in at
+    /// `bsh + plane_offsets[i]`. The header's `data_size` is set
+    /// to `data_size_bits`.
+    fn build_frame_with_planes(
+        plane_offsets: [u32; PLANE_COUNT],
+        plane_data: [&[u8]; PLANE_COUNT],
+        frame_flags: u16,
+        data_size_bits: u32,
+    ) -> Vec<u8> {
+        let bsh_base = FRAME_HEADER_LEN;
+        // Compute the buffer size needed to hold every plane's
+        // prelude.
+        let mut max_end = COMBINED_HEADER_LEN;
+        for i in 0..PLANE_COUNT {
+            let off = plane_offsets[i];
+            if (off as i32) >= 0 {
+                let end = bsh_base + off as usize + plane_data[i].len();
+                if end > max_end {
+                    max_end = end;
+                }
+            }
+        }
+        let mut buf = vec![0u8; max_end];
+
+        // Frame header (§2) — fixed values + recomputed checksum.
+        let frame_number: u32 = 0;
+        let unknown1: u32 = 0;
+        let frame_size: u32 = max_end as u32;
+        let check_sum = frame_number ^ unknown1 ^ frame_size ^ MAGIC_FRMH;
+        buf[0x00..0x04].copy_from_slice(&frame_number.to_le_bytes());
+        buf[0x04..0x08].copy_from_slice(&unknown1.to_le_bytes());
+        buf[0x08..0x0c].copy_from_slice(&check_sum.to_le_bytes());
+        buf[0x0c..0x10].copy_from_slice(&frame_size.to_le_bytes());
+
+        // Bitstream header (§3).
+        let bsh = &mut buf[bsh_base..bsh_base + BITSTREAM_HEADER_LEN];
+        bsh[0x00..0x02].copy_from_slice(&REQUIRED_DEC_VERSION.to_le_bytes());
+        bsh[0x02..0x04].copy_from_slice(&frame_flags.to_le_bytes());
+        bsh[0x04..0x08].copy_from_slice(&data_size_bits.to_le_bytes());
+        bsh[0x10..0x14].copy_from_slice(&plane_offsets[0].to_le_bytes());
+        bsh[0x14..0x18].copy_from_slice(&plane_offsets[1].to_le_bytes());
+        bsh[0x18..0x1c].copy_from_slice(&plane_offsets[2].to_le_bytes());
+
+        // Plane data — splice each plane's prelude bytes into
+        // place at bsh + plane_offset.
+        for i in 0..PLANE_COUNT {
+            let off = plane_offsets[i];
+            if (off as i32) >= 0 && !plane_data[i].is_empty() {
+                let start = bsh_base + off as usize;
+                let end = start + plane_data[i].len();
+                buf[start..end].copy_from_slice(plane_data[i]);
+            }
+        }
+
+        buf
+    }
+
+    /// Build the prelude bytes for a single plane:
+    /// `num_vectors` u32 LE followed by `num_vectors` pairs of
+    /// `(vertical, horizontal)` signed bytes.
+    fn prelude_bytes(num_vectors: u32, mv_pairs: &[(i8, i8)]) -> Vec<u8> {
+        assert_eq!(num_vectors as usize, mv_pairs.len());
+        let mut out = Vec::with_capacity(NUM_VECTORS_FIELD_LEN + mv_pairs.len() * 2);
+        out.extend_from_slice(&num_vectors.to_le_bytes());
+        for (v, h) in mv_pairs {
+            out.push(*v as u8);
+            out.push(*h as u8);
+        }
+        out
+    }
+
+    #[test]
+    fn plane_idx_constants_match_spec() {
+        // §2 — count-down loop counter starts at 2 = U and ends
+        // at 0 = Y.
+        assert_eq!(PLANE_IDX_U, 2);
+        assert_eq!(PLANE_IDX_V, 1);
+        assert_eq!(PLANE_IDX_Y, 0);
+        assert_eq!(PLANE_COUNT, 3);
+    }
+
+    #[test]
+    fn null_frame_skips_all_planes() {
+        let buf = build_frame_with_planes(
+            [0x30, 0x40, 0x50],
+            [&[], &[], &[]],
+            0,
+            NULL_FRAME_DATA_SIZE_BITS,
+        );
+        let header = FrameHeader::parse(&buf).expect("null header must parse");
+        let layer = PictureLayer::parse(&header, &buf).expect("null layer must parse");
+
+        for plane in &layer.planes {
+            assert_eq!(plane, &PlanePresence::NullFrame);
+            assert!(!plane.is_present());
+            assert!(plane.as_prelude().is_none());
+        }
+    }
+
+    #[test]
+    fn intra_frame_three_present_planes_zero_vectors() {
+        // INTRA frames have num_vectors == 0 for every plane
+        // (§3.1, per the wiki note "Contains '0' for INTRA
+        // frames").
+        let y_prelude = prelude_bytes(0, &[]);
+        let v_prelude = prelude_bytes(0, &[]);
+        let u_prelude = prelude_bytes(0, &[]);
+        let buf = build_frame_with_planes(
+            [0x30, 0x34, 0x38],
+            [&y_prelude, &v_prelude, &u_prelude],
+            0x0005, // PERIODIC_INTRA | INTRA
+            0x4000, // data_size in bits, well above any plane offset
+        );
+        let header = FrameHeader::parse(&buf).expect("intra header must parse");
+        let layer = PictureLayer::parse(&header, &buf).expect("intra layer must parse");
+
+        for (plane_idx, presence) in layer.planes.iter().enumerate() {
+            let prelude = presence
+                .as_prelude()
+                .unwrap_or_else(|| panic!("plane {plane_idx} must be Present"));
+            assert_eq!(prelude.num_vectors, 0);
+            assert!(prelude.motion_vectors.is_empty());
+            assert_eq!(prelude.prelude_len(), 4);
+        }
+
+        // §3.4 — bitstream_offset = plane_base + 4 + 0.
+        assert_eq!(
+            layer.y().as_prelude().unwrap().bitstream_offset,
+            FRAME_HEADER_LEN + 0x30 + 4
+        );
+        assert_eq!(
+            layer.v().as_prelude().unwrap().bitstream_offset,
+            FRAME_HEADER_LEN + 0x34 + 4
+        );
+        assert_eq!(
+            layer.u().as_prelude().unwrap().bitstream_offset,
+            FRAME_HEADER_LEN + 0x38 + 4
+        );
+    }
+
+    #[test]
+    fn inter_frame_parses_motion_vectors_per_plane() {
+        // Distinct num_vectors per plane to confirm the parser
+        // doesn't share state across planes.
+        let y_pairs: &[(i8, i8)] = &[(2, 3), (-4, 5), (-6, -7)];
+        let v_pairs: &[(i8, i8)] = &[(1, -1)];
+        let u_pairs: &[(i8, i8)] = &[];
+        let y_prelude = prelude_bytes(3, y_pairs);
+        let v_prelude = prelude_bytes(1, v_pairs);
+        let u_prelude = prelude_bytes(0, u_pairs);
+
+        let buf = build_frame_with_planes(
+            [0x30, 0x40, 0x50],
+            [&y_prelude, &v_prelude, &u_prelude],
+            0,      // INTER, full-pel (bits 4 and 5 clear)
+            0x4000, // data_size in bits
+        );
+        let header = FrameHeader::parse(&buf).expect("header must parse");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer must parse");
+
+        let y = layer.y().as_prelude().expect("Y present");
+        assert_eq!(y.num_vectors, 3);
+        assert_eq!(y.motion_vectors.len(), 3);
+        for (i, (v, h)) in y_pairs.iter().enumerate() {
+            assert_eq!(y.motion_vectors[i].vertical_raw, *v);
+            assert_eq!(y.motion_vectors[i].horizontal_raw, *h);
+            // Full-pel: scaled == raw, halfpel bits = 0.
+            assert_eq!(y.motion_vectors[i].vertical_scaled, *v as i16);
+            assert_eq!(y.motion_vectors[i].horizontal_scaled, *h as i16);
+            assert_eq!(y.motion_vectors[i].vertical_halfpel_bit, 0);
+            assert_eq!(y.motion_vectors[i].horizontal_halfpel_bit, 0);
+        }
+        assert_eq!(y.prelude_len(), 4 + 3 * 2);
+        assert_eq!(y.bitstream_offset, FRAME_HEADER_LEN + 0x30 + 4 + 3 * 2);
+
+        let v = layer.v().as_prelude().expect("V present");
+        assert_eq!(v.num_vectors, 1);
+        assert_eq!(v.motion_vectors[0].vertical_raw, 1);
+        assert_eq!(v.motion_vectors[0].horizontal_raw, -1);
+        assert_eq!(v.bitstream_offset, FRAME_HEADER_LEN + 0x40 + 4 + 2);
+
+        let u = layer.u().as_prelude().expect("U present");
+        assert_eq!(u.num_vectors, 0);
+        assert!(u.motion_vectors.is_empty());
+        assert_eq!(u.bitstream_offset, FRAME_HEADER_LEN + 0x50 + 4);
+    }
+
+    #[test]
+    fn iteration_order_is_u_then_v_then_y() {
+        // §2 — decode order is plane_idx 2, 1, 0.
+        let buf = build_frame_with_planes(
+            [0x30, 0x34, 0x38],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+            ],
+            0,
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+        let order: Vec<usize> = layer.iter_in_decode_order().map(|(i, _)| i).collect();
+        assert_eq!(order, vec![PLANE_IDX_U, PLANE_IDX_V, PLANE_IDX_Y]);
+    }
+
+    #[test]
+    fn negative_plane_offset_skips_plane() {
+        // §2 — `plane_offset < 0` (i32). Set V-plane offset to
+        // 0xffff_ffff (= -1) to trigger the skip.
+        let buf = build_frame_with_planes(
+            [0x30, 0xffff_ffff, 0x38],
+            [&prelude_bytes(0, &[]), &[], &prelude_bytes(0, &[])],
+            0,
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+        assert!(layer.y().is_present());
+        match layer.v() {
+            PlanePresence::SkippedNegativeOffset { plane_offset } => {
+                assert_eq!(*plane_offset, 0xffff_ffff);
+            }
+            other => panic!("expected SkippedNegativeOffset, got {other:?}"),
+        }
+        assert!(layer.u().is_present());
+    }
+
+    #[test]
+    fn offset_above_data_budget_skips_plane() {
+        // §2 — `plane_offset > data_size / 8`. With
+        // data_size = 0x4000 bits → 0x800 byte budget; an
+        // offset of 0x900 exceeds it.
+        let buf = build_frame_with_planes(
+            [0x900, 0x38, 0x3c],
+            [&[], &prelude_bytes(0, &[]), &prelude_bytes(0, &[])],
+            0,
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+        match layer.y() {
+            PlanePresence::SkippedAboveDataBudget {
+                plane_offset,
+                budget_bytes,
+            } => {
+                assert_eq!(*plane_offset, 0x900);
+                assert_eq!(*budget_bytes, 0x4000 / 8);
+            }
+            other => panic!("expected SkippedAboveDataBudget, got {other:?}"),
+        }
+        assert!(layer.v().is_present());
+        assert!(layer.u().is_present());
+    }
+
+    #[test]
+    fn offset_exactly_equal_to_data_budget_is_accepted() {
+        // §2 — the spec uses `<=` for the upper bound; offset
+        // equal to the budget should *not* be skipped (the
+        // parser's `jle` triggers only when offset is strictly
+        // less than or equal — i.e. the skip is `jle`, meaning
+        // skip-if-budget-is-less-than-or-equal-to-offset; with
+        // budget == offset the skip fires per the spec text).
+        //
+        // Spec wording: "a plane whose offset exceeds this
+        // budget is skipped". Equal is the boundary; spec
+        // wording "exceeds" implies strict greater-than. Test
+        // pins the parser's interpretation as `>` (strict).
+        let bsh_room = BITSTREAM_HEADER_LEN as u32;
+        let budget = bsh_room; // pick a plane_offset == budget
+        let buf = build_frame_with_planes(
+            [budget, budget + 8, budget + 16],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+            ],
+            0,
+            budget * 8, // data_size in bits → byte budget = `budget`
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+        // Y at exactly budget — accepted.
+        assert!(layer.y().is_present());
+        // V/U above budget — skipped.
+        assert!(matches!(
+            layer.v(),
+            PlanePresence::SkippedAboveDataBudget { .. }
+        ));
+        assert!(matches!(
+            layer.u(),
+            PlanePresence::SkippedAboveDataBudget { .. }
+        ));
+    }
+
+    #[test]
+    fn halfpel_horiz_shifts_horizontal_components() {
+        // Bit 4 = MV_HALFPEL_HORIZ.
+        // raw horizontal -3 = 0xfd. arithmetic >> 1 = -2
+        // (sign-extending right shift). lsb = 1.
+        let pairs: &[(i8, i8)] = &[(4, -3), (-2, 7)];
+        let prelude = prelude_bytes(2, pairs);
+        let buf = build_frame_with_planes(
+            [0x30, 0x40, 0x50],
+            [&prelude, &prelude_bytes(0, &[]), &prelude_bytes(0, &[])],
+            0x0010, // MV_HALFPEL_HORIZ
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+        let y = layer.y().as_prelude().expect("Y present");
+        // First entry: horizontal = -3 → shifted -2, lsb 1.
+        assert_eq!(y.motion_vectors[0].vertical_raw, 4);
+        assert_eq!(y.motion_vectors[0].horizontal_raw, -3);
+        assert_eq!(y.motion_vectors[0].vertical_scaled, 4);
+        assert_eq!(y.motion_vectors[0].horizontal_scaled, -2);
+        assert_eq!(y.motion_vectors[0].vertical_halfpel_bit, 0);
+        assert_eq!(y.motion_vectors[0].horizontal_halfpel_bit, 1);
+        // Second entry: horizontal = 7 → shifted 3, lsb 1.
+        assert_eq!(y.motion_vectors[1].horizontal_raw, 7);
+        assert_eq!(y.motion_vectors[1].horizontal_scaled, 3);
+        assert_eq!(y.motion_vectors[1].horizontal_halfpel_bit, 1);
+        // Vertical untouched (full-pel).
+        assert_eq!(y.motion_vectors[1].vertical_raw, -2);
+        assert_eq!(y.motion_vectors[1].vertical_scaled, -2);
+        assert_eq!(y.motion_vectors[1].vertical_halfpel_bit, 0);
+    }
+
+    #[test]
+    fn halfpel_vert_shifts_vertical_components() {
+        // Bit 5 = MV_HALFPEL_VERT.
+        let pairs: &[(i8, i8)] = &[(5, 0), (-1, 0)];
+        let prelude = prelude_bytes(2, pairs);
+        let buf = build_frame_with_planes(
+            [0x30, 0x40, 0x50],
+            [&prelude, &prelude_bytes(0, &[]), &prelude_bytes(0, &[])],
+            0x0020, // MV_HALFPEL_VERT only
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+        let y = layer.y().as_prelude().expect("Y present");
+        // Vertical 5 → 2, lsb 1.
+        assert_eq!(y.motion_vectors[0].vertical_scaled, 2);
+        assert_eq!(y.motion_vectors[0].vertical_halfpel_bit, 1);
+        // Vertical -1 → arithmetic sar of 0xff = 0xff = -1, lsb 1.
+        assert_eq!(y.motion_vectors[1].vertical_raw, -1);
+        assert_eq!(y.motion_vectors[1].vertical_scaled, -1);
+        assert_eq!(y.motion_vectors[1].vertical_halfpel_bit, 1);
+        // Horizontal untouched.
+        assert_eq!(y.motion_vectors[0].horizontal_scaled, 0);
+        assert_eq!(y.motion_vectors[0].horizontal_halfpel_bit, 0);
+    }
+
+    #[test]
+    fn halfpel_both_axes_shifts_both_components() {
+        let pairs: &[(i8, i8)] = &[(6, -5)];
+        let prelude = prelude_bytes(1, pairs);
+        let buf = build_frame_with_planes(
+            [0x30, 0x40, 0x50],
+            [&prelude, &prelude_bytes(0, &[]), &prelude_bytes(0, &[])],
+            0x0030, // MV_HALFPEL_VERT | MV_HALFPEL_HORIZ
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+        let y = layer.y().as_prelude().expect("Y present");
+        // 6 → 3 lsb 0; -5 → arithmetic >> 1 = -3, lsb 1.
+        assert_eq!(y.motion_vectors[0].vertical_scaled, 3);
+        assert_eq!(y.motion_vectors[0].vertical_halfpel_bit, 0);
+        assert_eq!(y.motion_vectors[0].horizontal_scaled, -3);
+        assert_eq!(y.motion_vectors[0].horizontal_halfpel_bit, 1);
+    }
+
+    #[test]
+    fn packed_mv_formula_matches_spec_3_3() {
+        // §3.3 packing formula:
+        // packed_mv = ((vert_shifted * 11) << 4 + horiz_shifted) << 2
+        //           + (horiz_lsb << 1) + vert_lsb
+        let mv = MotionVector {
+            vertical_raw: -3,
+            horizontal_raw: 5,
+            vertical_scaled: -2,  // -3 >> 1
+            horizontal_scaled: 2, // 5 >> 1
+            vertical_halfpel_bit: 1,
+            horizontal_halfpel_bit: 1,
+        };
+        let expected: i32 = ((((-2_i32) * 11) << 4) + 2_i32) << 2 | (1 << 1) | 1;
+        assert_eq!(mv.packed_mv(), expected);
+
+        // Full-pel zero check.
+        let zero = MotionVector {
+            vertical_raw: 0,
+            horizontal_raw: 0,
+            vertical_scaled: 0,
+            horizontal_scaled: 0,
+            vertical_halfpel_bit: 0,
+            horizontal_halfpel_bit: 0,
+        };
+        assert_eq!(zero.packed_mv(), 0);
+    }
+
+    #[test]
+    fn plane_offset_overrunning_buffer_returns_out_of_range() {
+        // Build a buffer just big enough for the header. Then
+        // overwrite Y's offset to point past the end of the
+        // input buffer. This should fail PlaneOffsetOutOfRange.
+        let mut buf = build_frame_with_planes(
+            [0x30, 0x34, 0x38],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+            ],
+            0,
+            0x4000_0000, // gigantic data_size so the budget check passes
+        );
+        // Y offset = buf.len() - 16 + 1 → plane base lands at
+        // buf.len() - 15, leaving < 4 bytes; num_vectors read
+        // overruns.
+        let bad_y_offset = (buf.len() - FRAME_HEADER_LEN + 1) as u32;
+        buf[FRAME_HEADER_LEN + 0x10..FRAME_HEADER_LEN + 0x14]
+            .copy_from_slice(&bad_y_offset.to_le_bytes());
+        // Recompute checksum after editing the bsh (frame
+        // header itself is unchanged so check_sum still matches
+        // — bsh edits don't affect §2.1).
+        let header = FrameHeader::parse(&buf).expect("header still parses");
+        let err = PictureLayer::parse(&header, &buf).unwrap_err();
+        match err {
+            PictureLayerError::PlaneOffsetOutOfRange {
+                plane_idx,
+                plane_offset,
+                ..
+            } => {
+                assert_eq!(plane_idx, PLANE_IDX_Y);
+                assert_eq!(plane_offset, bad_y_offset);
+            }
+            other => panic!("expected PlaneOffsetOutOfRange, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncated_motion_vector_array_returns_error() {
+        // Build a minimal buffer whose Y plane claims more
+        // motion vectors than fit. We construct the buffer by
+        // hand (build_frame_with_planes pads to fit, defeating
+        // the truncation test).
+        let bsh_base = FRAME_HEADER_LEN;
+        let plane_offset: u32 = 0x30;
+        // Buffer that ends exactly 6 bytes after the plane
+        // base — room for the u32 num_vectors and one full
+        // mc_vector pair (2 bytes), but the claimed count is
+        // larger.
+        let buf_len = bsh_base + plane_offset as usize + 4 + 2;
+        let mut buf = vec![0u8; buf_len];
+
+        // Frame header (§2) with a recomputed checksum so
+        // FrameHeader::parse accepts the buffer.
+        let frame_number: u32 = 0;
+        let unknown1: u32 = 0;
+        let frame_size: u32 = buf_len as u32;
+        let check_sum = frame_number ^ unknown1 ^ frame_size ^ MAGIC_FRMH;
+        buf[0x00..0x04].copy_from_slice(&frame_number.to_le_bytes());
+        buf[0x04..0x08].copy_from_slice(&unknown1.to_le_bytes());
+        buf[0x08..0x0c].copy_from_slice(&check_sum.to_le_bytes());
+        buf[0x0c..0x10].copy_from_slice(&frame_size.to_le_bytes());
+
+        // Bitstream header (§3) — Y at 0x30, V and U at huge
+        // offsets so they trip the budget skip (no truncation
+        // error for them).
+        let bsh = &mut buf[bsh_base..bsh_base + BITSTREAM_HEADER_LEN];
+        bsh[0x00..0x02].copy_from_slice(&REQUIRED_DEC_VERSION.to_le_bytes());
+        bsh[0x02..0x04].copy_from_slice(&0u16.to_le_bytes());
+        bsh[0x04..0x08].copy_from_slice(&0x4000u32.to_le_bytes());
+        bsh[0x10..0x14].copy_from_slice(&plane_offset.to_le_bytes());
+        bsh[0x14..0x18].copy_from_slice(&0x0fff_ffffu32.to_le_bytes());
+        bsh[0x18..0x1c].copy_from_slice(&0x0fff_ffffu32.to_le_bytes());
+
+        // Y plane's num_vectors = 5 (claims 10 bytes of array)
+        // — but only 2 trailing bytes exist in the buffer.
+        let plane_base = bsh_base + plane_offset as usize;
+        buf[plane_base..plane_base + 4].copy_from_slice(&5u32.to_le_bytes());
+
+        let header = FrameHeader::parse(&buf).expect("header");
+        let err = PictureLayer::parse(&header, &buf).unwrap_err();
+        match err {
+            PictureLayerError::MotionVectorArrayTruncated {
+                plane_idx,
+                num_vectors,
+                array_end,
+                buffer_len,
+                ..
+            } => {
+                assert_eq!(plane_idx, PLANE_IDX_Y);
+                assert_eq!(num_vectors, 5);
+                assert!(array_end > buffer_len);
+            }
+            other => panic!("expected MotionVectorArrayTruncated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn byte_map_matches_spec_3_4() {
+        // §3.4 — bitstream_offset = plane_base + 4 + 2*num_vectors.
+        // Verify for a plane with 7 motion vectors that
+        // bitstream_offset = bsh + plane_offset + 4 + 14.
+        let pairs: Vec<(i8, i8)> = (0..7).map(|i| (i, -i)).collect();
+        let prelude = prelude_bytes(7, &pairs);
+        let plane_offset = 0x30_u32;
+        let buf = build_frame_with_planes(
+            [plane_offset, 0x80, 0x90],
+            [&prelude, &prelude_bytes(0, &[]), &prelude_bytes(0, &[])],
+            0,
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+        let y = layer.y().as_prelude().expect("Y present");
+        assert_eq!(y.num_vectors, 7);
+        assert_eq!(y.motion_vectors.len(), 7);
+        assert_eq!(y.prelude_len(), 4 + 7 * 2);
+        assert_eq!(
+            y.bitstream_offset,
+            FRAME_HEADER_LEN + plane_offset as usize + 4 + 7 * 2
+        );
+        // Each motion vector matches its pair.
+        for (i, (v, h)) in pairs.iter().enumerate() {
+            assert_eq!(y.motion_vectors[i].vertical_raw, *v);
+            assert_eq!(y.motion_vectors[i].horizontal_raw, *h);
+        }
+    }
+}

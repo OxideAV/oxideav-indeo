@@ -12,9 +12,15 @@
 //! otherwise noted.
 
 mod header;
+mod picture_layer;
 
 pub use header::{
     alt_quant_indices, BitstreamHeader, FrameFlags, FrameHeader, FrameHeaderPreamble, HeaderError,
     BITSTREAM_HEADER_LEN, COMBINED_HEADER_LEN, FLAG_YVU9_8BIT, FRAME_HEADER_LEN, MAGIC_FRMH,
     MAX_HEIGHT, MAX_WIDTH, MIN_DIMENSION, NULL_FRAME_DATA_SIZE_BITS, REQUIRED_DEC_VERSION,
+};
+pub use picture_layer::{
+    MotionVector, PictureLayer, PictureLayerError, PlanePrelude, PlanePresence,
+    MC_VECTOR_ENTRY_LEN, MIN_PRELUDE_LEN, NUM_VECTORS_FIELD_LEN, PLANE_COUNT, PLANE_IDX_U,
+    PLANE_IDX_V, PLANE_IDX_Y,
 };
