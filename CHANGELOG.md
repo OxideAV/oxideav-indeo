@@ -8,6 +8,43 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) macroblock-layer binary-tree walk.
+  `decode_plane_tree(&[u8], &PlanePrelude, plane_width,
+  plane_height, is_chroma, FrameFlags)` walks the binary tree that
+  lives inside a plane's bitstream payload (the bytes that begin at
+  the `bitstream_offset` the picture layer computed) and returns a
+  typed `CellTree` of INTRA / INTER leaf cells; INTRA cells carry
+  their VQ sub-tree leaves inline as `VqCell`s. Implements every
+  spec/03 tree-walk rule: the §2.1 MSB-first sentinel-bit reader
+  (modelled with the original decoder's two-cursor scheme — the
+  bit buffer drains the current byte while the shared `ebp` cursor
+  supplies leaf bytes from the next un-loaded byte, per §6 item 7),
+  the §2.2 four 2-bit node codes (`00` H_SPLIT, `01` V_SPLIT, `10`
+  INTRA/VQ_NULL leaf, `11` INTER/VQ_DATA leaf), the §3 MC_TREE walk
+  over a plane-sized root cell (§3.1) with H_SPLIT halving height
+  top-first and V_SPLIT halving width left-first (§3.2), the §3.3
+  INTRA → VQ_TREE transition on the same physical cell, the §3.4
+  INTER one-byte MV-index read, the §4 VQ_TREE walk, the §4.1
+  VQ_NULL leaf plus its additional 2-bit sub-code (`00` copy, `01`
+  skip, `10`/`11` → `MacroblockError::InvalidVqNullSubCode` fault
+  matching the decoder's return code 3), and the §4.1 VQ_DATA
+  one-byte codebook-index read. Per the spec/03 §7 chapter
+  boundary the walk stops at the per-leaf index-byte fetch:
+  `Cell::Inter` records the raw MV-index byte and `VqLeaf::Data`
+  the raw codebook-index byte, with no codebook materialisation
+  (spec/04), motion compensation (spec/05), or pixel
+  reconstruction (spec/07). Truncation and offset faults surface
+  as `MacroblockError::{BitstreamTruncated, LeafByteTruncated,
+  BitstreamOffsetOutOfRange, DegenerateSplit}`. `LUMA_STRIP_WIDTH`
+  / `CHROMA_STRIP_WIDTH` (spec/02 §4.1, 160 / 40) are exposed for
+  the strip-classification consumers. 14 new unit tests cover
+  MSB-first node decode, single INTRA-with-VQ_DATA and single
+  INTER leaves (leaf-byte cursor), H_SPLIT / V_SPLIT geometry,
+  VQ_NULL copy/skip sub-codes, invalid VQ_NULL sub-codes, nested
+  split geometry, all four error variants, odd-dimension halving,
+  and the absolute error-offset accounting. Spec source:
+  `docs/video/indeo/indeo3/spec/03-macroblock-layer.md`.
+
 - Indeo 3 (IV31 / IV32) picture-layer plane-prelude parser.
   `PictureLayer::parse(&FrameHeader, &[u8])` consumes the same
   codec-frame buffer the header parser saw and returns a typed

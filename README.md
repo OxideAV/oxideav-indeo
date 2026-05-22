@@ -5,37 +5,42 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
-**Round 2 — Indeo 3 (IV31 / IV32) picture-layer plane preludes.**
+**Round 3 — Indeo 3 (IV31 / IV32) macroblock-layer binary tree.**
 Round 1 landed the 64-byte combined header parser
-([`FrameHeader::parse`], `spec/01`). Round 2 adds
-[`PictureLayer::parse`], a structural decoder for the per-plane
-preludes (`num_vectors` + `mc_vectors[]`) that immediately follow
-each plane offset, per
-`docs/video/indeo/indeo3/spec/02-picture-layer.md`.
+([`FrameHeader::parse`], `spec/01`). Round 2 added
+[`PictureLayer::parse`], the per-plane prelude decoder (`spec/02`).
+Round 3 adds [`decode_plane_tree`], the binary-tree walk over a
+plane's bitstream payload (the bytes that begin at the
+`bitstream_offset` round 2 computed), per
+`docs/video/indeo/indeo3/spec/03-macroblock-layer.md`. It returns
+a typed [`CellTree`] of INTRA / INTER leaf cells; INTRA cells
+carry their VQ sub-tree leaves inline.
 
-`PictureLayer::parse` honours every spec/02 §2/§3 rule that
-governs the prelude bytes:
+`decode_plane_tree` honours every spec/03 tree-walk rule:
 
-- Plane iteration order U → V → Y (§2 count-down `plane_idx ∈
-  {2, 1, 0}`).
-- Plane skip rules — `plane_offset < 0` (interpreted as i32) and
-  `plane_offset > data_size/8` — both surface as
-  [`PlanePresence`] variants distinct from the parsed prelude.
-- `num_vectors` u32 LE (§3.1) and `mc_vectors[num_vectors]` two-
-  signed-byte array (§3.2) per plane.
-- Half-pel arithmetic right shift on the vertical / horizontal
-  components driven by `frame_flags` bits 4 and 5 (§3.3), with
-  the shifted-out LSB preserved as the half-pel sub-field used
-  by the §3.3 packed-MV formula.
-- Precomputed `bitstream_offset` (`plane_base + 4 + 2*num_vectors`,
-  §3.4) for the spec/03 macroblock-layer hand-off.
-- NULL-frame plane-iteration skip (§1, `data_size == 0x80`).
+- The §2.1 MSB-first sentinel-bit reader, modelled with the
+  original decoder's two-cursor scheme (the bit buffer drains the
+  current byte while the shared `ebp` cursor supplies leaf bytes
+  from the next un-loaded byte, per §6 item 7).
+- The §2.2 four 2-bit node codes (`00` H_SPLIT, `01` V_SPLIT,
+  `10` INTRA/VQ_NULL leaf, `11` INTER/VQ_DATA leaf).
+- The §3 MC_TREE walk over a plane-sized root cell (§3.1) with
+  H_SPLIT halving height top-first and V_SPLIT halving width
+  left-first (§3.2).
+- The §3.3 INTRA → VQ_TREE transition on the same physical cell,
+  and the §3.4 INTER one-byte MV-index read.
+- The §4 VQ_TREE walk: the §4.1 VQ_NULL leaf plus its additional
+  2-bit sub-code (`00` copy, `01` skip, `10`/`11` fault), and the
+  §4.1 VQ_DATA one-byte codebook-index read.
 
-No binary-tree / VQ payload decode yet — that work sits on
-`spec/03-macroblock-layer.md`. Indeo 2 / 4 / 5 still have only a
-multimedia.cx wiki snapshot under `docs/video/indeo/indeoN/wiki/`,
-no `spec/` chapters, so they remain at the round-0 scaffold
-pending docs work.
+Per the spec/03 §7 chapter boundary the walk stops at the
+per-leaf index-byte fetch: `Cell::Inter` records the raw MV-index
+byte and `VqLeaf::Data` the raw codebook-index byte. No VQ
+codebook materialisation (`spec/04`), motion compensation
+(`spec/05`), or pixel reconstruction (`spec/07`) yet. Indeo 2 / 4
+/ 5 still have only a multimedia.cx wiki snapshot under
+`docs/video/indeo/indeoN/wiki/`, no `spec/` chapters, so they
+remain at the round-0 scaffold pending docs work.
 
 The previous (pre-orphan) implementation was retired alongside the
 docs audit dated 2026-05-06 (see
@@ -95,10 +100,18 @@ if header.bitstream.is_null_frame() {
 | spec/02 §3.3 half-pel arithmetic shift    | yes      |
 | spec/02 §3.3 packed-MV formula            | helper   |
 | spec/02 §3.4 prelude size + bitstream_offset | yes   |
-| spec/02 §4 plane → strip → cell → block   | deferred |
+| spec/02 §4 plane → strip → cell → block   | tree-level (geometry) |
 | spec/02 §5 strip-context array            | deferred |
 | spec/02 §6 per-plane decode call          | deferred |
-| spec/03 macroblock layer                  | deferred |
+| spec/03 §2.1 MSB-first sentinel bit reader | yes     |
+| spec/03 §2.2 four 2-bit node codes        | yes      |
+| spec/03 §3 MC_TREE walk + halving (§3.1/3.2) | yes   |
+| spec/03 §3.3 INTRA → VQ_TREE transition   | yes      |
+| spec/03 §3.4 INTER MV-index byte          | raw byte |
+| spec/03 §4.1 VQ_NULL leaf + sub-codes     | yes      |
+| spec/03 §4.1 VQ_DATA codebook-index byte  | raw byte |
+| spec/03 §4.2 codebook-bank lookup tables  | deferred (spec/04) |
+| spec/03 §5 strip-context pixel layout     | deferred (spec/07) |
 
 "Surfaced" means the field is exposed verbatim on the typed
 struct; the reference decoder does not validate the value, so we
@@ -117,6 +130,14 @@ chapters that aren't yet in `docs/`.
   `PictureLayerError`.
 * `PictureLayer::iter_in_decode_order()`, `::y()`, `::v()`, `::u()`.
 * `MotionVector::packed_mv()` — spec/02 §3.3 packing formula.
+* `oxideav_indeo::indeo3::decode_plane_tree(&[u8], &PlanePrelude,
+  plane_width, plane_height, is_chroma, FrameFlags)` — per-plane
+  binary-tree walk (spec/03) returning a `CellTree`.
+* `CellTree`, `Cell` (`Inter` / `Intra`), `VqCell`, `VqLeaf`
+  (`Null` / `Data`), `VqNull` (`Copy` / `Skip`), `NodeCode`,
+  `MacroblockError`. `Cell::geometry()`, `CellTree::cell_count()`.
+* Strip-width constants `LUMA_STRIP_WIDTH` (160) /
+  `CHROMA_STRIP_WIDTH` (40) (spec/02 §4.1).
 * Constants: `MAGIC_FRMH`, `REQUIRED_DEC_VERSION`,
   `FRAME_HEADER_LEN`, `BITSTREAM_HEADER_LEN`, `COMBINED_HEADER_LEN`,
   `FLAG_YVU9_8BIT`, `NULL_FRAME_DATA_SIZE_BITS`, `MIN_DIMENSION`,
