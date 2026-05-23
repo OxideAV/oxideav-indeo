@@ -5,16 +5,34 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
-**Round 3 — Indeo 3 (IV31 / IV32) macroblock-layer binary tree.**
+**Round 4 — Indeo 3 (IV31 / IV32) VQ-codebook materialisation.**
 Round 1 landed the 64-byte combined header parser
 ([`FrameHeader::parse`], `spec/01`). Round 2 added
 [`PictureLayer::parse`], the per-plane prelude decoder (`spec/02`).
-Round 3 adds [`decode_plane_tree`], the binary-tree walk over a
-plane's bitstream payload (the bytes that begin at the
-`bitstream_offset` round 2 computed), per
-`docs/video/indeo/indeo3/spec/03-macroblock-layer.md`. It returns
-a typed [`CellTree`] of INTRA / INTER leaf cells; INTRA cells
-carry their VQ sub-tree leaves inline.
+Round 3 added [`decode_plane_tree`], the binary-tree walk over a
+plane's bitstream payload (`spec/03`), returning a typed
+[`CellTree`] of INTRA / INTER leaf cells whose VQ sub-tree leaves
+carry the raw codebook-index byte. Round 4 adds the `indeo3::vq`
+module (`spec/04`), which materialises the codebook resources those
+indices reference and resolves a packed codebook entry into the
+structural pieces the per-cell unpacker consumes:
+
+- [`DyadDeltaTable`] — the static 8 KB dyad-mode delta table
+  (`.data + 0x1003d088`, 16 banks × 512 B), indexed
+  `(high_nibble << 9) + col` per the dyad handler, surfacing the
+  audit-noted bank-15 row restriction.
+- [`CodebookEntry::decode`] — the packed codebook DWORD: two mode
+  bits select one of four [`CellVariant`]s; bits 2..31 are a signed
+  (`sar 2`) byte offset into the per-frame arena.
+- [`seed_dispatch_entries`] — the static codebook seed-dispatch
+  table (`.data + 0x1003ed4c`, 129 byte-pairs) packed as
+  `((al << 8) + bl) << 9` with signed source bytes.
+- [`VqArena`] + [`VqArena::apply_alt_quant`] — the per-frame arena
+  and the `alt_quant[]` band-selection overlay (`cb_offset << 11`
+  bias applied once, then per active band a primary copy at
+  stride 128 and a secondary copy at stride 2048).
+- [`VqNullRuntime`] — the runtime VQ_NULL sub-codes (copy-upper /
+  mark-boundary / unpacker-dispatch).
 
 `decode_plane_tree` honours every spec/03 tree-walk rule:
 
@@ -33,12 +51,16 @@ carry their VQ sub-tree leaves inline.
   2-bit sub-code (`00` copy, `01` skip, `10`/`11` fault), and the
   §4.1 VQ_DATA one-byte codebook-index read.
 
-Per the spec/03 §7 chapter boundary the walk stops at the
-per-leaf index-byte fetch: `Cell::Inter` records the raw MV-index
-byte and `VqLeaf::Data` the raw codebook-index byte. No VQ
-codebook materialisation (`spec/04`), motion compensation
-(`spec/05`), or pixel reconstruction (`spec/07`) yet. Indeo 2 / 4
-/ 5 still have only a multimedia.cx wiki snapshot under
+Per the spec/04 §0 / §8 chapter boundary, round 4 stops at the
+materialised codebook state: it provides the codebook tables, the
+packed-entry decode, and the per-frame arena overlay, but not the
+per-byte mode-byte unpacking, the dyad-pair → pixel-pair expansion,
+or the RLE escape codes (those begin at the per-byte unpacker entry
+`IR32_32.DLL!0x10006bac` and are `spec/06-entropy.md`'s subject —
+spec/04 §1.3 explicitly defers the QUAD-mode escape table at
+`.data + 0x1004ccd4` there). No motion compensation (`spec/05`) or
+pixel reconstruction (`spec/07`) yet. Indeo 2 / 4 / 5 still have
+only a multimedia.cx wiki snapshot under
 `docs/video/indeo/indeoN/wiki/`, no `spec/` chapters, so they
 remain at the round-0 scaffold pending docs work.
 
@@ -110,8 +132,17 @@ if header.bitstream.is_null_frame() {
 | spec/03 §3.4 INTER MV-index byte          | raw byte |
 | spec/03 §4.1 VQ_NULL leaf + sub-codes     | yes      |
 | spec/03 §4.1 VQ_DATA codebook-index byte  | raw byte |
-| spec/03 §4.2 codebook-bank lookup tables  | deferred (spec/04) |
+| spec/03 §4.2 codebook-bank lookup tables  | structure (spec/04) |
 | spec/03 §5 strip-context pixel layout     | deferred (spec/07) |
+| spec/04 §1.3 static dyad delta table (8 KB) | yes (`DyadDeltaTable`) |
+| spec/04 §2.1 packed codebook DWORD format | yes (`CodebookEntry`) |
+| spec/04 §2.3 dyad table `(hi<<9)+col` index | yes |
+| spec/04 §4 VQ_NULL runtime sub-codes      | yes (`VqNullRuntime`) |
+| spec/04 §5.1 static seed-dispatch table   | yes (`seed_dispatch_entries`) |
+| spec/04 §6 `alt_quant[]` per-frame overlay | yes (`VqArena`) |
+| spec/04 §1.2 arena `0x8020` vs `0x8800`   | DOCS-GAP (self-contradictory) |
+| spec/04 §5.2 per-frame seed-block build   | deferred (Extractor §7.1) |
+| spec/04 §1.3 QUAD escape table (`0x1004ccd4`) | deferred (spec/06) |
 
 "Surfaced" means the field is exposed verbatim on the typed
 struct; the reference decoder does not validate the value, so we
@@ -138,6 +169,24 @@ chapters that aren't yet in `docs/`.
   `MacroblockError`. `Cell::geometry()`, `CellTree::cell_count()`.
 * Strip-width constants `LUMA_STRIP_WIDTH` (160) /
   `CHROMA_STRIP_WIDTH` (40) (spec/02 §4.1).
+* `oxideav_indeo::indeo3::DyadDeltaTable` — the static 8 KB
+  dyad-mode delta table; `::load()`, `::delta(high_nibble, col)`,
+  `::bank_base()`, `::as_bytes()` (spec/04 §1.3 / §2.3).
+* `CodebookEntry::decode(u32)` + `CellVariant` — packed
+  codebook-DWORD decode (spec/04 §2.1).
+* `seed_dispatch_entries() -> Vec<SeedEntry>` — static
+  seed-dispatch table build (spec/04 §5.1).
+* `VqArena` (`::new()`, `::apply_alt_quant(seed, &alt_quant,
+  cb_offset)`, `::band_primary_offset()`,
+  `::band_secondary_offset()`, `::as_bytes()`) + `VqError` —
+  per-frame arena + `alt_quant[]` overlay (spec/04 §1.2 / §6).
+* `VqNullRuntime::classify(first_bit, second_bit)` — VQ_NULL
+  runtime sub-codes (spec/04 §4).
+* VQ constants: `DYAD_TABLE_LEN`, `DYAD_BANK_COUNT`,
+  `DYAD_BANK_STRIDE`, `DYAD_BANK15_VALID_ROWS`, `ARENA_LEN`,
+  `ARENA_BANDS_OFFSET`, `ARENA_BAND_COUNT`, `ARENA_BAND_LEN`,
+  `ARENA_HALF_LEN`, `PRIMARY_STRIDE`, `SECONDARY_STRIDE`,
+  `SEED_TABLE_LEN`, `SEED_PAIR_COUNT`.
 * Constants: `MAGIC_FRMH`, `REQUIRED_DEC_VERSION`,
   `FRAME_HEADER_LEN`, `BITSTREAM_HEADER_LEN`, `COMBINED_HEADER_LEN`,
   `FLAG_YVU9_8BIT`, `NULL_FRAME_DATA_SIZE_BITS`, `MIN_DIMENSION`,

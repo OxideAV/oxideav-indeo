@@ -8,6 +8,43 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) VQ-codebook materialisation (`spec/04`).
+  New `indeo3::vq` module turning the spec/03 VQ_DATA leaf indices
+  into the structural codebook state the per-cell unpacker consumes.
+  Lands the static dyad-mode delta table `DyadDeltaTable` (the 8 KB
+  `.data + 0x1003d088` table, 16 banks × 512 B, indexed
+  `(high_nibble << 9) + col` per the dyad handler, vendored verbatim
+  from the docs clean-room extract and surfacing the audit-noted
+  bank-15 row restriction `DYAD_BANK15_VALID_ROWS = 65`); the packed
+  codebook-DWORD decoder `CodebookEntry::decode` (§2.1 mode bit 0 /
+  bit 1 → one of four `CellVariant`s, bits 2..31 as a signed `sar 2`
+  arena offset); the static codebook seed-dispatch builder
+  `seed_dispatch_entries` (§5.1 — 128 `SeedEntry` packed as
+  `((al << 8) + bl) << 9` with signed `movsx` source bytes from the
+  258-byte `.data + 0x1003ed4c` table); the per-frame arena `VqArena`
+  plus the `alt_quant[]` band-selection overlay `apply_alt_quant`
+  (§6 — `cb_offset << 11` global bias applied once, then per active
+  band a 1 KB primary copy from `seed + high_nibble*128` and a 1 KB
+  secondary copy from `seed + low_nibble*2048`, zero bytes skipping
+  the band, out-of-range source windows surfaced as
+  `VqError::SeedWindowOutOfRange`); and the VQ_NULL runtime sub-code
+  classifier `VqNullRuntime::classify` (§4 — first-bit-0/second-bit-0
+  copy-upper, 0/1 mark-boundary, first-bit-1 unpacker-dispatch). 17
+  new unit tests cover the dyad table load + 512-byte bank stride +
+  bank-15 restriction, the mode-bit / signed-offset decode, the
+  signed seed packing, the band offsets, the overlay primary /
+  secondary / skip / cb_offset-bias / out-of-range / negative-bias
+  paths, and the VQ_NULL classification. Per the spec/04 §0 / §8
+  chapter boundary this round stops at the materialised codebook
+  state: no per-byte mode-byte unpacking, dyad-pair → pixel-pair
+  expansion, or RLE escape codes (spec/06), no pixel reconstruction
+  (spec/07), no motion compensation (spec/05). The static
+  `.data + 0x1003d088` / `0x1003ed4c` tables are vendored into
+  `src/indeo3/data/*.hex` (verbatim copies of
+  `docs/video/indeo/indeo3/tables/region_*.hex`, with a `#`-prefixed
+  provenance header) so the published crate is self-contained. Spec
+  source: `docs/video/indeo/indeo3/spec/04-vq-codebooks.md`.
+
 - Indeo 3 (IV31 / IV32) macroblock-layer binary-tree walk.
   `decode_plane_tree(&[u8], &PlanePrelude, plane_width,
   plane_height, is_chroma, FrameFlags)` walks the binary tree that

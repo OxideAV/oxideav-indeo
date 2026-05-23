@@ -55,6 +55,9 @@ pub enum Error {
     /// Indeo 3: macroblock-layer (binary-tree walk) errors per
     /// `docs/video/indeo/indeo3/spec/03-macroblock-layer.md`.
     Indeo3Macroblock(indeo3::MacroblockError),
+    /// Indeo 3: VQ-codebook materialisation errors per
+    /// `docs/video/indeo/indeo3/spec/04-vq-codebooks.md`.
+    Indeo3Vq(indeo3::VqError),
 }
 
 impl core::fmt::Display for Error {
@@ -66,6 +69,7 @@ impl core::fmt::Display for Error {
             Error::Indeo3Header(e) => write!(f, "oxideav-indeo[iv3 header]: {e}"),
             Error::Indeo3PictureLayer(e) => write!(f, "oxideav-indeo[iv3 picture]: {e}"),
             Error::Indeo3Macroblock(e) => write!(f, "oxideav-indeo[iv3 macroblock]: {e}"),
+            Error::Indeo3Vq(e) => write!(f, "oxideav-indeo[iv3 vq]: {e}"),
         }
     }
 }
@@ -87,6 +91,12 @@ impl From<indeo3::PictureLayerError> for Error {
 impl From<indeo3::MacroblockError> for Error {
     fn from(e: indeo3::MacroblockError) -> Self {
         Error::Indeo3Macroblock(e)
+    }
+}
+
+impl From<indeo3::VqError> for Error {
+    fn from(e: indeo3::VqError) -> Self {
+        Error::Indeo3Vq(e)
     }
 }
 
