@@ -8,6 +8,53 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) byte-level entropy (`spec/06`). New
+  `indeo3::entropy` module turning the per-cell mode-byte stream
+  into classified, typed structures — the fourth and last of the
+  spec/06 §1 entropy mechanisms (the other three are spec/03 §2
+  tree codes, spec/03 §3.4 / spec/04 §3.1 leaf-byte indices, and
+  the spec/04 §4 VQ_NULL prefix code). `ModeByte::classify` splits
+  a mode byte into a literal dyad index (`0x00..=0xF7`,
+  `LiteralMode` carrying the §3.1 high-nibble × 4 jump-table
+  offset, the low-nibble × 2048 arena-band base, and the
+  low-nibble bit-3 `JumpTable` flavour) or an RLE escape
+  (`0xF8..=0xFF`, `RleEscape`). `continuation_needed` models the
+  §3.3 variable-byte rule — the dyad sum's sign bit (`jns`) decides
+  whether a continuation byte is read, making each literal cost 1
+  or 2 bytes — with `apply_continuation_xor` for the
+  `xor eax, 0x80008000` back-out and `DyadAddress` for the §3.2
+  primary (`+0x400`) / secondary (`+0x402`) dyad offsets within the
+  band. The eight RLE escapes (`RleEscape::F8..Ff`) carry their
+  §4.1 / §4.2 wiki names and handler RVAs; `RleEscape::accepted_at`
+  encodes the §4.3 per-position acceptance matrix (`PositionClass`:
+  `0xFB`/`0xFC`/`0xFD` accepted everywhere, `0xFE`/`0xFF` at
+  row-starts, `0xF8`/`0xF9`/`0xFA` cell-start-only, narrowing
+  across continuations) and `extra_bytes` records that only `0xFB`
+  consumes a counter byte. `fb_category_table` builds the §4.4
+  256-byte `0xFB` counter-byte category lookup from the spec's
+  normative seed ranges (`0x01..=0x1F` → copy `0x04`, `0x21..=0x3F`
+  → mark-skipped `0x08`, rest → zero `0x00`); the destination at
+  `.data + 0x1004ccd4` is all-zero on disk (per
+  `tables/region_1004ccd4.meta`, a heap-resident attach-time copy
+  of the static seed at `.data + 0x1003ef4c`), so the table is
+  reconstructed from the normative ranges rather than vendored.
+  `FbCounter::decode` decomposes the counter into
+  `(counter & 0x1F) + 1` cells and the bit-5 copy/skip disposition.
+  21 new unit tests cover the literal/escape boundary, nibble
+  split + bit-3 jump-table selection, the high-nibble action
+  categories, all eight escape round-trips, `0xFB`-only
+  extra-byte, the full per-position acceptance matrix
+  (first-position-accepts-all + the three narrowing continuations),
+  the dyad-address layout, the continuation sign-bit test + XOR,
+  the category table + classifier + counter decode, and the
+  variant / handler / position-class RVA maps. Per the spec/06 §8
+  boundary this round stops at the entropy question — *which* bytes
+  the stream consumes and *how* each is classified; the pixel
+  emission (dyad → pixel-pair, the `add eax, [esi + 4*edx + 0x400]`
+  predictor chain, the `0x7f7f7f7f` mask) is `spec/07`, and motion
+  compensation is `spec/05`. Spec source:
+  `docs/video/indeo/indeo3/spec/06-entropy.md`.
+
 - Indeo 3 (IV31 / IV32) VQ-codebook materialisation (`spec/04`).
   New `indeo3::vq` module turning the spec/03 VQ_DATA leaf indices
   into the structural codebook state the per-cell unpacker consumes.

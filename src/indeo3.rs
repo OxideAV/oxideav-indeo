@@ -11,18 +11,32 @@
 //! ([`CodebookEntry`]), the static codebook seed-dispatch table
 //! ([`seed_dispatch_entries`]), the per-frame arena + `alt_quant[]`
 //! overlay ([`VqArena`]), and the VQ_NULL runtime sub-codes
-//! ([`VqNullRuntime`]).
+//! ([`VqNullRuntime`]). Round 5 adds the byte-level entropy module
+//! (`spec/06`): the per-cell mode-byte stream classifier
+//! ([`ModeByte`]), the variable-byte continuation rule
+//! ([`continuation_needed`]), the eight RLE escapes ([`RleEscape`])
+//! with their per-position acceptance matrix
+//! ([`RleEscape::accepted_at`]), and the `0xFB` counter-byte category
+//! table ([`fb_category_table`]).
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
 //! `docs/video/indeo/indeo3/spec/`. Section references in
 //! doc-comments below cite the chapter named in each module.
 
+mod entropy;
 mod header;
 mod macroblock;
 mod picture_layer;
 mod vq;
 
+pub use entropy::{
+    apply_continuation_xor, continuation_needed, fb_category, fb_category_table, variant_entry_rva,
+    DyadAddress, FbCategory, FbCounter, HighNibbleAction, JumpTable, LiteralMode, ModeByte,
+    ModeByteKind, PositionClass, RleEscape, ARENA_BAND_STRIDE, CONTINUATION_XOR, LITERAL_MODE_MAX,
+    PRIMARY_TABLE_DISP, RLE_ESCAPE_MIN, SECONDARY_TABLE_DISP, VARIANT_A_ENTRY, VARIANT_B_ENTRY,
+    VARIANT_C_ENTRY, VARIANT_D_ENTRY,
+};
 pub use header::{
     alt_quant_indices, BitstreamHeader, FrameFlags, FrameHeader, FrameHeaderPreamble, HeaderError,
     BITSTREAM_HEADER_LEN, COMBINED_HEADER_LEN, FLAG_YVU9_8BIT, FRAME_HEADER_LEN, MAGIC_FRMH,

@@ -5,7 +5,7 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
-**Round 4 — Indeo 3 (IV31 / IV32) VQ-codebook materialisation.**
+**Round 5 — Indeo 3 (IV31 / IV32) byte-level entropy.**
 Round 1 landed the 64-byte combined header parser
 ([`FrameHeader::parse`], `spec/01`). Round 2 added
 [`PictureLayer::parse`], the per-plane prelude decoder (`spec/02`).
@@ -34,6 +34,43 @@ structural pieces the per-cell unpacker consumes:
 - [`VqNullRuntime`] — the runtime VQ_NULL sub-codes (copy-upper /
   mark-boundary / unpacker-dispatch).
 
+Round 5 adds the `indeo3::entropy` module (`spec/06`), the
+byte-level entropy surface that consumes round 4's VQ codebook
+state. spec/06 §1 establishes that Indeo 3 has exactly four
+bitstream mechanisms and that there is **no Huffman / arithmetic
+coder and no fixed VLC longer than the 2-bit binary-tree code**;
+the first three were already modelled (spec/03 §2 tree codes,
+spec/03 §3.4 / spec/04 §3.1 leaf-byte indices, spec/04 §4 VQ_NULL
+prefix code). Round 5 lands the fourth — the per-cell mode-byte
+stream:
+
+- [`ModeByte::classify`] — the §2.3 / §3.1 mode-byte split: bytes
+  `0x00..=0xF7` are literal dyad indices ([`LiteralMode`], with the
+  high-nibble jump-table selector, low-nibble × 2048 arena-band
+  base, and low-nibble bit 3 [`JumpTable`] flavour); bytes
+  `0xF8..=0xFF` are RLE escapes ([`RleEscape`]).
+- [`continuation_needed`] — the §3.3 variable-byte rule: the dyad
+  sum's sign bit decides whether a continuation byte is read
+  (making each literal cost 1 or 2 bytes), with
+  [`apply_continuation_xor`] modelling the `xor eax, 0x80008000`
+  back-out.
+- [`RleEscape::accepted_at`] — the §4.3 per-position acceptance
+  matrix ([`PositionClass`]): `0xFB`/`0xFC`/`0xFD` accepted
+  everywhere, `0xFE`/`0xFF` at row-starts, `0xF8`/`0xF9`/`0xFA`
+  cell-start-only, narrowing across continuations.
+- [`fb_category_table`] + [`FbCounter`] — the §4.4 `0xFB`
+  counter-byte category lookup (built from the spec's normative
+  seed ranges: `0x01..=0x1F` → copy, `0x21..=0x3F` → mark-skipped,
+  rest → zero) and the counter decomposition (`(counter & 0x1F) +
+  1` cells, bit 5 copy/skip disposition).
+
+Per the spec/06 §8 boundary, round 5 stops at the entropy
+question — *which* bytes the stream consumes and *how* each is
+classified. The pixel emission (the `add eax, [esi + 4*edx +
+0x400]` chain, the `0x7f7f7f7f` mask, the dyad → pixel writes) is
+`spec/07`; [`DyadAddress`] computes only the dyad entry's *address*
+from the mode byte's nibbles, not its value.
+
 `decode_plane_tree` honours every spec/03 tree-walk rule:
 
 - The §2.1 MSB-first sentinel-bit reader, modelled with the
@@ -51,15 +88,12 @@ structural pieces the per-cell unpacker consumes:
   2-bit sub-code (`00` copy, `01` skip, `10`/`11` fault), and the
   §4.1 VQ_DATA one-byte codebook-index read.
 
-Per the spec/04 §0 / §8 chapter boundary, round 4 stops at the
-materialised codebook state: it provides the codebook tables, the
-packed-entry decode, and the per-frame arena overlay, but not the
-per-byte mode-byte unpacking, the dyad-pair → pixel-pair expansion,
-or the RLE escape codes (those begin at the per-byte unpacker entry
-`IR32_32.DLL!0x10006bac` and are `spec/06-entropy.md`'s subject —
-spec/04 §1.3 explicitly defers the QUAD-mode escape table at
-`.data + 0x1004ccd4` there). No motion compensation (`spec/05`) or
-pixel reconstruction (`spec/07`) yet. Indeo 2 / 4 / 5 still have
+Round 5's `indeo3::entropy` module resolves the per-byte
+mode-byte stream and the `0xF8..=0xFF` RLE escapes round 4
+deferred to `spec/06`. What remains is the pixel emission itself
+(the dyad-pair → pixel-pair expansion and the predictor arithmetic,
+`spec/07`) plus motion compensation (`spec/05`); neither is started
+yet. Indeo 2 / 4 / 5 still have
 only a multimedia.cx wiki snapshot under
 `docs/video/indeo/indeoN/wiki/`, no `spec/` chapters, so they
 remain at the round-0 scaffold pending docs work.
@@ -142,7 +176,16 @@ if header.bitstream.is_null_frame() {
 | spec/04 §6 `alt_quant[]` per-frame overlay | yes (`VqArena`) |
 | spec/04 §1.2 arena `0x8020` vs `0x8800`   | DOCS-GAP (self-contradictory) |
 | spec/04 §5.2 per-frame seed-block build   | deferred (Extractor §7.1) |
-| spec/04 §1.3 QUAD escape table (`0x1004ccd4`) | deferred (spec/06) |
+| spec/06 §1 entropy-surface inventory (4 mechanisms) | yes (constants + types) |
+| spec/06 §2.3 / §3.1 mode-byte nibble split | yes (`ModeByte` / `LiteralMode`) |
+| spec/06 §3.2 two 16-entry jump tables     | selector (`JumpTable`) |
+| spec/06 §3.3 variable-byte continuation   | yes (`continuation_needed`) |
+| spec/06 §3.4 four cell-unpacker variants  | RVA map (`variant_entry_rva`) |
+| spec/06 §4.1 / §4.2 eight RLE escapes     | yes (`RleEscape`) |
+| spec/06 §4.3 per-position acceptance matrix | yes (`RleEscape::accepted_at`) |
+| spec/06 §4.4 `0xFB` counter-byte category table | yes (`fb_category_table`, `FbCounter`) |
+| spec/06 §3 dyad-pair address (`+0x400` / `+0x402`) | yes (`DyadAddress`) |
+| spec/06 §5 / §7 pixel emission (dyad → pixel) | deferred (spec/07) |
 
 "Surfaced" means the field is exposed verbatim on the typed
 struct; the reference decoder does not validate the value, so we
@@ -182,6 +225,33 @@ chapters that aren't yet in `docs/`.
   per-frame arena + `alt_quant[]` overlay (spec/04 §1.2 / §6).
 * `VqNullRuntime::classify(first_bit, second_bit)` — VQ_NULL
   runtime sub-codes (spec/04 §4).
+* `oxideav_indeo::indeo3::ModeByte::classify(u8)` — the spec/06
+  §2.3 / §3.1 per-cell mode-byte classifier (`ModeByteKind` ->
+  `Literal(LiteralMode)` / `Escape(RleEscape)`); `is_literal()` /
+  `is_escape()`.
+* `LiteralMode` (`::from_byte`, `high_nibble` / `low_nibble` /
+  `jump_table_offset` / `arena_band_offset` / `low_nibble_bit3`,
+  `::jump_table()`) + `JumpTable` (`First` / `Second`,
+  `::base_rva()`) + `HighNibbleAction::from_high_nibble` — the
+  §3.1 / §3.2 nibble dispatch.
+* `RleEscape` (`F8..Ff`, `::from_byte`, `::byte()`,
+  `::extra_bytes()`, `::accepted_at(PositionClass)`) +
+  `PositionClass` (`CellFirst` / `RowFirst` / `Continuation1..3`,
+  `::variant_a_row0_base_rva()`) — the §4 RLE escapes + §4.3
+  per-position acceptance matrix.
+* `continuation_needed(u32)` / `apply_continuation_xor(u32)` — the
+  §3.3 variable-byte continuation test + back-out XOR.
+* `DyadAddress::new(LiteralMode, col)` — the §3.2 dyad-pair
+  primary / secondary offsets within the arena band.
+* `fb_category_table() -> [u8; 256]` / `fb_category(u8)` /
+  `FbCategory` (`Zero` / `Copy` / `MarkSkipped`, `::value()`,
+  `::handler_rva()`) / `FbCounter::decode(u8)` — the §4.4 `0xFB`
+  counter-byte category lookup + decomposition.
+* `variant_entry_rva(CellVariant)` — the §3.4 per-variant unpacker
+  entry RVA.
+* Entropy constants: `LITERAL_MODE_MAX`, `RLE_ESCAPE_MIN`,
+  `ARENA_BAND_STRIDE`, `PRIMARY_TABLE_DISP`, `SECONDARY_TABLE_DISP`,
+  `CONTINUATION_XOR`, `VARIANT_A_ENTRY`..`VARIANT_D_ENTRY`.
 * VQ constants: `DYAD_TABLE_LEN`, `DYAD_BANK_COUNT`,
   `DYAD_BANK_STRIDE`, `DYAD_BANK15_VALID_ROWS`, `ARENA_LEN`,
   `ARENA_BANDS_OFFSET`, `ARENA_BAND_COUNT`, `ARENA_BAND_LEN`,
