@@ -5,6 +5,31 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 7 — Indeo 3 (IV31 / IV32) cell-shape variant inner loops.**
+Round 7 lands the four cell-shape variant emission kernels
+(`spec/07` §2.2 / `spec/04` §2.2) that round 6's per-position
+arithmetic deferred. [`emit_variant`] runs round 6's shared
+[`apply_dyad_pair`] add and then applies the per-variant store shape
+the codebook DWORD's two mode bits select: variant A
+([`CellVariant::Plain`], `IR32_32.DLL!0x1000670d`) stores the
+dyad-pair DWORD directly to two adjacent rows (vertical doubling, no
+saturation); variant B ([`CellVariant::WithEdge`], `0x10006780`)
+writes one row of the per-byte [`average_7bit`] of the predictor and
+the dyad result with the `0x7f7f7f7f` 7-bit clamp; variant C
+([`CellVariant::DoubledRow`], `0x1000684b`) writes that average to
+two rows; variant D ([`CellVariant::FullyDoubled`], `0x100068f8`)
+writes the `and 0xfefefefe; shr 1` per-byte halve
+([`halve_fefefefe`]) to two rows. The result is a
+[`VariantEmission`] whose [`RowEmission`] `rows` lists the output
+DWORD(s) to store at successive `0xb0`-stride row offsets; a
+[`DyadOutcome::Fault`] emits zero rows. [`CLAMP_7BIT_MASK`]
+(`0x7f7f7f7f`) and [`HALVE_CARRY_MASK`] (`0xfefefefe`) are surfaced
+as constants. Per the spec/07 boundary, round 7 lands the
+per-position variant store shape only — not the outer per-cell
+row/column loop (the `cl` / `ch` counter walk, spec/04 §3.3), the
+strip-buffer assembly, the 7→8-bit upshift, the YUV→RGB / IF09
+conversion (§5), or motion compensation (`spec/05`).
+
 **Round 6 — Indeo 3 (IV31 / IV32) output-reconstruction kernel.**
 Round 6 adds the `indeo3::reconstruct` module (`spec/07` §1 + §2 +
 §4), the per-position pixel-emission arithmetic that round 5's
@@ -214,7 +239,7 @@ if header.bitstream.is_null_frame() {
 | spec/07 §2.3 continuation / secondary-table fall-back | yes (`DyadOutcome`) |
 | spec/07 §2.3 fault on still-sign-set secondary add | yes (`DyadOutcome::Fault`) |
 | spec/07 §4.1 / §4.2 7-bit-per-byte range + overflow sentinel | yes (`SoftSimdSum`) |
-| spec/07 §2.2 four cell-shape variant inner loops (A–D) | deferred (per-cell loops) |
+| spec/07 §2.2 four cell-shape variant inner loops (A–D) | yes (`emit_variant`) |
 | spec/07 §3 static dyad delta-table values | covered by spec/04 `DyadDeltaTable` |
 | spec/07 §4.3 / §5 7→8-bit upshift + YUV→RGB / IF09 | deferred (output-buffer write) |
 
@@ -288,6 +313,18 @@ chapters that aren't yet in `docs/`.
   `predictor + delta` add with the continuation / secondary-table
   fall-back and the §4.1 fault path. `DyadOutcome`
   (`Primary { pixels }` / `Continuation { pixels }` / `Fault`).
+* `oxideav_indeo::indeo3::emit_variant(variant, predictor,
+  primary_delta, secondary_word) -> VariantEmission` — the spec/07
+  §2.2 / spec/04 §2.2 four cell-shape variant inner-loop store: runs
+  `apply_dyad_pair`, then applies variant A (plain two-row store),
+  B (`average_7bit` one-row), C (average two-row), or D
+  (`halve_fefefefe` two-row). `VariantEmission { outcome, rows }`
+  with `rows: RowEmission` (`::as_slice()` / `::len()` /
+  `::is_empty()`) listing the output DWORD(s) at successive
+  `0xb0`-stride row offsets; a `Fault` emits zero rows.
+* `average_7bit(a, b) -> u32` — the §2.2 per-byte `0x7f7f7f7f`-clamped
+  average (variants B / C). `halve_fefefefe(value) -> u32` — the §2.2
+  `and 0xfefefefe; shr 1` per-byte halve (variant D).
 * `predictor_offset(write_index) -> Option<usize>` — the §1.1
   `[edi - 0xb0]` row-above predictor address (`None` for top-row
   writes whose seed is the constant `TOP_OF_STRIP_PREDICTOR`).
@@ -300,7 +337,8 @@ chapters that aren't yet in `docs/`.
   — the §0 / §2.4 little-endian softSIMD pixel-DWORD packing.
 * Reconstruction constants: `PREDICTOR_ROW_STRIDE` (0xb0),
   `TOP_OF_STRIP_PREDICTOR` (0x00), `PIXEL_VALUE_MAX` (0x7f),
-  `EDGE_MARKER_BIT` (0x80), `HALF_SENTINEL_MASK` (0x8000_8000).
+  `EDGE_MARKER_BIT` (0x80), `HALF_SENTINEL_MASK` (0x8000_8000),
+  `CLAMP_7BIT_MASK` (0x7f7f_7f7f), `HALVE_CARRY_MASK` (0xfefe_fefe).
 * VQ constants: `DYAD_TABLE_LEN`, `DYAD_BANK_COUNT`,
   `DYAD_BANK_STRIDE`, `DYAD_BANK15_VALID_ROWS`, `ARENA_LEN`,
   `ARENA_BANDS_OFFSET`, `ARENA_BAND_COUNT`, `ARENA_BAND_LEN`,

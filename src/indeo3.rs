@@ -22,7 +22,12 @@
 //! address ([`predictor_offset`]) and the softSIMD dyad-pair
 //! `predictor + delta` add ([`apply_dyad_pair`]) with its
 //! continuation / secondary-table fall-back and 7-bit-per-byte
-//! overflow detection.
+//! overflow detection. Round 7 adds the four cell-shape variant
+//! inner-loop emission kernels ([`emit_variant`], `spec/07` §2.2):
+//! variant A's direct two-row store, variant B's `0x7f7f7f7f`-clamped
+//! per-byte average ([`average_7bit`]), variant C's doubled-row
+//! average, and variant D's `and 0xfefefefe; shr 1` halve
+//! ([`halve_fefefefe`]).
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
@@ -58,9 +63,10 @@ pub use picture_layer::{
     PLANE_IDX_V, PLANE_IDX_Y,
 };
 pub use reconstruct::{
-    apply_dyad_pair, jns_taken, pack_predictor, predictor_offset, unpack_pixels, DyadOutcome,
-    SoftSimdSum, EDGE_MARKER_BIT, HALF_SENTINEL_MASK, PIXEL_VALUE_MAX, PREDICTOR_ROW_STRIDE,
-    TOP_OF_STRIP_PREDICTOR,
+    apply_dyad_pair, average_7bit, emit_variant, halve_fefefefe, jns_taken, pack_predictor,
+    predictor_offset, unpack_pixels, DyadOutcome, RowEmission, SoftSimdSum, VariantEmission,
+    CLAMP_7BIT_MASK, EDGE_MARKER_BIT, HALF_SENTINEL_MASK, HALVE_CARRY_MASK, PIXEL_VALUE_MAX,
+    PREDICTOR_ROW_STRIDE, TOP_OF_STRIP_PREDICTOR,
 };
 pub use vq::{
     seed_dispatch_entries, CellVariant, CodebookEntry, DyadDeltaTable, SeedEntry, VqArena, VqError,

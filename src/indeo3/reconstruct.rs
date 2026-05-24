@@ -35,13 +35,36 @@
 //!   each 16-bit half) doubles as the continuation trigger.
 //!   [`SoftSimdSum`] records both halves' overflow state.
 //!
+//! Round 7 (this round) adds the four cell-shape variant inner-loop
+//! emission kernels (spec/07 §2.2 / spec/04 §2.2). Round 6 landed the
+//! shared per-position dyad-pair add ([`apply_dyad_pair`]); this round
+//! answers *what each variant does with the resulting pixel DWORD* —
+//! the per-row store shape that differs between the four variants the
+//! codebook DWORD's two mode bits select:
+//!
+//! * Variant A ([`CellVariant::Plain`], §2.2): direct store, the same
+//!   dyad-pair DWORD written to two adjacent rows (`[edi]` and
+//!   `[edi + 0xb0]`) — vertical doubling, no saturation.
+//! * Variant B ([`CellVariant::WithEdge`], §2.2): per-byte average of
+//!   the predictor and the dyad delta with the `0x7f7f7f7f`
+//!   7-bit-per-byte clamp ([`average_7bit`]).
+//! * Variant C ([`CellVariant::DoubledRow`], §2.2): the variant-B
+//!   average written to two adjacent rows (doubled-row store).
+//! * Variant D ([`CellVariant::FullyDoubled`], §2.2): the
+//!   `and 0xfefefefe; shr 1` per-byte halve ([`halve_fefefefe`])
+//!   written to two adjacent rows.
+//!
+//! [`emit_variant`] runs [`apply_dyad_pair`] then applies the
+//! variant-specific store shape, returning a [`VariantEmission`] that
+//! names the output DWORD(s) and which rows receive them.
+//!
 //! What this round deliberately does **not** do (the spec/07 chapter
 //! boundary on the output side, plus the multi-cell scope):
 //!
-//! * No cell-stack walk, no per-cell-variant inner loop (variants
-//!   A–D, §2.2), no row-band advance, and no inter-cell edge fix-up
-//!   (§1.3). This module is the per-position arithmetic kernel the
-//!   variant loops call, not the loops themselves.
+//! * No cell-stack walk, no row-band advance, and no inter-cell edge
+//!   fix-up (§1.3). The variant kernels here are the per-position store
+//!   shape; the outer row/column loop that calls them per cell position
+//!   (the `cl` / `ch` counter walk, spec/04 §3.3) is still future work.
 //! * No strip-buffer allocation, no plane assembly, no 7-bit→8-bit
 //!   upshift, and no YUV→RGB / IF09 conversion (§4.3, §5). Those are
 //!   the output-buffer-write stage.
@@ -58,7 +81,7 @@
 //! `add eax, [esi + 4*edx + 0x400]` chain at
 //! `IR32_32.DLL!0x10006e0f..0x10006e2e` does.
 
-use super::CONTINUATION_XOR;
+use super::{CellVariant, CONTINUATION_XOR};
 
 /// Spec/07 §0 / §1.1 — the strip pixel buffer's row stride, `0xb0`
 /// (176) bytes. The predictor for `[edi]` is at `[edi - 0xb0]`.
@@ -251,6 +274,172 @@ pub fn unpack_pixels(dword: u32) -> [u8; 4] {
     dword.to_le_bytes()
 }
 
+/// Spec/07 §4.2 — the per-byte 7-bit clamp mask `0x7f7f7f7f` applied by
+/// the averaging variants (B / C) before storing the DWORD (spec/04
+/// §2.2: "`and 0x7f7f7f7f` mask is applied to the DWORD result before
+/// storing"). Dropping bit 7 of each byte keeps the result in the
+/// internal 7-bit-per-byte pixel range and clears the edge-marker bit.
+pub const CLAMP_7BIT_MASK: u32 = 0x7f7f_7f7f;
+
+/// Spec/07 §2.2 — the per-byte carry-strip mask `0xfefefefe` applied by
+/// the fully-doubled variant (D) before the `shr 1` halve. Clearing
+/// bit 0 of each byte before the shared right-shift prevents the low
+/// bit of one byte bleeding into the high bit of the next during the
+/// byte-parallel DWORD `shr`.
+pub const HALVE_CARRY_MASK: u32 = 0xfefe_fefe;
+
+/// Spec/07 §2.2 (variant B / C) — the per-byte average of two pixel
+/// DWORDs with the `0x7f7f7f7f` 7-bit clamp.
+///
+/// The averaging variants form `(predictor + delta)` (already done by
+/// [`apply_dyad_pair`]); the variant-specific step is a per-byte
+/// average against the predictor, clamped to 7 bits per byte. The
+/// byte-parallel average without inter-byte carry bleed is the SWAR
+/// identity `(a & b) + (((a ^ b) >> 1) & 0x7f7f7f7f)`; masking the
+/// half-sum with `0x7f7f7f7f` both performs the per-byte `>> 1` carry
+/// strip and applies the variant's documented `and 0x7f7f7f7f` clamp
+/// (spec/04 §2.2).
+pub fn average_7bit(a: u32, b: u32) -> u32 {
+    (a & b).wrapping_add(((a ^ b) >> 1) & CLAMP_7BIT_MASK)
+}
+
+/// Spec/07 §2.2 (variant D) — the `and 0xfefefefe; shr 1` per-byte
+/// halve.
+///
+/// The fully-doubled variant clears bit 0 of each byte (so the right
+/// shift cannot pull the low bit of one byte into the high bit of the
+/// next) and then shifts the whole DWORD right by 1, halving every byte
+/// in parallel. This is the literal disassembled sequence at the
+/// variant-D inner loop (`and 0xfefefefe; shr 1`).
+pub fn halve_fefefefe(value: u32) -> u32 {
+    (value & HALVE_CARRY_MASK) >> 1
+}
+
+/// Spec/07 §2.2 — the result of applying one cell-shape variant's
+/// inner-loop store at a single cell position.
+///
+/// Every variant first runs the shared [`apply_dyad_pair`] add; the
+/// variant then decides *what* to store and *to how many rows*. This
+/// type captures both: `outcome` is the dyad-pair add result (so a
+/// caller can detect the [`DyadOutcome::Fault`] / continuation-byte
+/// cases), and `rows` is the list of output DWORDs to store at
+/// successive `0xb0`-stride row offsets from the destination pointer
+/// `[edi]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VariantEmission {
+    /// The shared per-position dyad-pair add outcome ([`apply_dyad_pair`]).
+    /// On [`DyadOutcome::Fault`] the variant store does not run and
+    /// `rows` is empty.
+    pub outcome: DyadOutcome,
+    /// The output pixel-pair DWORD(s) to store, in row order. `rows[i]`
+    /// is written at `[edi + i * 0xb0]`. The plain / doubled-row /
+    /// fully-doubled variants emit two rows (vertical doubling); the
+    /// with-edge variant emits one row.
+    pub rows: RowEmission,
+}
+
+/// A small inline row list (max 2 entries — no variant emits more than
+/// two rows per dyad-pair position per spec/07 §2.2). Kept as a fixed
+/// array + length so the module stays allocation-free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RowEmission {
+    storage: [u32; 2],
+    len: usize,
+}
+
+impl RowEmission {
+    fn push(&mut self, v: u32) {
+        self.storage[self.len] = v;
+        self.len += 1;
+    }
+
+    /// The stored output DWORDs in row order.
+    pub fn as_slice(&self) -> &[u32] {
+        &self.storage[..self.len]
+    }
+
+    /// Number of output rows this position emits.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether no rows were emitted (the [`DyadOutcome::Fault`] case).
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+/// Spec/07 §2.2 / spec/04 §2.2 — apply one cell-shape variant's
+/// inner-loop store at a single cell position.
+///
+/// Runs the shared [`apply_dyad_pair`] add against the predictor, then
+/// applies the variant-specific output shape:
+///
+/// * [`CellVariant::Plain`] (variant A, `IR32_32.DLL!0x1000670d`):
+///   direct DWORD store written to **two** adjacent rows (`[edi]` and
+///   `[edi + 0xb0]`) — vertical doubling, no saturation.
+/// * [`CellVariant::WithEdge`] (variant B, `IR32_32.DLL!0x10006780`):
+///   per-byte [`average_7bit`] of the predictor and the dyad-pair
+///   result, written to **one** row.
+/// * [`CellVariant::DoubledRow`] (variant C, `IR32_32.DLL!0x1000684b`):
+///   the variant-B average written to **two** adjacent rows
+///   (doubled-row store).
+/// * [`CellVariant::FullyDoubled`] (variant D,
+///   `IR32_32.DLL!0x100068f8`): the [`halve_fefefefe`]
+///   (`and 0xfefefefe; shr 1`) halve of the dyad-pair result, written
+///   to **two** adjacent rows.
+///
+/// `predictor` is the row-above DWORD (`[edi - 0xb0]`), `primary_delta`
+/// the per-frame arena primary entry, and `secondary_word` the
+/// secondary-table word consulted only on a continuation (see
+/// [`apply_dyad_pair`]). On [`DyadOutcome::Fault`] no rows are emitted.
+pub fn emit_variant(
+    variant: CellVariant,
+    predictor: u32,
+    primary_delta: u32,
+    secondary_word: u16,
+) -> VariantEmission {
+    let outcome = apply_dyad_pair(predictor, primary_delta, secondary_word);
+    let pixels = match outcome {
+        DyadOutcome::Primary { pixels } | DyadOutcome::Continuation { pixels } => pixels,
+        DyadOutcome::Fault => {
+            return VariantEmission {
+                outcome,
+                rows: RowEmission::default(),
+            };
+        }
+    };
+
+    let mut rows = RowEmission::default();
+    match variant {
+        // Variant A (plain): direct store, written to two rows.
+        CellVariant::Plain => {
+            rows.push(pixels);
+            rows.push(pixels);
+        }
+        // Variant B (with-edge averaging): per-byte average with the
+        // 7-bit clamp, one row.
+        CellVariant::WithEdge => {
+            rows.push(average_7bit(predictor, pixels));
+        }
+        // Variant C (doubled-row): the with-edge average, two rows.
+        CellVariant::DoubledRow => {
+            let avg = average_7bit(predictor, pixels);
+            rows.push(avg);
+            rows.push(avg);
+        }
+        // Variant D (fully-doubled): the `and 0xfefefefe; shr 1` halve,
+        // two rows.
+        CellVariant::FullyDoubled => {
+            let halved = halve_fefefefe(pixels);
+            rows.push(halved);
+            rows.push(halved);
+        }
+    }
+
+    VariantEmission { outcome, rows }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,5 +605,154 @@ mod tests {
             }
             other => panic!("expected Primary, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn variant_masks_match_spec() {
+        // The two documented per-byte masks (spec/04 §2.2, spec/07 §2.2).
+        assert_eq!(CLAMP_7BIT_MASK, 0x7f7f_7f7f);
+        assert_eq!(HALVE_CARRY_MASK, 0xfefe_fefe);
+    }
+
+    #[test]
+    fn average_7bit_is_per_byte_floor_average() {
+        // Per-byte average with no inter-byte carry bleed. Each byte
+        // pair averages independently, rounding toward zero.
+        let a = pack_predictor([0x10, 0x40, 0x7f, 0x00]);
+        let b = pack_predictor([0x20, 0x42, 0x01, 0x7f]);
+        let avg = unpack_pixels(average_7bit(a, b));
+        // floor((0x10 + 0x20) / 2) = 0x18.
+        assert_eq!(avg[0], 0x18);
+        // floor((0x40 + 0x42) / 2) = 0x41.
+        assert_eq!(avg[1], 0x41);
+        // floor((0x7f + 0x01) / 2) = 0x40.
+        assert_eq!(avg[2], 0x40);
+        // floor((0x00 + 0x7f) / 2) = 0x3f.
+        assert_eq!(avg[3], 0x3f);
+        // Every output byte stays within the 7-bit pixel range.
+        for v in avg {
+            assert!(v <= PIXEL_VALUE_MAX);
+        }
+    }
+
+    #[test]
+    fn average_7bit_clamps_bit7() {
+        // For equal inputs the average is exact (the xor term is zero).
+        assert_eq!(average_7bit(0xffff_ffff, 0xffff_ffff), 0xffff_ffff);
+        // For mixed inputs the `0x7f7f7f7f` mask strips the carry out of
+        // bit 7: (0x80 ^ 0x00) >> 1 = 0x40, & 0x7f = 0x40.
+        let avg = unpack_pixels(average_7bit(0x8080_8080, 0x0000_0000));
+        for v in avg {
+            assert_eq!(v, 0x40);
+        }
+    }
+
+    #[test]
+    fn halve_fefefefe_is_per_byte_halve() {
+        // `and 0xfefefefe; shr 1`: clear bit 0 of each byte, then halve
+        // the whole DWORD. No low bit bleeds across byte boundaries.
+        let v = pack_predictor([0x81, 0x40, 0xff, 0x01]);
+        let halved = unpack_pixels(halve_fefefefe(v));
+        // 0x81 & 0xfe = 0x80, >> 1 = 0x40.
+        assert_eq!(halved[0], 0x40);
+        // 0x40 & 0xfe = 0x40, >> 1 = 0x20.
+        assert_eq!(halved[1], 0x20);
+        // 0xff & 0xfe = 0xfe, >> 1 = 0x7f.
+        assert_eq!(halved[2], 0x7f);
+        // 0x01 & 0xfe = 0x00, >> 1 = 0x00.
+        assert_eq!(halved[3], 0x00);
+        // No bleed across bytes: byte 0's cleared low bit does not reach
+        // byte 1's high bit.
+        assert_eq!(halve_fefefefe(0x0000_0001), 0x0000_0000);
+        assert_eq!(halve_fefefefe(0x0000_0100), 0x0000_0000);
+    }
+
+    #[test]
+    fn variant_plain_writes_two_identical_rows() {
+        // Variant A: direct store, same DWORD to both rows.
+        let predictor = pack_predictor([0x20, 0x30, 0x00, 0x00]);
+        let primary = pack_predictor([0x05, 0x07, 0x00, 0x00]);
+        let em = emit_variant(CellVariant::Plain, predictor, primary, 0xffff);
+        assert_eq!(
+            em.outcome,
+            DyadOutcome::Primary {
+                pixels: 0x0000_3725
+            }
+        );
+        assert_eq!(em.rows.len(), 2);
+        assert_eq!(em.rows.as_slice(), &[0x0000_3725, 0x0000_3725]);
+    }
+
+    #[test]
+    fn variant_with_edge_averages_one_row() {
+        // Variant B: per-byte average of predictor and dyad result, one
+        // row. dyad result = [0x25, 0x37, 0, 0]; average with predictor
+        // [0x20, 0x30, 0, 0]: (0x20+0x25)/2 = 0x22, (0x30+0x37)/2 = 0x33.
+        let predictor = pack_predictor([0x20, 0x30, 0x00, 0x00]);
+        let primary = pack_predictor([0x05, 0x07, 0x00, 0x00]);
+        let em = emit_variant(CellVariant::WithEdge, predictor, primary, 0xffff);
+        assert_eq!(em.rows.len(), 1);
+        let row = unpack_pixels(em.rows.as_slice()[0]);
+        assert_eq!(row[0], (0x20 + 0x25) / 2);
+        assert_eq!(row[1], (0x30 + 0x37) / 2);
+    }
+
+    #[test]
+    fn variant_doubled_row_averages_two_rows() {
+        // Variant C: the with-edge average, written to two rows.
+        let predictor = pack_predictor([0x20, 0x30, 0x00, 0x00]);
+        let primary = pack_predictor([0x05, 0x07, 0x00, 0x00]);
+        let b = emit_variant(CellVariant::WithEdge, predictor, primary, 0xffff);
+        let c = emit_variant(CellVariant::DoubledRow, predictor, primary, 0xffff);
+        assert_eq!(c.rows.len(), 2);
+        // Both rows equal the variant-B single-row result.
+        assert_eq!(c.rows.as_slice()[0], b.rows.as_slice()[0]);
+        assert_eq!(c.rows.as_slice()[1], b.rows.as_slice()[0]);
+    }
+
+    #[test]
+    fn variant_fully_doubled_halves_two_rows() {
+        // Variant D: `and 0xfefefefe; shr 1` of the dyad result, two
+        // rows. dyad result = [0x44, 0x66, 0, 0]; halve = [0x22, 0x33].
+        let predictor = pack_predictor([0x40, 0x60, 0x00, 0x00]);
+        let primary = pack_predictor([0x04, 0x06, 0x00, 0x00]);
+        let em = emit_variant(CellVariant::FullyDoubled, predictor, primary, 0xffff);
+        assert_eq!(em.rows.len(), 2);
+        let row = unpack_pixels(em.rows.as_slice()[0]);
+        assert_eq!(row[0], 0x44 >> 1);
+        assert_eq!(row[1], 0x66 >> 1);
+        assert_eq!(em.rows.as_slice()[0], em.rows.as_slice()[1]);
+    }
+
+    #[test]
+    fn variant_fault_emits_no_rows() {
+        // On a dyad-pair fault, every variant emits zero rows and
+        // propagates the Fault outcome.
+        for variant in [
+            CellVariant::Plain,
+            CellVariant::WithEdge,
+            CellVariant::DoubledRow,
+            CellVariant::FullyDoubled,
+        ] {
+            let em = emit_variant(variant, 0x7fff_0000, 0x0001_0000, 0x0001);
+            assert_eq!(em.outcome, DyadOutcome::Fault);
+            assert!(em.rows.is_empty());
+            assert_eq!(em.rows.len(), 0);
+        }
+    }
+
+    #[test]
+    fn variant_propagates_continuation_outcome() {
+        // The variant store runs on the continuation pixels and the
+        // outcome reports Continuation (so the caller advances the
+        // bitstream cursor).
+        let em = emit_variant(CellVariant::Plain, 0x1234_0000, 0x8000_0000, 0x8001);
+        assert_eq!(
+            em.outcome,
+            DyadOutcome::Continuation {
+                pixels: 0x1234_0001
+            }
+        );
+        assert_eq!(em.rows.as_slice(), &[0x1234_0001, 0x1234_0001]);
     }
 }

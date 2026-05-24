@@ -6,6 +6,42 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Indeo 3 (IV31 / IV32) four cell-shape variant inner-loop emission
+  kernels (`spec/07` §2.2 / `spec/04` §2.2). `emit_variant(variant,
+  predictor, primary_delta, secondary_word)` runs the shared
+  `apply_dyad_pair` add and then applies the per-variant store shape
+  the codebook DWORD's two mode bits select: variant A
+  (`CellVariant::Plain`, `IR32_32.DLL!0x1000670d`) stores the
+  dyad-pair DWORD directly to two adjacent rows (vertical doubling,
+  no saturation); variant B (`CellVariant::WithEdge`,
+  `0x10006780`) writes one row of the per-byte average of the
+  predictor and the dyad result with the `0x7f7f7f7f` 7-bit clamp;
+  variant C (`CellVariant::DoubledRow`, `0x1000684b`) writes that
+  average to two rows; variant D (`CellVariant::FullyDoubled`,
+  `0x100068f8`) writes the `and 0xfefefefe; shr 1` per-byte halve to
+  two rows. Results are returned as a `VariantEmission { outcome,
+  rows }` where `rows` (a fixed-capacity `RowEmission`) lists the
+  output DWORD(s) to store at successive `0xb0`-stride row offsets;
+  a `DyadOutcome::Fault` emits zero rows. `average_7bit(a, b)`
+  (the `(a & b) + (((a ^ b) >> 1) & 0x7f7f7f7f)` SWAR average) and
+  `halve_fefefefe(value)` (`(value & 0xfefefefe) >> 1`) expose the
+  two per-byte arithmetic primitives, alongside the `CLAMP_7BIT_MASK`
+  (`0x7f7f7f7f`) and `HALVE_CARRY_MASK` (`0xfefefefe`) constants.
+  10 new unit tests cover the two masks, the per-byte floor average
+  (no inter-byte carry bleed) + its bit-7 clamp, the per-byte halve
+  (no cross-byte bleed), each variant's row shape (plain two-row,
+  with-edge one-row, doubled-row two-row, fully-doubled two-row),
+  the fault → zero-rows path across all four variants, and the
+  continuation-outcome propagation. Per the spec/07 boundary this
+  round lands the per-position variant store shape only — not the
+  outer per-cell row/column loop (the `cl` / `ch` counter walk,
+  spec/04 §3.3), the strip-buffer assembly, the 7→8-bit upshift, or
+  the YUV→RGB / IF09 conversion (§5), and not motion compensation
+  (`spec/05`). Spec source:
+  `docs/video/indeo/indeo3/spec/07-output-reconstruction.md`.
+
 ## [0.0.1](https://github.com/OxideAV/oxideav-indeo/releases/tag/v0.0.1) - 2026-05-24
 
 ### Other
