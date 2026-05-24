@@ -5,6 +5,29 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 6 — Indeo 3 (IV31 / IV32) output-reconstruction kernel.**
+Round 6 adds the `indeo3::reconstruct` module (`spec/07` §1 + §2 +
+§4), the per-position pixel-emission arithmetic that round 5's
+entropy module deferred. [`apply_dyad_pair`] reproduces the
+inner-loop body at `IR32_32.DLL!0x10006e0f..0x10006e2e`: the
+softSIMD `predictor + primary_delta` DWORD add, the `jns` high-half
+overflow test, the `xor eax, 0x80008000` back-out plus the 16-bit
+`add ax, [secondary]` continuation fall-back, and the `js` fault to
+error code 2 when the secondary add is still sign-set — surfaced as
+[`DyadOutcome`] (`Primary` / `Continuation` / `Fault`).
+[`predictor_offset`] computes the `[edi - 0xb0]` row-above predictor
+address (stride [`PREDICTOR_ROW_STRIDE`] = 176), with the
+top-of-strip seed pinned to the constant [`TOP_OF_STRIP_PREDICTOR`]
+(`0x00`, §1.3). [`SoftSimdSum`] records both 16-bit halves'
+bit-15 overflow sentinels; [`pack_predictor`] / [`unpack_pixels`]
+move four pixels in and out of the little-endian softSIMD DWORD.
+The 7-bit-per-byte range ([`PIXEL_VALUE_MAX`]) and the reserved
+edge-marker bit ([`EDGE_MARKER_BIT`]) are surfaced as constants.
+Per the spec/07 boundary, round 6 lands the per-position arithmetic
+kernel only — not the per-cell-variant inner loops (A–D, §2.2), the
+strip-buffer assembly, the 7→8-bit upshift, or the YUV→RGB / IF09
+conversion (§5), and not motion compensation (`spec/05`).
+
 **Round 5 — Indeo 3 (IV31 / IV32) byte-level entropy.**
 Round 1 landed the 64-byte combined header parser
 ([`FrameHeader::parse`], `spec/01`). Round 2 added
@@ -185,7 +208,15 @@ if header.bitstream.is_null_frame() {
 | spec/06 §4.3 per-position acceptance matrix | yes (`RleEscape::accepted_at`) |
 | spec/06 §4.4 `0xFB` counter-byte category table | yes (`fb_category_table`, `FbCounter`) |
 | spec/06 §3 dyad-pair address (`+0x400` / `+0x402`) | yes (`DyadAddress`) |
-| spec/06 §5 / §7 pixel emission (dyad → pixel) | deferred (spec/07) |
+| spec/07 §0 / §1.1 predictor address (`[edi - 0xb0]`) | yes (`predictor_offset`) |
+| spec/07 §1.3 / §9 top-of-strip predictor seed (`0x00`) | yes (`TOP_OF_STRIP_PREDICTOR`) |
+| spec/07 §2.1 softSIMD `predictor + delta` DWORD add | yes (`apply_dyad_pair`) |
+| spec/07 §2.3 continuation / secondary-table fall-back | yes (`DyadOutcome`) |
+| spec/07 §2.3 fault on still-sign-set secondary add | yes (`DyadOutcome::Fault`) |
+| spec/07 §4.1 / §4.2 7-bit-per-byte range + overflow sentinel | yes (`SoftSimdSum`) |
+| spec/07 §2.2 four cell-shape variant inner loops (A–D) | deferred (per-cell loops) |
+| spec/07 §3 static dyad delta-table values | covered by spec/04 `DyadDeltaTable` |
+| spec/07 §4.3 / §5 7→8-bit upshift + YUV→RGB / IF09 | deferred (output-buffer write) |
 
 "Surfaced" means the field is exposed verbatim on the typed
 struct; the reference decoder does not validate the value, so we
@@ -252,6 +283,24 @@ chapters that aren't yet in `docs/`.
 * Entropy constants: `LITERAL_MODE_MAX`, `RLE_ESCAPE_MIN`,
   `ARENA_BAND_STRIDE`, `PRIMARY_TABLE_DISP`, `SECONDARY_TABLE_DISP`,
   `CONTINUATION_XOR`, `VARIANT_A_ENTRY`..`VARIANT_D_ENTRY`.
+* `oxideav_indeo::indeo3::apply_dyad_pair(predictor, primary_delta,
+  secondary_word) -> DyadOutcome` — the spec/07 §2.1 / §2.3 softSIMD
+  `predictor + delta` add with the continuation / secondary-table
+  fall-back and the §4.1 fault path. `DyadOutcome`
+  (`Primary { pixels }` / `Continuation { pixels }` / `Fault`).
+* `predictor_offset(write_index) -> Option<usize>` — the §1.1
+  `[edi - 0xb0]` row-above predictor address (`None` for top-row
+  writes whose seed is the constant `TOP_OF_STRIP_PREDICTOR`).
+* `SoftSimdSum::add(predictor, primary_delta)` (`.raw`,
+  `.low_half_overflow`, `.high_half_overflow`, `.any_half_overflow()`)
+  — the §2.3 / §4.1 per-half bit-15 overflow sentinel record.
+* `jns_taken(u32)` — the §2.1 literal `jns` high-half test (the
+  inverse of `continuation_needed`).
+* `pack_predictor([u8; 4]) -> u32` / `unpack_pixels(u32) -> [u8; 4]`
+  — the §0 / §2.4 little-endian softSIMD pixel-DWORD packing.
+* Reconstruction constants: `PREDICTOR_ROW_STRIDE` (0xb0),
+  `TOP_OF_STRIP_PREDICTOR` (0x00), `PIXEL_VALUE_MAX` (0x7f),
+  `EDGE_MARKER_BIT` (0x80), `HALF_SENTINEL_MASK` (0x8000_8000).
 * VQ constants: `DYAD_TABLE_LEN`, `DYAD_BANK_COUNT`,
   `DYAD_BANK_STRIDE`, `DYAD_BANK15_VALID_ROWS`, `ARENA_LEN`,
   `ARENA_BANDS_OFFSET`, `ARENA_BAND_COUNT`, `ARENA_BAND_LEN`,

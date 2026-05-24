@@ -17,7 +17,12 @@
 //! ([`continuation_needed`]), the eight RLE escapes ([`RleEscape`])
 //! with their per-position acceptance matrix
 //! ([`RleEscape::accepted_at`]), and the `0xFB` counter-byte category
-//! table ([`fb_category_table`]).
+//! table ([`fb_category_table`]). Round 6 adds the output-
+//! reconstruction kernel (`spec/07` §1 + §2 + §4): the predictor
+//! address ([`predictor_offset`]) and the softSIMD dyad-pair
+//! `predictor + delta` add ([`apply_dyad_pair`]) with its
+//! continuation / secondary-table fall-back and 7-bit-per-byte
+//! overflow detection.
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
@@ -28,6 +33,7 @@ mod entropy;
 mod header;
 mod macroblock;
 mod picture_layer;
+mod reconstruct;
 mod vq;
 
 pub use entropy::{
@@ -50,6 +56,11 @@ pub use picture_layer::{
     MotionVector, PictureLayer, PictureLayerError, PlanePrelude, PlanePresence,
     MC_VECTOR_ENTRY_LEN, MIN_PRELUDE_LEN, NUM_VECTORS_FIELD_LEN, PLANE_COUNT, PLANE_IDX_U,
     PLANE_IDX_V, PLANE_IDX_Y,
+};
+pub use reconstruct::{
+    apply_dyad_pair, jns_taken, pack_predictor, predictor_offset, unpack_pixels, DyadOutcome,
+    SoftSimdSum, EDGE_MARKER_BIT, HALF_SENTINEL_MASK, PIXEL_VALUE_MAX, PREDICTOR_ROW_STRIDE,
+    TOP_OF_STRIP_PREDICTOR,
 };
 pub use vq::{
     seed_dispatch_entries, CellVariant, CodebookEntry, DyadDeltaTable, SeedEntry, VqArena, VqError,

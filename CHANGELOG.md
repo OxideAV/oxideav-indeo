@@ -8,6 +8,43 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) output-reconstruction kernel (`spec/07`
+  §1 + §2 + §4). New `indeo3::reconstruct` module landing the
+  per-position pixel-emission arithmetic that round 5's entropy
+  module deferred. `apply_dyad_pair(predictor, primary_delta,
+  secondary_word)` reproduces the inner-loop body at
+  `IR32_32.DLL!0x10006e0f..0x10006e2e`: the softSIMD
+  `predictor + primary_delta` DWORD add, the `jns` high-half
+  overflow test, the `xor eax, 0x80008000` back-out followed by the
+  16-bit `add ax, [secondary]` continuation fall-back, and the `js`
+  fault to error code 2 when the secondary add is still sign-set —
+  returned as a `DyadOutcome` (`Primary { pixels }` /
+  `Continuation { pixels }` / `Fault`). `predictor_offset` computes
+  the §1.1 `[edi - 0xb0]` row-above predictor byte index
+  (`PREDICTOR_ROW_STRIDE` = 0xb0 = 176), returning `None` for
+  top-of-strip writes whose seed is the constant
+  `TOP_OF_STRIP_PREDICTOR` (`0x00`, §1.3 / §9). `SoftSimdSum::add`
+  records both 16-bit halves' bit-15 overflow sentinels
+  (`low_half_overflow` / `high_half_overflow` / `any_half_overflow`),
+  and `jns_taken` exposes the literal §2.1 high-half branch (the
+  inverse of spec/06's `continuation_needed`). `pack_predictor` /
+  `unpack_pixels` move four pixels in and out of the little-endian
+  softSIMD pixel DWORD (§0 / §2.4). The §4.2 7-bit-per-byte range
+  (`PIXEL_VALUE_MAX` = 0x7f) and the reserved edge-marker bit
+  (`EDGE_MARKER_BIT` = 0x80) are surfaced as constants. 11 new unit
+  tests cover the predictor stride / seed constants, the row-above
+  offset (including top-row `None`), the per-half sentinel record,
+  the `jns` ↔ `continuation_needed` inverse, the primary path
+  (in-range, secondary word ignored), the continuation path
+  (back-out + secondary add, high-half preserved), the fault path,
+  the pixel-DWORD pack/unpack round-trip, and a realistic in-range
+  dyad-pair. Per the spec/07 boundary this round lands the
+  per-position arithmetic kernel only — not the four cell-shape
+  variant inner loops (A–D, §2.2), the strip-buffer assembly, the
+  7→8-bit upshift, or the YUV→RGB / IF09 conversion (§5), and not
+  motion compensation (`spec/05`). Spec source:
+  `docs/video/indeo/indeo3/spec/07-output-reconstruction.md`.
+
 - Indeo 3 (IV31 / IV32) byte-level entropy (`spec/06`). New
   `indeo3::entropy` module turning the per-cell mode-byte stream
   into classified, typed structures — the fourth and last of the
