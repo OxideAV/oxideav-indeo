@@ -6,6 +6,19 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.1](https://github.com/OxideAV/oxideav-indeo/releases/tag/v0.0.1) - 2026-05-24
+
+### Other
+
+- spec/07 output-reconstruction kernel (predictor + softSIMD dyad add)
+- round 5 — byte-level entropy (spec/06)
+- round 4 — VQ codebook materialisation (spec/04)
+- CHANGELOG — correct round-3 test count to 15
+- round 3 — macroblock-layer binary-tree walk (spec/03)
+- round 2 — picture-layer plane-prelude parser
+- round 1 — frame-header + bitstream-header parser
+- Round 0 — clean-room rebuild scaffold (orphan master)
+
 ### Added
 
 - Indeo 3 (IV31 / IV32) output-reconstruction kernel (`spec/07`
