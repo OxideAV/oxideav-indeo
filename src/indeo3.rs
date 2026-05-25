@@ -27,7 +27,14 @@
 //! variant A's direct two-row store, variant B's `0x7f7f7f7f`-clamped
 //! per-byte average ([`average_7bit`]), variant C's doubled-row
 //! average, and variant D's `and 0xfefefefe; shr 1` halve
-//! ([`halve_fefefefe`]).
+//! ([`halve_fefefefe`]). Round 8 adds the spec/02 §4–§7
+//! picture-decomposition state ([`strip_slot_index`],
+//! [`StripSlotDescriptor`], [`StripGeometry`], [`PerPlaneDecodeCall`],
+//! [`PlaneDecodeStatus`], [`luma_strip_slot_count`],
+//! [`chroma_strip_slot_count`], [`chroma_plane_height`]) — the
+//! strip-context array layout (§5), the per-plane decode-call
+//! signature (§6), the codec-init strip-count arithmetic (§7), and
+//! the §4.1 / §4.2 strip-geometry formulae.
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
@@ -39,6 +46,7 @@ mod header;
 mod macroblock;
 mod picture_layer;
 mod reconstruct;
+mod strip_context;
 mod vq;
 
 pub use entropy::{
@@ -67,6 +75,16 @@ pub use reconstruct::{
     predictor_offset, unpack_pixels, DyadOutcome, RowEmission, SoftSimdSum, VariantEmission,
     CLAMP_7BIT_MASK, EDGE_MARKER_BIT, HALF_SENTINEL_MASK, HALVE_CARRY_MASK, PIXEL_VALUE_MAX,
     PREDICTOR_ROW_STRIDE, TOP_OF_STRIP_PREDICTOR,
+};
+pub use strip_context::{
+    chroma_plane_height, chroma_strip_slot_count, luma_strip_slot_count, slot_field,
+    strip_slot_index, PerPlaneDecodeCall, PlaneDecodeStatus, PlaneRole, StripGeometry,
+    StripSlotDescriptor, DISPATCHABLE_SLOT_COUNT, INSTANCE_CHROMA_CODEBOOK_BANK,
+    INSTANCE_LUMA_CODEBOOK_BANK, INSTANCE_SECONDARY_CODEBOOK_PTR, INSTANCE_STATE_LEN,
+    INSTANCE_STRIP_ARRAY_VIEW_PTR, PIXEL_BUFFER_ARENA_LEN, PLANE_DECODE_STATUS_MALFORMED,
+    PLANE_DECODE_STATUS_OK, PRIMARY_BANK_SLOTS, SECONDARY_BANK_SLOTS,
+    STRIP_ARRAY_OFFSET_IN_INSTANCE, STRIP_SLOT_BASE_PTR_COUNT, STRIP_SLOT_COUNT,
+    STRIP_SLOT_SENTINEL, STRIP_SLOT_STRIDE,
 };
 pub use vq::{
     seed_dispatch_entries, CellVariant, CodebookEntry, DyadDeltaTable, SeedEntry, VqArena, VqError,

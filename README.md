@@ -5,6 +5,39 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 8 — Indeo 3 (IV31 / IV32) strip-context array + per-plane
+decode-call signature.**
+Round 8 adds the `indeo3::strip_context` module (`spec/02` §4–§7),
+the per-codec-frame picture-decomposition state that sits between
+the round-2 prelude consumer and the round-3 binary-tree walker.
+[`StripGeometry::for_luma`] / `::for_chroma` resolve a plane's
+strip count + per-strip widths from `(plane_width, plane_height)`
+using the `ceil(W / strip_width)` and `((W-1) mod strip_width) + 1`
+formulae the parser at `IR32_32.DLL!0x10003d6b` / `0x10003f53`
+implements; [`strip_slot_index`] + [`StripSlotDescriptor`] surface
+the §5.1 dispatchable-slot indexing (primary bank slots 3..5,
+secondary bank slots 0..2, plane-role classification slots 0/3 =
+luma, slots 1/2/4/5 = chroma); [`PerPlaneDecodeCall::for_plane`]
+encodes the §6 seven-argument cdecl frame the picture-layer parser
+hands the per-plane decoder (`IR32_32.DLL!0x10006538`) with the
+codebook-bank discriminant resolved (`+0x1a00` for luma at
+`IR32_32.DLL!0x100045a3`, `+0x400` for chroma at
+`0x1000458d`); [`PlaneDecodeStatus`] classifies the `eax` status
+code (`0` → `Ok`, `3` → `Malformed`, any other non-zero →
+`Malformed`); the codec-init §7 strip-count helpers
+[`luma_strip_slot_count`] / [`chroma_strip_slot_count`] (1 + 4 slot
+patterns) + [`chroma_plane_height`] (luma_height / 4, `& -4`-aligned)
+record the per-`ICDecompressBegin` arithmetic the future codec-init
+code will consume. The per-slot field layout (`+0x00..+0x14` base
+ptrs, `+0x18` strip height, `+0x1c` strip width, `+0x20..+0x3f`
+strip scratch, `+0x40+` per-cell sub-array) is surfaced as the
+[`slot_field`] constants module. Per the spec/02 §10 boundary,
+round 8 lands the structural surface only — not the byte buffer of
+the strip-context array, not the binary-tree walker's writes into
+the sub-array (spec/03's subject), not the motion-compensation
+reads from the pixel buffer (spec/05), and not the §5.2 sub-array
+field semantics beyond `+0x1c`.
+
 **Round 7 — Indeo 3 (IV31 / IV32) cell-shape variant inner loops.**
 Round 7 lands the four cell-shape variant emission kernels
 (`spec/07` §2.2 / `spec/04` §2.2) that round 6's per-position
@@ -205,8 +238,19 @@ if header.bitstream.is_null_frame() {
 | spec/02 §3.3 packed-MV formula            | helper   |
 | spec/02 §3.4 prelude size + bitstream_offset | yes   |
 | spec/02 §4 plane → strip → cell → block   | tree-level (geometry) |
-| spec/02 §5 strip-context array            | deferred |
-| spec/02 §6 per-plane decode call          | deferred |
+| spec/02 §4.1 strip-width thresholds (160 / 40) | yes (`LUMA_STRIP_WIDTH` / `CHROMA_STRIP_WIDTH`) |
+| spec/02 §4.1 remainder strip width formula | yes (`StripGeometry::last_strip_width`) |
+| spec/02 §4.2 strip-count formulae (informative) | yes (`StripGeometry`) |
+| spec/02 §4.4 strip height = plane height  | yes (`StripSlotDescriptor::strip_height`) |
+| spec/02 §5 strip-context array layout     | yes (`STRIP_SLOT_STRIDE`, `STRIP_SLOT_COUNT`, `STRIP_ARRAY_OFFSET_IN_INSTANCE`, `STRIP_SLOT_SENTINEL`) |
+| spec/02 §5.1 slot-index discipline (2 banks × 3 planes) | yes (`strip_slot_index`, `PRIMARY_BANK_SLOTS`, `SECONDARY_BANK_SLOTS`, `PlaneRole`) |
+| spec/02 §5.2 per-slot field offsets (`+0x00..+0x1c`) | yes (`slot_field`) |
+| spec/02 §5.2 per-slot sub-array semantics (`+0x40+`) | deferred (spec/03) |
+| spec/02 §6 per-plane decode-call signature (7 args) | yes (`PerPlaneDecodeCall`) |
+| spec/02 §6 codebook-bank discriminant (luma → +0x1a00, chroma → +0x400) | yes |
+| spec/02 §6 plane-decode status (`eax` 0 / 3) | yes (`PlaneDecodeStatus`) |
+| spec/02 §7 codec-init strip-count arithmetic | yes (`luma_strip_slot_count`, `chroma_strip_slot_count`, `chroma_plane_height`) |
+| spec/02 §7 instance-state + arena sizes (`0x3010` / `0x8020`) | yes (`INSTANCE_STATE_LEN`, `PIXEL_BUFFER_ARENA_LEN`) |
 | spec/03 §2.1 MSB-first sentinel bit reader | yes     |
 | spec/03 §2.2 four 2-bit node codes        | yes      |
 | spec/03 §3 MC_TREE walk + halving (§3.1/3.2) | yes   |
@@ -344,6 +388,41 @@ chapters that aren't yet in `docs/`.
   `ARENA_BANDS_OFFSET`, `ARENA_BAND_COUNT`, `ARENA_BAND_LEN`,
   `ARENA_HALF_LEN`, `PRIMARY_STRIDE`, `SECONDARY_STRIDE`,
   `SEED_TABLE_LEN`, `SEED_PAIR_COUNT`.
+* `oxideav_indeo::indeo3::strip_slot_index(plane_idx,
+  buffer_selector) -> Option<usize>` — spec/02 §5.1 dispatchable
+  slot lookup; `oxideav_indeo::indeo3::StripSlotDescriptor` (`::
+  for_dispatch`, `::strip_width_field_offset`,
+  `::strip_height_field_offset`) typed slot view.
+  `PlaneRole` (`Luma` / `Chroma` / `Scratch`, `::for_slot`,
+  `::is_luma`, `::is_chroma`).
+* `oxideav_indeo::indeo3::StripGeometry` (`::for_luma`,
+  `::for_chroma`, `::is_aligned`, `::iter_strip_widths`) — spec/02
+  §4.1 / §4.2 per-plane strip count + per-strip widths.
+* `oxideav_indeo::indeo3::PerPlaneDecodeCall::for_plane(plane_idx,
+  flags, bitstream_payload_offset) -> Option<PerPlaneDecodeCall>`
+  — spec/02 §6 seven-argument typed cdecl view (luma / chroma
+  codebook-bank discriminant + `frame_flags` bit 9 buffer
+  selector). `::plane_role()`.
+* `oxideav_indeo::indeo3::PlaneDecodeStatus` (`::from_eax`,
+  `::is_ok`) — spec/02 §6 per-plane decoder `eax` classification.
+* `oxideav_indeo::indeo3::luma_strip_slot_count(plane_width) ->
+  u32` / `chroma_strip_slot_count(luma_width) -> u32` /
+  `chroma_plane_height(luma_height) -> u32` — spec/02 §7
+  codec-init arithmetic.
+* Strip-context constants: `STRIP_SLOT_STRIDE` (0x400),
+  `STRIP_SLOT_COUNT` (32), `DISPATCHABLE_SLOT_COUNT` (6),
+  `STRIP_SLOT_SENTINEL` (0x1869f), `STRIP_ARRAY_OFFSET_IN_INSTANCE`
+  (0x414), `INSTANCE_STATE_LEN` (0x3010), `PIXEL_BUFFER_ARENA_LEN`
+  (0x8020), `INSTANCE_STRIP_ARRAY_VIEW_PTR` (0x300c),
+  `INSTANCE_SECONDARY_CODEBOOK_PTR` (0x3004),
+  `INSTANCE_LUMA_CODEBOOK_BANK` (0x1a00),
+  `INSTANCE_CHROMA_CODEBOOK_BANK` (0x400),
+  `STRIP_SLOT_BASE_PTR_COUNT` (6), `PRIMARY_BANK_SLOTS`,
+  `SECONDARY_BANK_SLOTS`, `PLANE_DECODE_STATUS_OK`,
+  `PLANE_DECODE_STATUS_MALFORMED`. Per-slot field offsets exposed
+  as the `slot_field` constants submodule (`BASE_PTR_0..5`,
+  `STRIP_HEIGHT`, `STRIP_WIDTH`, `STRIP_SCRATCH_BEGIN..END`,
+  `CELL_SUBARRAY_BEGIN`).
 * Constants: `MAGIC_FRMH`, `REQUIRED_DEC_VERSION`,
   `FRAME_HEADER_LEN`, `BITSTREAM_HEADER_LEN`, `COMBINED_HEADER_LEN`,
   `FLAG_YVU9_8BIT`, `NULL_FRAME_DATA_SIZE_BITS`, `MIN_DIMENSION`,

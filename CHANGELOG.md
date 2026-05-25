@@ -8,6 +8,64 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) strip-context array + per-plane decode-call
+  signature (`spec/02` §4–§7). New `indeo3::strip_context` module
+  landing the per-codec-frame picture-decomposition state that sits
+  between the round-2 prelude consumer and the round-3 binary-tree
+  walker. `StripGeometry::for_luma(plane_width, plane_height)` /
+  `::for_chroma` resolve a plane's strip count + per-strip widths from
+  `(plane_width, plane_height)` using the `ceil(W / strip_width)` and
+  `((W-1) mod strip_width) + 1` formulae the parser at
+  `IR32_32.DLL!0x10003d6b` / `0x10003f53` implements;
+  `strip_slot_index(plane_idx, buffer_selector)` + `StripSlotDescriptor`
+  surface the §5.1 dispatchable-slot indexing (primary bank slots 3..5,
+  secondary bank slots 0..2, plane-role classification slots 0/3 =
+  luma, slots 1/2/4/5 = chroma); `PerPlaneDecodeCall::for_plane(
+  plane_idx, flags, bitstream_payload_offset)` encodes the §6
+  seven-argument cdecl frame the picture-layer parser hands the
+  per-plane decoder (`IR32_32.DLL!0x10006538`) with the codebook-bank
+  discriminant resolved (`+0x1a00` for luma at
+  `IR32_32.DLL!0x100045a3..0x100045a9`, `+0x400` for chroma at
+  `0x1000458d..0x10004593`); `PlaneDecodeStatus::from_eax` classifies
+  the integer status code (`0` → `Ok`, `3` → `Malformed`, any other
+  non-zero → `Malformed`); the codec-init §7 strip-count helpers
+  `luma_strip_slot_count` (= `ceil(width / 160)`) /
+  `chroma_strip_slot_count` (= `ceil(luma_width / 16)`) +
+  `chroma_plane_height` (= `(luma_height / 4) & -4`) record the
+  per-`ICDecompressBegin` arithmetic the future codec-init code will
+  consume. The per-slot field layout (`+0x00..+0x14` six base pointers,
+  `+0x18` strip height, `+0x1c` strip width, `+0x20..+0x3f` strip
+  scratch, `+0x40+` per-cell sub-array) is surfaced as the
+  `slot_field` constants submodule. Strip-context array constants
+  (`STRIP_SLOT_STRIDE` = 0x400, `STRIP_SLOT_COUNT` = 32,
+  `DISPATCHABLE_SLOT_COUNT` = 6, `STRIP_SLOT_SENTINEL` = 0x1869f,
+  `STRIP_ARRAY_OFFSET_IN_INSTANCE` = 0x414, `INSTANCE_STATE_LEN` =
+  0x3010, `PIXEL_BUFFER_ARENA_LEN` = 0x8020,
+  `INSTANCE_STRIP_ARRAY_VIEW_PTR` = 0x300c,
+  `INSTANCE_SECONDARY_CODEBOOK_PTR` = 0x3004,
+  `INSTANCE_LUMA_CODEBOOK_BANK` = 0x1a00,
+  `INSTANCE_CHROMA_CODEBOOK_BANK` = 0x400) and the primary /
+  secondary slot-bank lookup tables (`PRIMARY_BANK_SLOTS` = [3, 4, 5],
+  `SECONDARY_BANK_SLOTS` = [0, 1, 2]) are surfaced as constants. 25
+  new unit tests cover the slot-index discipline (both banks; out-of-
+  range rejection), plane-role classification (all six dispatchable
+  slots + scratch range), slot descriptor offsets, the slot-field
+  offset table, the strip-geometry aligned + remainder formulae per
+  the §4.2 informative table (W ≤ 160 / 161..320 / 321..480 /
+  481..640) for both luma and chroma plane widths, the strip-widths
+  iterator, the per-plane-decode-call argument frame for luma /
+  chroma × primary / secondary (4 combinations) with the
+  codebook-bank discriminant + the §10 item 3 src == dst invariant,
+  the `eax` status classification, the codec-init strip-count
+  arithmetic, and the parser-formula helpers (ceil-div + last-strip-
+  width). Per the spec/02 §10 boundary this round lands the
+  structural surface only — not the byte buffer of the strip-context
+  array, not the binary-tree walker's writes into the sub-array
+  (spec/03's subject), not the motion-compensation reads from the
+  pixel buffer (spec/05), and not the §5.2 sub-array field semantics
+  beyond `+0x1c`. Spec source:
+  `docs/video/indeo/indeo3/spec/02-picture-layer.md`.
+
 - Indeo 3 (IV31 / IV32) four cell-shape variant inner-loop emission
   kernels (`spec/07` §2.2 / `spec/04` §2.2). `emit_variant(variant,
   predictor, primary_delta, secondary_word)` runs the shared
