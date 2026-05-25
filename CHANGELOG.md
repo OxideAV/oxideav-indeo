@@ -8,6 +8,75 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) outer per-cell row/column loop preamble
+  (`spec/04` §3.3). New `indeo3::cell_loop` module bridging round 7's
+  `emit_variant` per-position kernel to round 8's strip-context slot
+  geometry, encoding the binary's `IR32_32.DLL!0x1000665e..0x10006670`
+  four-step sequence as a structured outcome.
+  `dispatch_cell_preamble(bank, cell_stack_top, cl_in, ecx_in)` runs
+  the preamble in one call: picks the `CodebookBankView`
+  (`from_cell_stack_top` → `Primary` for any non-zero stack top, the
+  `+0xb00` `Mirror` view for the intra-context-without-stack first
+  cell of a strip's MC_TREE walk per §3.3 step 1, the
+  `cmp [esi + 4*eax + 0x40], 0` fork at `0x1000665e`), loads the
+  cell-position offset DWORD from `bank[+0x300 + 4*cl]`
+  (`CELL_DATA_TABLE`), runs the `cmp esi, 0xf423f` (= `999_999`,
+  `CELL_POSITION_MAX`) sanity check (any `>=` → `CellPositionFault`
+  matching the `0x10006b97` malformed-bitstream fault), reads the new
+  `cl` row counter from `bank[+0x000 + cl]` (`CL_ROW_COUNTER_LUT`),
+  and clears the intra-context flag (`INTRA_CONTEXT_CLEAR_MASK` =
+  `0xbfffffff`, the complement of `INTRA_CONTEXT_FLAG` = bit 30) so
+  the returned `CellLoopState` (with `cl_inner`,
+  `cell_position_offset`, `bank_view`, and `ecx_post_clear`) is the
+  exact handoff the §3.4 VQ_DATA / VQ_NULL fork
+  (`test ecx, 0x800000`, exposed as `CellLoopState::vq_data_flag`)
+  consults. `advance_row(cl_before, edi_before, cell_column_step)`
+  steps the row counter and the `edi` write cursor exactly as the
+  variant kernels' `dec cl` / `[esp+0x20]` advance does, returning a
+  `CellRowAdvance` whose `end_of_column` flag fires on the
+  `cl_after == 0` transition; `iterate_column_rows(cl_inner,
+  edi_start, cell_column_step)` materialises the full per-column
+  `(cl, edi)` walk an inner variant kernel call sequence visits.
+  Bank-layout constants (`CELL_BANK_LEN` = `0x1300` = 4.75 KB total,
+  `CL_ROW_COUNTER_LUT` = `0x000`, `CH_CONTROL_LUT` = `0x100`,
+  `SLOT_INDEX_LUT` = `0x200`, `CELL_DATA_TABLE` = `0x300`,
+  `CELL_POSITION_TABLE` = `0x700`, `MIRROR_TABLE_OFFSET` = `0xb00`)
+  surface the §1.1 sub-table table for direct caller access, and the
+  bank's primary-sub-table sizes (3 × 256 byte LUTs + 2 × 1 KiB DWORD
+  tables = `0xb00`) are cross-checked against `MIRROR_TABLE_OFFSET`
+  at compile time. Lower-level lookup primitives
+  `read_cl_row_counter(bank, cl)` and
+  `read_cell_position_dword(bank, cl)` are surfaced for callers that
+  want bank reads without the full preamble. 19 new unit tests cover
+  the bank-layout constants vs the §1.1 table, the sanity-check
+  constants (`0xf423f` and the `INTRA_CONTEXT_FLAG` complement), the
+  `CodebookBankView::from_cell_stack_top` zero-vs-non-zero fork
+  (including `0x1869f` the strip-slot sentinel and `u32::MAX`), the
+  `read_cl_row_counter` byte-table lookup with short-slice rejection,
+  the `read_cell_position_dword` little-endian DWORD load,
+  `dispatch_cell_preamble`'s mirror-vs-primary view selection, the
+  intra-context-flag clear (bit 30 cleared, bit 31 and bits 0..29
+  preserved), the `0xf423f` cell-position-offset boundary (`>=` is
+  fault, `==` is fault, `-1` passes), the `vq_data_flag` bit-31 read,
+  `advance_row`'s mid-column row-stride step vs end-of-column
+  column-step transition (the variant-dependent `[esp+0x20]` value),
+  the zero-counter caller-bug rejection, `iterate_column_rows` for
+  4-row and 8-row cell columns (the §2.2 4×4 / 8×8 cell sizes) plus
+  single-row and empty-column degenerates, and a round-trip from
+  `dispatch_cell_preamble`'s state through `iterate_column_rows` to
+  the per-row `(cl, edi)` sequence the inner variant kernel would
+  call against. Per the §3.3 boundary, this round lands the
+  preamble's structural surface only — not the per-byte unpacker
+  dispatch at `0x10006bac` (the high-nibble jump table is
+  `spec/06`'s subject), not the inner column-advance per-row store
+  (`spec/07` §2.2's variant shapes were round 7), not the strip
+  pixel-buffer allocation (the strip-context array's byte buffer is
+  still future work per `spec/02` §10), and not the static
+  cell-geometry-bank entry values (Extractor territory per
+  `spec/04` §7.1). Spec source:
+  `docs/video/indeo/indeo3/spec/04-vq-codebooks.md` §3.3 (with the
+  fault disposition cross-referenced to `spec/05` §5).
+
 - Indeo 3 (IV31 / IV32) strip-context array + per-plane decode-call
   signature (`spec/02` §4–§7). New `indeo3::strip_context` module
   landing the per-codec-frame picture-decomposition state that sits

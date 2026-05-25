@@ -5,6 +5,30 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 9 — Indeo 3 (IV31 / IV32) outer per-cell row/column loop
+preamble (`spec/04` §3.3).**
+Round 9 adds the `indeo3::cell_loop` module, bridging round 7's
+per-position `emit_variant` kernel to round 8's strip-context slot
+geometry. [`dispatch_cell_preamble`] reproduces the binary's
+`IR32_32.DLL!0x1000665e..0x10006670` four-step sequence: pick the
+[`CodebookBankView`] (primary vs `+0xb00` mirror) from the cell-stack
+top, load the cell-position DWORD from `bank[+0x300 + 4*cl]` with the
+`0xf423f` ([`CELL_POSITION_MAX`]) sanity check, read the new `cl`
+row counter from `bank[+0x000 + cl]`, and clear the intra-context
+flag (`ecx &= 0xbfffffff`). The resulting [`CellLoopState`] carries
+the row counter, the cell-position offset, the bank-view choice, and
+the post-clear `ecx` for the §3.4 VQ_DATA / VQ_NULL fork
+([`CellLoopState::vq_data_flag`]). [`advance_row`] /
+[`iterate_column_rows`] step the row counter and the `edi` write
+cursor through a cell-column, matching the binary's `dec cl` /
+`[esp+0x20]` advance. Per the §3.3 boundary, round 9 lands the
+preamble's structural surface only — the per-byte unpacker dispatch
+at `0x10006bac` (the high-nibble jump table) is `spec/06`'s subject,
+the per-row store shapes are `spec/07` §2.2 (round 7), strip
+pixel-buffer allocation is still future work per `spec/02` §10, and
+the static cell-geometry-bank entry values are Extractor territory
+per `spec/04` §7.1.
+
 **Round 8 — Indeo 3 (IV31 / IV32) strip-context array + per-plane
 decode-call signature.**
 Round 8 adds the `indeo3::strip_context` module (`spec/02` §4–§7),

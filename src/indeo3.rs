@@ -34,13 +34,25 @@
 //! [`chroma_strip_slot_count`], [`chroma_plane_height`]) — the
 //! strip-context array layout (§5), the per-plane decode-call
 //! signature (§6), the codec-init strip-count arithmetic (§7), and
-//! the §4.1 / §4.2 strip-geometry formulae.
+//! the §4.1 / §4.2 strip-geometry formulae. Round 9 adds the
+//! outer per-cell row/column loop preamble (`spec/04` §3.3):
+//! [`dispatch_cell_preamble`] runs the four-step
+//! `IR32_32.DLL!0x1000665e..0x10006670` sequence — pick the
+//! [`CodebookBankView`] (primary vs `+0xb00` mirror) from the
+//! cell-stack top, load the cell-position DWORD with the `0xf423f`
+//! sanity check ([`CELL_POSITION_MAX`]), load the new `cl` row
+//! counter, and clear the intra-context flag — returning a
+//! [`CellLoopState`] that bridges round 4's [`CodebookEntry`] to
+//! round 7's [`emit_variant`]; [`advance_row`] /
+//! [`iterate_column_rows`] step the `(cl, edi)` walk across a
+//! cell's rows.
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
 //! `docs/video/indeo/indeo3/spec/`. Section references in
 //! doc-comments below cite the chapter named in each module.
 
+mod cell_loop;
 mod entropy;
 mod header;
 mod macroblock;
@@ -49,6 +61,13 @@ mod reconstruct;
 mod strip_context;
 mod vq;
 
+pub use cell_loop::{
+    advance_row, dispatch_cell_preamble, iterate_column_rows, read_cell_position_dword,
+    read_cl_row_counter, CellLoopPreamble, CellLoopState, CellRowAdvance, CodebookBankView,
+    CELL_BANK_LEN, CELL_DATA_TABLE, CELL_POSITION_MAX, CELL_POSITION_TABLE, CH_CONTROL_LUT,
+    CL_ROW_COUNTER_LUT, INTRA_CONTEXT_CLEAR_MASK, INTRA_CONTEXT_FLAG, MIRROR_TABLE_OFFSET,
+    SLOT_INDEX_LUT,
+};
 pub use entropy::{
     apply_continuation_xor, continuation_needed, fb_category, fb_category_table, variant_entry_rva,
     DyadAddress, FbCategory, FbCounter, HighNibbleAction, JumpTable, LiteralMode, ModeByte,
