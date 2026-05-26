@@ -5,6 +5,39 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 10 — Indeo 3 (IV31 / IV32) per-cell sub-array wiring
+(`spec/03` §5.1 / §5.3 / §5.5).**
+Round 10 adds the `indeo3::cell_subarray` module, the read-only
+indexing arithmetic for the cell-stack stored inside each strip-
+context slot at `[+0x40..]`. [`cell_stack_slot_offset`] /
+[`cell_stack_array_offset`] enforce the §5 bound
+([`CELL_STACK_MAX_ENTRIES`] = `(0x400 - 0x40) / 4 = 240`) and
+return the byte offset of entry `(slot_idx, entry_idx)` via the
+`slot_idx * 0x400 + 0x40 + 4 * entry_idx` formula the binary
+implements with `[ecx + 4*ebx + 0x40]`. [`CellStackReadSite`]
+enumerates the three §5.3 read sites within
+`IR32_32.DLL!0x10006538` (`SourceSlotTop` at `0x1000656c`,
+`DestSlotTop` at `0x10006ab5`, `CellPositionProbe` at
+`0x10006651`) with their two zero-disposition flags
+(`zero_means_strip_edge`, `zero_means_mirror_bank`).
+[`CellStackTopDispatch::from_dest_slot_top`] classifies the
+destination-slot stack-top DWORD into the §5.4 strip-edge fix-up
+branch (zero) or the §5.5 inter-cell fix-up branch (non-zero,
+carrying the cell-data pointer through). The §5.5 per-cell edge
+fix-up byte-offset constants — `[esi + 0x24]` read site
+([`PER_CELL_EDGE_PREV_BR_OFFSET`]), `[esi + 0x28]` write site
+([`PER_CELL_EDGE_PREV_BR_NEXT_OFFSET`]), row stride `0xb0`
+([`PER_CELL_EDGE_ROW_STRIDE`]), and per-iteration height step `4`
+([`PER_CELL_EDGE_HEIGHT_STEP`]) — are surfaced as constants for
+the future pixel-buffer-side loop. Per the §5 boundary, round 10
+lands the indexing surface only — not the cell-stack pre-frame
+population (§6 open question 4), not the per-cell edge fix-up
+byte loop itself (the pixel-buffer DWORD shuffles run by the
+allocated strip buffers, which are still future work per
+`spec/02` §10), and not the cell-stack entry-content semantics
+(the 4-byte cell-data pointer interpretation lives with the
+pre-population routine).
+
 **Round 9 — Indeo 3 (IV31 / IV32) outer per-cell row/column loop
 preamble (`spec/04` §3.3).**
 Round 9 adds the `indeo3::cell_loop` module, bridging round 7's

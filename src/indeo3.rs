@@ -45,7 +45,17 @@
 //! [`CellLoopState`] that bridges round 4's [`CodebookEntry`] to
 //! round 7's [`emit_variant`]; [`advance_row`] /
 //! [`iterate_column_rows`] step the `(cl, edi)` walk across a
-//! cell's rows.
+//! cell's rows. Round 10 adds the per-cell sub-array wiring
+//! (`spec/03` §5.1 / §5.3 / §5.5) — the cell-stack at
+//! `[strip_slot + 0x40+]`: [`cell_stack_slot_offset`] /
+//! [`cell_stack_array_offset`] enforce the §5 240-entry bound,
+//! [`CellStackReadSite`] enumerates the three §5.3 read sites
+//! within `IR32_32.DLL!0x10006538`, and [`CellStackTopDispatch`]
+//! classifies the destination-slot stack-top load into the §5.4
+//! strip-edge vs §5.5 inter-cell branch (with §5.5's
+//! [`PER_CELL_EDGE_PREV_BR_OFFSET`] / [`PER_CELL_EDGE_PREV_BR_NEXT_OFFSET`]
+//! / [`PER_CELL_EDGE_ROW_STRIDE`] / [`PER_CELL_EDGE_HEIGHT_STEP`]
+//! constants surfaced).
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
@@ -53,6 +63,7 @@
 //! doc-comments below cite the chapter named in each module.
 
 mod cell_loop;
+mod cell_subarray;
 mod entropy;
 mod header;
 mod macroblock;
@@ -67,6 +78,12 @@ pub use cell_loop::{
     CELL_BANK_LEN, CELL_DATA_TABLE, CELL_POSITION_MAX, CELL_POSITION_TABLE, CH_CONTROL_LUT,
     CL_ROW_COUNTER_LUT, INTRA_CONTEXT_CLEAR_MASK, INTRA_CONTEXT_FLAG, MIRROR_TABLE_OFFSET,
     SLOT_INDEX_LUT,
+};
+pub use cell_subarray::{
+    cell_stack_array_offset, cell_stack_slot_offset, CellStackReadSite, CellStackTopDispatch,
+    CELL_STACK_BEGIN_OFFSET, CELL_STACK_ENTRY_SIZE, CELL_STACK_MAX_ENTRIES,
+    PER_CELL_EDGE_HEIGHT_STEP, PER_CELL_EDGE_PREV_BR_NEXT_OFFSET, PER_CELL_EDGE_PREV_BR_OFFSET,
+    PER_CELL_EDGE_ROW_STRIDE,
 };
 pub use entropy::{
     apply_continuation_xor, continuation_needed, fb_category, fb_category_table, variant_entry_rva,

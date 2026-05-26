@@ -8,6 +8,46 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) per-cell sub-array wiring (`spec/03` §5.1 /
+  §5.3 / §5.5). New `indeo3::cell_subarray` module surfacing the
+  read-only indexing arithmetic for the cell-stack at each strip-
+  context slot's `[+0x40..]` byte range. `cell_stack_slot_offset` /
+  `cell_stack_array_offset` enforce the §5 derived bound
+  (`CELL_STACK_MAX_ENTRIES` = `(0x400 - 0x40) / 4 = 240`) and return
+  the byte offset of entry `(slot_idx, entry_idx)` via the
+  `slot_idx * STRIP_SLOT_STRIDE + 0x40 + 4 * entry_idx` formula that
+  the binary's `[ecx + 4*ebx + 0x40]` indexing implements.
+  `CellStackReadSite` enumerates the three §5.3 read sites within
+  `IR32_32.DLL!0x10006538` (`SourceSlotTop` at `0x1000656c`,
+  `DestSlotTop` at `0x10006ab5`, `CellPositionProbe` at
+  `0x10006651`) with `zero_means_strip_edge`,
+  `zero_means_mirror_bank`, and `uses_dest_slot_base` predicates
+  matching the binary's per-site `entry == 0` dispositions.
+  `CellStackTopDispatch::from_dest_slot_top` classifies the
+  destination-slot stack-top DWORD into the §5.4 `StripEdgeFixup`
+  branch (zero → strip-edge fix-up at `0x10006b4b..0x10006b80`) or
+  the §5.5 `InterCellFixup { cell_data_ptr }` branch (non-zero →
+  per-cell edge fix-up at `0x10006574..0x100065a3`, carrying the
+  cell-data pointer through). The §5.5 per-cell edge fix-up's
+  pixel-buffer-side byte-offset constants — `[esi + 0x24]` read site
+  (`PER_CELL_EDGE_PREV_BR_OFFSET`), `[esi + 0x28]` write site
+  (`PER_CELL_EDGE_PREV_BR_NEXT_OFFSET`), the row stride `0xb0`
+  (`PER_CELL_EDGE_ROW_STRIDE`), and the per-iteration `edx -= 4`
+  height step (`PER_CELL_EDGE_HEIGHT_STEP`) — are surfaced as
+  named constants. 21 new unit tests cover the entry-size /
+  begin-offset / max-entries constants (3), the §5.5 byte-offset
+  constants (3), the slot-relative and array-absolute offset
+  helpers' happy paths, bounds rejection, and within-stride
+  invariant (6), the three read-site predicates (3), and the
+  cell-stack-top dispatch's zero / non-zero / minimum-non-zero /
+  maximum-non-zero classification (4) and pointer accessor. Per the
+  §5 boundary, this round does not pre-populate cell-stack entries
+  (the pre-frame mechanism is `spec/03` §6 open question 4), does
+  not run the per-cell edge fix-up byte loop (the pixel-buffer
+  DWORD shuffles still need allocated strip buffers per `spec/02`
+  §10), and does not decode entry contents (the 4-byte cell-data
+  pointer interpretation lives with the pre-population routine).
+
 - Indeo 3 (IV31 / IV32) outer per-cell row/column loop preamble
   (`spec/04` §3.3). New `indeo3::cell_loop` module bridging round 7's
   `emit_variant` per-position kernel to round 8's strip-context slot
