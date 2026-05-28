@@ -5,6 +5,35 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 11 — Indeo 3 (IV31 / IV32) end-of-strip edge fix-up
+parameter surface (`spec/03` §5.4).**
+Round 11 adds the `indeo3::strip_edge` module, the parameter /
+iteration surface for the §5.4 strip-edge fix-up that runs after a
+strip's last cell has been emitted. The fix-up duplicates the
+rightmost column of pixels (`mov al, [edi-1]; mov [edi], al`,
+byte-by-byte) down the strip's full height; the per-row
+pointer-advance step is `0xb0`
+([`STRIP_EDGE_ROW_STRIDE`], shared with the §5.5 per-cell stride).
+[`StripEdgeFixupDims::for_slot`] reads the destination slot's
+`+0x18` strip-height and `+0x1c` strip-width fields and applies
+the per-plane-role disposition the binary's
+`IR32_32.DLL!0x10006b5e..0x10006b61` branch selects: luma slots
+0/3 preserve the fields verbatim, chroma slots 1/2/4/5 apply
+`sar 2` ([`STRIP_EDGE_CHROMA_SHIFT`] = 2, the 4:1 chroma
+subsampling ratio from `spec/02 §4.1`), scratch slots 6..31 yield
+`None` so callers can detect a non-dispatchable slot.
+[`StripEdgeRowIter`] walks the (chroma-adjusted) height, yielding
+one [`StripEdgeRow`] per row with `row_cursor_byte_offset` at the
+`0xb0`-stride row start and the `(-1, 0)` read/write byte-offset
+pair ([`STRIP_EDGE_BYTE_READ_OFFSET`] /
+[`STRIP_EDGE_BYTE_WRITE_OFFSET`]). Per the §5 chapter boundary,
+round 11 lands the parameter / iteration surface only — not the
+pixel-buffer byte copy itself (the one-line `dest[i] = src[i - 1]`
+lives in any caller's pixel-buffer view), not the `+0x18` / `+0x1c`
+field byte-loads from the strip-context slot (callers pass the
+values already-loaded), and not the pre-frame pixel-buffer
+allocation (`spec/02` §10).
+
 **Round 10 — Indeo 3 (IV31 / IV32) per-cell sub-array wiring
 (`spec/03` §5.1 / §5.3 / §5.5).**
 Round 10 adds the `indeo3::cell_subarray` module, the read-only
@@ -343,6 +372,11 @@ if header.bitstream.is_null_frame() {
 | spec/07 §2.2 four cell-shape variant inner loops (A–D) | yes (`emit_variant`) |
 | spec/07 §3 static dyad delta-table values | covered by spec/04 `DyadDeltaTable` |
 | spec/07 §4.3 / §5 7→8-bit upshift + YUV→RGB / IF09 | deferred (output-buffer write) |
+| spec/03 §5.4 strip-edge fix-up chroma `sar 2` (`0x10006b5e..0x10006b61`) | yes (`STRIP_EDGE_CHROMA_SHIFT`, `StripEdgeFixupDims::for_slot`) |
+| spec/03 §5.4 strip-edge fix-up row stride (`0xb0`) | yes (`STRIP_EDGE_ROW_STRIDE`) |
+| spec/03 §5.4 strip-edge fix-up byte-copy offsets (`[edi-1]` / `[edi]`) | yes (`STRIP_EDGE_BYTE_READ_OFFSET`, `STRIP_EDGE_BYTE_WRITE_OFFSET`) |
+| spec/03 §5.4 per-row iteration over strip height       | yes (`StripEdgeRowIter`) |
+| spec/03 §5.4 byte-loop pixel-buffer write              | deferred (caller pixel-buffer view) |
 
 "Surfaced" means the field is exposed verbatim on the typed
 struct; the reference decoder does not validate the value, so we
@@ -480,6 +514,22 @@ chapters that aren't yet in `docs/`.
   as the `slot_field` constants submodule (`BASE_PTR_0..5`,
   `STRIP_HEIGHT`, `STRIP_WIDTH`, `STRIP_SCRATCH_BEGIN..END`,
   `CELL_SUBARRAY_BEGIN`).
+* `oxideav_indeo::indeo3::StripEdgeFixupDims::for_slot(slot_idx,
+  strip_height, strip_width) -> Option<StripEdgeFixupDims>` —
+  spec/03 §5.4 strip-edge fix-up dimensions, with luma slots
+  preserving the fields verbatim and chroma slots applying
+  `sar 2`; `Scratch` slots yield `None`. `::row_iter()`,
+  `::is_luma()`, `::is_chroma()`.
+* `StripEdgeRowIter::new(height)` — non-allocating iterator
+  yielding one `StripEdgeRow { row_index, row_cursor_byte_offset,
+  read_offset, write_offset }` per strip row (`ExactSizeIterator`).
+* `strip_edge_chroma_shift() -> u32` /
+  `strip_edge_row_step() -> usize` /
+  `strip_edge_byte_copy_offsets() -> (i32, i32)` — accessor
+  helpers for the §5.4 constants.
+* Strip-edge constants: `STRIP_EDGE_CHROMA_SHIFT` (2),
+  `STRIP_EDGE_ROW_STRIDE` (0xb0), `STRIP_EDGE_BYTE_READ_OFFSET`
+  (-1), `STRIP_EDGE_BYTE_WRITE_OFFSET` (0).
 * Constants: `MAGIC_FRMH`, `REQUIRED_DEC_VERSION`,
   `FRAME_HEADER_LEN`, `BITSTREAM_HEADER_LEN`, `COMBINED_HEADER_LEN`,
   `FLAG_YVU9_8BIT`, `NULL_FRAME_DATA_SIZE_BITS`, `MIN_DIMENSION`,

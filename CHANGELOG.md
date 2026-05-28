@@ -8,6 +8,39 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/03 §5.4 strip-edge fix-up parameter
+  surface. New `indeo3::strip_edge` module surfacing the
+  end-of-strip rightmost-column-duplication fix-up's per-slot
+  dimensions and per-row iteration. `StripEdgeFixupDims::for_slot`
+  reads the destination slot's `+0x18` strip-height and `+0x1c`
+  strip-width fields and applies the per-plane-role disposition the
+  binary's branch at `IR32_32.DLL!0x10006b5e..0x10006b61` selects:
+  luma slots 0/3 preserve the fields verbatim, chroma slots 1/2/4/5
+  apply `sar 2` (`STRIP_EDGE_CHROMA_SHIFT` = 2, the 4:1 chroma
+  subsampling ratio from `spec/02 §4.1`), and scratch slots 6..31
+  yield `None` so callers can detect a non-dispatchable slot.
+  `StripEdgeRowIter` walks the strip's full height yielding one
+  `StripEdgeRow` per row (with `row_cursor_byte_offset` at the
+  `0xb0`-stride row start and the §5.4 `mov al, [edi-1]; mov [edi],
+  al` read/write offsets `(-1, 0)`). `STRIP_EDGE_ROW_STRIDE` (`0xb0`)
+  reuses the same per-row stride as `PER_CELL_EDGE_ROW_STRIDE` (the
+  strip's allocated row stride). `STRIP_EDGE_BYTE_READ_OFFSET` (`-1`)
+  / `STRIP_EDGE_BYTE_WRITE_OFFSET` (`0`) are surfaced as constants
+  alongside the `strip_edge_byte_copy_offsets()` accessor returning
+  the `(-1, 0)` pair. 17 new unit tests cover the chroma-shift /
+  row-stride / byte-copy-offset constants (4), `StripEdgeFixupDims`'s
+  luma-preserve / chroma-divide / scratch-rejection branches plus
+  remainder-strip widths and `sar` truncation (6), and
+  `StripEdgeRowIter`'s zero-height / single-row / multi-row /
+  size-hint / `ExactSizeIterator` behaviour plus a per-slot
+  chroma-vs-luma row-count integration check (7). Per the §5
+  chapter boundary, this round lands the parameter / iteration
+  surface only — not the pixel-buffer byte copy itself (the
+  one-line `dest[i] = src[i - 1]` lives in any caller's pixel-buffer
+  view), not the `+0x18` / `+0x1c` field byte-loads from the
+  strip-context slot (callers pass the values already-loaded), and
+  not the pre-frame pixel-buffer allocation (spec/02 §10).
+
 - Indeo 3 (IV31 / IV32) per-cell sub-array wiring (`spec/03` §5.1 /
   §5.3 / §5.5). New `indeo3::cell_subarray` module surfacing the
   read-only indexing arithmetic for the cell-stack at each strip-

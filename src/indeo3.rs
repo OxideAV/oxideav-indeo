@@ -70,6 +70,7 @@ mod macroblock;
 mod picture_layer;
 mod reconstruct;
 mod strip_context;
+mod strip_edge;
 mod vq;
 
 pub use cell_loop::{
@@ -121,6 +122,11 @@ pub use strip_context::{
     PLANE_DECODE_STATUS_OK, PRIMARY_BANK_SLOTS, SECONDARY_BANK_SLOTS,
     STRIP_ARRAY_OFFSET_IN_INSTANCE, STRIP_SLOT_BASE_PTR_COUNT, STRIP_SLOT_COUNT,
     STRIP_SLOT_SENTINEL, STRIP_SLOT_STRIDE,
+};
+pub use strip_edge::{
+    strip_edge_byte_copy_offsets, strip_edge_chroma_shift, strip_edge_row_step, StripEdgeFixupDims,
+    StripEdgeRow, StripEdgeRowIter, STRIP_EDGE_BYTE_READ_OFFSET, STRIP_EDGE_BYTE_WRITE_OFFSET,
+    STRIP_EDGE_CHROMA_SHIFT, STRIP_EDGE_ROW_STRIDE,
 };
 pub use vq::{
     seed_dispatch_entries, CellVariant, CodebookEntry, DyadDeltaTable, SeedEntry, VqArena, VqError,
