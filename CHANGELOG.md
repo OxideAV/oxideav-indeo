@@ -8,6 +8,49 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/05 §1 per-plane packed-MV table layout
+  and INTER-leaf indexing surface. New `indeo3::mc_table` module
+  surfacing the 1 KiB arena at `inner_instance[0x000..0x3ff]` the
+  picture-layer parser writes (`MV_TABLE_BASE_OFFSET` = `0x000`,
+  `MV_TABLE_ENTRY_SIZE` = `4`, `MV_TABLE_BYTES` = `0x400`,
+  `MV_TABLE_MAX_BYTE_INDEXABLE_ENTRIES` = `256`,
+  `MV_INDEX_SCALE_SHIFT` = `2`). `MvTableParserArm::from_frame_flags`
+  resolves the §1.2 four-way parser-arm dispatch on `frame_flags`
+  bits 4 + 5 (`MV_HALFPEL_HORIZ` = `0x10`, `MV_HALFPEL_VERT` = `0x20`,
+  combined `MV_HALFPEL_MASK` = `0x30`), with each arm carrying its
+  `[ecx + 4*edx]` write-site RVA — `IR32_32.DLL!0x10004572`
+  (full-pel), `0x10004493` (horizontal half-pel only), `0x10004510`
+  (vertical half-pel only), `0x10004426` (both half-pel) — and its
+  per-component half-pel `<<= 1` disposition
+  (`applies_half_pel_horizontal` / `applies_half_pel_vertical`).
+  `mv_table_entry_byte_offset` enforces the 256-entry bound and
+  returns the table-byte offset of entry `i` via
+  `MV_TABLE_BASE_OFFSET + i * MV_TABLE_ENTRY_SIZE`.
+  `MvIndexFetch::for_index` composes the §1.3 INTER-leaf sequence
+  (`xor eax,eax; mov al,[ebp]; shl eax,0x2; add eax,inner_instance`
+  at `IR32_32.DLL!0x100065f2..0x10006607`) into a single descriptor
+  carrying `(index, table_byte_offset, parser_arm, validity)` — up
+  to but not including the `mov eax, [eax]` table dereference.
+  `MvIndexValidity::classify` enumerates the §1.4 read-side
+  disposition of an MV-index byte against the plane's `num_vectors`
+  count: `WrittenThisFrame` (`index < num_vectors`, the only
+  well-formed disposition), `StaleTailEntry`
+  (`num_vectors <= index < 256`, residual prior-frame content),
+  `OutOfRange` (`index >= 256`, unreachable from the one-byte
+  index path). 27 new unit tests cover the arena-layout constants
+  (5), the four-way parser-arm dispatch including the
+  bits-outside-mask invariance and write-site RVA uniqueness (7),
+  the per-entry byte-offset helper across the full 256-entry range
+  (4), the §1.4 validity classifier across all three branches plus
+  the `num_vectors > 256` corner case (6), and the
+  `MvIndexFetch::for_index` descriptor's helper-agreement and
+  parser-arm-tracking integration (5). Per the §1 chapter boundary,
+  this round lands the table-layout / index-arithmetic surface
+  only — not the packed-MV bit-layout decode (§3 — bottom 2 bits
+  filter mode, upper 30 bits signed strip-pixel byte offset), not
+  the four-way MC fetcher dispatch (§5.1 / §5.2 / §5.3), and not
+  the half-pel byte-pair averaging filter (§5.2).
+
 - Indeo 3 (IV31 / IV32) spec/03 §5.4 strip-edge fix-up parameter
   surface. New `indeo3::strip_edge` module surfacing the
   end-of-strip rightmost-column-duplication fix-up's per-slot

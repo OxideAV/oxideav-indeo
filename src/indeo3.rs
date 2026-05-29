@@ -55,7 +55,24 @@
 //! strip-edge vs §5.5 inter-cell branch (with §5.5's
 //! [`PER_CELL_EDGE_PREV_BR_OFFSET`] / [`PER_CELL_EDGE_PREV_BR_NEXT_OFFSET`]
 //! / [`PER_CELL_EDGE_ROW_STRIDE`] / [`PER_CELL_EDGE_HEIGHT_STEP`]
-//! constants surfaced).
+//! constants surfaced). Round 11 adds the spec/03 §5.4 end-of-strip
+//! edge fix-up parameter surface — [`StripEdgeFixupDims::for_slot`]
+//! resolves the per-plane-role `sar 2` chroma divide, and
+//! [`StripEdgeRowIter`] yields the per-row read/write byte-offsets
+//! ([`STRIP_EDGE_BYTE_READ_OFFSET`] / [`STRIP_EDGE_BYTE_WRITE_OFFSET`])
+//! the rightmost-column duplication walks. Round 12 adds the spec/05
+//! §1 per-plane packed-MV table layout: [`MV_TABLE_BASE_OFFSET`] /
+//! [`MV_TABLE_ENTRY_SIZE`] / [`MV_TABLE_BYTES`] /
+//! [`MV_TABLE_MAX_BYTE_INDEXABLE_ENTRIES`] fix the §1.2 arena geometry,
+//! [`MvTableParserArm::from_frame_flags`] resolves the §1.2 four-way
+//! parser-arm dispatch on `frame_flags` bits 4 + 5 with the four
+//! write-site RVAs surfaced, [`mv_table_entry_byte_offset`] /
+//! [`MvIndexFetch::for_index`] model the §1.3
+//! `xor eax,eax; mov al,[ebp]; shl eax,0x2; add eax,inner_instance`
+//! INTER-leaf sequence up to (but not including) the table dereference,
+//! and [`MvIndexValidity`] classifies an MV-index byte against the
+//! plane's `num_vectors` per §1.4
+//! (written-this-frame / stale-tail-entry / out-of-range).
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
@@ -67,6 +84,7 @@ mod cell_subarray;
 mod entropy;
 mod header;
 mod macroblock;
+mod mc_table;
 mod picture_layer;
 mod reconstruct;
 mod strip_context;
@@ -101,6 +119,11 @@ pub use header::{
 pub use macroblock::{
     decode_plane_tree, Cell, CellTree, MacroblockError, NodeCode, VqCell, VqLeaf, VqNull,
     CHROMA_STRIP_WIDTH, LUMA_STRIP_WIDTH,
+};
+pub use mc_table::{
+    mv_table_entry_byte_offset, MvIndexFetch, MvIndexValidity, MvTableParserArm, MV_HALFPEL_HORIZ,
+    MV_HALFPEL_MASK, MV_HALFPEL_VERT, MV_INDEX_SCALE_SHIFT, MV_TABLE_BASE_OFFSET, MV_TABLE_BYTES,
+    MV_TABLE_ENTRY_SIZE, MV_TABLE_MAX_BYTE_INDEXABLE_ENTRIES,
 };
 pub use picture_layer::{
     MotionVector, PictureLayer, PictureLayerError, PlanePrelude, PlanePresence,

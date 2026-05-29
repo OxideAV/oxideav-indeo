@@ -5,6 +5,49 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 12 — Indeo 3 (IV31 / IV32) per-plane packed-MV table
+layout and INTER-leaf indexing surface (`spec/05` §1).**
+Round 12 adds the `indeo3::mc_table` module, the per-plane
+packed-MV table the binary writes during the picture-layer
+prelude and reads at every MC_TREE INTER leaf. The arena occupies
+the first 1024 bytes of the inner-instance state
+([`MV_TABLE_BASE_OFFSET`] = `0x000`,
+[`MV_TABLE_BYTES`] = `0x400`,
+[`MV_TABLE_ENTRY_SIZE`] = `4`); the one-byte MV index fixes the
+addressable maximum at 256 entries
+([`MV_TABLE_MAX_BYTE_INDEXABLE_ENTRIES`]), with
+[`mv_table_entry_byte_offset`] enforcing the bound and
+[`MV_INDEX_SCALE_SHIFT`] (`2`) matching the §1.3
+`shl eax, 0x2` scale step. The §1.2 four-way parser-arm dispatch
+is surfaced as [`MvTableParserArm::from_frame_flags`]
+(`FullPel` / `HalfPelHorizontal` / `HalfPelVertical` /
+`HalfPelBoth`, masking on
+[`MV_HALFPEL_HORIZ`] | [`MV_HALFPEL_VERT`] = `MV_HALFPEL_MASK`),
+each variant carrying its `[ecx + 4*edx]` write-site RVA
+(`0x10004572` / `0x10004493` / `0x10004510` / `0x10004426`) and
+its per-component half-pel `<<= 1` disposition. The §1.3 INTER-
+leaf sequence
+(`xor eax,eax; mov al,[ebp]; shl eax,0x2; add eax,inner_instance`)
+is modelled by [`MvIndexFetch::for_index`], which composes the
+MV-index byte, table byte offset, parser arm, and §1.4 validity
+classification ([`MvIndexValidity`]: `WrittenThisFrame` /
+`StaleTailEntry` / `OutOfRange`) into a single descriptor — up
+to but not including the table dereference itself, which is the
+§3 packed-MV-decode chapter's subject. 27 new unit tests cover
+the arena layout constants (5), the four-way parser-arm dispatch
+including the bits-outside-mask invariance check and write-site
+RVA uniqueness (7), the per-entry byte-offset helper across the
+full 256-entry range (4), the §1.4 validity classifier across
+WrittenThisFrame / StaleTailEntry / OutOfRange and the
+`num_vectors > 256` corner case (6), and the
+[`MvIndexFetch::for_index`] descriptor's helper-agreement /
+parser-arm-tracking integration (5). Per the §1 chapter boundary,
+round 12 lands the table-layout / index-arithmetic surface only —
+not the packed-MV bit-layout decode (§3 — bottom 2 bits filter
+mode, upper 30 bits signed strip-pixel byte offset), not the
+four-way MC fetcher dispatch (§5.1 / §5.2 / §5.3), and not the
+half-pel byte-pair averaging filter (§5.2).
+
 **Round 11 — Indeo 3 (IV31 / IV32) end-of-strip edge fix-up
 parameter surface (`spec/03` §5.4).**
 Round 11 adds the `indeo3::strip_edge` module, the parameter /
