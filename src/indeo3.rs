@@ -72,7 +72,25 @@
 //! INTER-leaf sequence up to (but not including) the table dereference,
 //! and [`MvIndexValidity`] classifies an MV-index byte against the
 //! plane's `num_vectors` per §1.4
-//! (written-this-frame / stale-tail-entry / out-of-range).
+//! (written-this-frame / stale-tail-entry / out-of-range). Round 13
+//! adds the spec/05 §2.2 / §2.3 / §3.3 / §3.4 packed-MV bit-layout
+//! decode and four-way MC dispatch: [`PackedMv::from_raw`] wraps the
+//! 32-bit packed-MV DWORD fetched from `inner_instance[4*i]`,
+//! [`PackedMv::pixel_offset`] recovers the §2.3 / §3.4 signed
+//! strip-pixel byte offset via the dispatcher's `sar edx, 0x2`
+//! ([`MV_PIXEL_OFFSET_SHIFT`] = `2`), [`PackedMv::mode`] returns
+//! [`McDispatchMode`] — the §2.2 four-way fork (`FullPel` /
+//! `VerticalHalfPel` / `HorizontalHalfPel` / `BothHalfPel`) selected
+//! by [`MV_MODE_BITS_MASK`] (`0x3`) with each variant carrying its
+//! inner-loop RVA (`0x1000670d` / `0x10006780` / `0x1000684b` /
+//! `0x100068f8`); [`apply_mv_source_offset`] /
+//! [`PackedMv::source_address`] model the §2.3
+//! `src_addr = dst_cell_base + sign_extend(packed_MV >> 2)`, and
+//! [`pack_mv_components`] surfaces the §3.3 constructive packer
+//! `((176*vert + horiz) << 2) | (horiz_lsb << 1) | vert_lsb`. The
+//! §3.3 row-stride constant [`MV_PIXEL_OFFSET_ROW_STRIDE`] (`176`)
+//! aliases [`reconstruct::PREDICTOR_ROW_STRIDE`] with a `const _`
+//! cross-check.
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
@@ -84,6 +102,7 @@ mod cell_subarray;
 mod entropy;
 mod header;
 mod macroblock;
+mod mc_packed;
 mod mc_table;
 mod picture_layer;
 mod reconstruct;
@@ -119,6 +138,10 @@ pub use header::{
 pub use macroblock::{
     decode_plane_tree, Cell, CellTree, MacroblockError, NodeCode, VqCell, VqLeaf, VqNull,
     CHROMA_STRIP_WIDTH, LUMA_STRIP_WIDTH,
+};
+pub use mc_packed::{
+    apply_mv_source_offset, pack_mv_components, McDispatchMode, PackedMv, MV_HORIZ_HALFPEL_BIT,
+    MV_MODE_BITS_MASK, MV_PIXEL_OFFSET_ROW_STRIDE, MV_PIXEL_OFFSET_SHIFT, MV_VERT_HALFPEL_BIT,
 };
 pub use mc_table::{
     mv_table_entry_byte_offset, MvIndexFetch, MvIndexValidity, MvTableParserArm, MV_HALFPEL_HORIZ,

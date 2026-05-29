@@ -5,6 +5,49 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 13 — Indeo 3 (IV31 / IV32) packed-MV bit-layout decode +
+four-way MC dispatch (`spec/05` §2.2 / §2.3 / §3.3 / §3.4).**
+Round 13 adds the `indeo3::mc_packed` module, the next slice in the
+MC pipeline after round 12's table-layout surface: given the
+already-fetched 32-bit packed-MV word, decompose it into the signed
+strip-pixel byte offset and the half-pel filter-mode selector the
+dispatcher branches on. [`PackedMv::from_raw`] wraps the DWORD;
+[`PackedMv::pixel_offset`] recovers the §2.3 / §3.4 signed pixel
+byte offset via the dispatcher's `sar edx, 0x2` at
+`IR32_32.DLL!0x100066f3` ([`MV_PIXEL_OFFSET_SHIFT`] = `2`);
+[`PackedMv::mode`] returns [`McDispatchMode`], the §2.2 four-way
+fork (`FullPel` / `VerticalHalfPel` / `HorizontalHalfPel` /
+`BothHalfPel`) selected by the `test edx, 0x1; test edx, 0x2` chain
+at `0x100066e0..0x100066ee`, with each variant carrying its
+inner-loop RVA (`0x1000670d` / `0x10006780` / `0x1000684b` /
+`0x100068f8`). The §3.4 low-two-bit field labels are surfaced as
+[`MV_VERT_HALFPEL_BIT`] (`0x1`), [`MV_HORIZ_HALFPEL_BIT`] (`0x2`),
+and [`MV_MODE_BITS_MASK`] (`0x3`); the §3.3 row-stride constant
+[`MV_PIXEL_OFFSET_ROW_STRIDE`] (`176` / `0xb0`) is aliased to
+[`PREDICTOR_ROW_STRIDE`] with a `const _` cross-check enforcing the
+two reconstructions agree. [`apply_mv_source_offset`] /
+[`PackedMv::source_address`] model the §2.3
+`src_addr = dst_cell_base + sign_extend(packed_MV >> 2)` (returning
+`None` on signed underflow as a safe-Rust safety net — per §4.4 the
+binary itself performs no bounds check). [`pack_mv_components`] is
+the constructive inverse, surfacing the §3.3 closing-arithmetic
+write `((176*vert + horiz) << 2) | (horiz_lsb << 1) | vert_lsb` so
+round-trip tests can build a DWORD from `(vert, horiz, vert_lsb,
+horiz_lsb)` directly. 20 new unit tests cover the §3.4 mode-bit
+field disjointness + shift width (3), the §2.2 four-way dispatch
+including the bits-outside-mask invariance and inner-loop-RVA
+uniqueness (7), the §2.3 sign-extending source-pointer arithmetic
+including signed underflow (4), and the `pack_mv_components`
+round-trip across representative `(vert, horiz)` and all four
+mode-bit pairs (6). Per the §3 / §5 chapter boundary, round 13
+lands the decode + dispatch surface only — not the §5.1 / §5.2 /
+§5.3 cell copy (per-row byte-pair averaging filter, `0xb0`-stride
+destination walk), not the §3.3 `(vert, horiz)` re-decomposition
+(the dispatcher uses the combined offset directly per §2.3 and the
+spec does not pin down a division convention for the pair), and not
+the bounds-check against the strip-buffer arena (per §4.4 the
+binary has no such check).
+
 **Round 12 — Indeo 3 (IV31 / IV32) per-plane packed-MV table
 layout and INTER-leaf indexing surface (`spec/05` §1).**
 Round 12 adds the `indeo3::mc_table` module, the per-plane
@@ -420,6 +463,11 @@ if header.bitstream.is_null_frame() {
 | spec/03 §5.4 strip-edge fix-up byte-copy offsets (`[edi-1]` / `[edi]`) | yes (`STRIP_EDGE_BYTE_READ_OFFSET`, `STRIP_EDGE_BYTE_WRITE_OFFSET`) |
 | spec/03 §5.4 per-row iteration over strip height       | yes (`StripEdgeRowIter`) |
 | spec/03 §5.4 byte-loop pixel-buffer write              | deferred (caller pixel-buffer view) |
+| spec/05 §2.2 four-way MC dispatch on packed-MV `bits 1..0` | yes (`McDispatchMode`, `PackedMv::mode`) |
+| spec/05 §2.3 source-pointer `add esi, sar(packed_mv, 2)` | yes (`apply_mv_source_offset`, `PackedMv::source_address`) |
+| spec/05 §3.3 packing formula `176 * vert + horiz`        | yes (`pack_mv_components`, `MV_PIXEL_OFFSET_ROW_STRIDE`) |
+| spec/05 §3.4 packed-MV byte layout (`bits 31..2`/`bit 1`/`bit 0`) | yes (`PackedMv`, `MV_VERT_HALFPEL_BIT`, `MV_HORIZ_HALFPEL_BIT`, `MV_MODE_BITS_MASK`, `MV_PIXEL_OFFSET_SHIFT`) |
+| spec/05 §5.1 / §5.2 / §5.3 cell-copy inner loop          | deferred (strip pixel-buffer surface) |
 
 "Surfaced" means the field is exposed verbatim on the typed
 struct; the reference decoder does not validate the value, so we
@@ -573,6 +621,27 @@ chapters that aren't yet in `docs/`.
 * Strip-edge constants: `STRIP_EDGE_CHROMA_SHIFT` (2),
   `STRIP_EDGE_ROW_STRIDE` (0xb0), `STRIP_EDGE_BYTE_READ_OFFSET`
   (-1), `STRIP_EDGE_BYTE_WRITE_OFFSET` (0).
+* `oxideav_indeo::indeo3::PackedMv` (`::from_raw`, `::pixel_offset`,
+  `::mode`, `::vert_half_pel_bit`, `::horiz_half_pel_bit`,
+  `::source_address`) — spec/05 §3.4 typed view over a 32-bit
+  packed-MV DWORD as fetched from `inner_instance[4*i]`. The §2.3
+  `sar 2` recovers the signed strip-pixel byte offset; the low two
+  bits feed the §2.2 four-way dispatch.
+* `McDispatchMode` (`FullPel` / `VerticalHalfPel` /
+  `HorizontalHalfPel` / `BothHalfPel`, `::from_packed_mv`,
+  `::mode_bits`, `::inner_loop_rva`, `::applies_vertical_half_pel`,
+  `::applies_horizontal_half_pel`, `::is_half_pel`) — spec/05 §2.2
+  four-way MC dispatch on the packed-MV's bottom two bits, each
+  variant carrying its inner-loop RVA.
+* `apply_mv_source_offset(dst_cell_base, offset) -> Option<usize>`
+  — spec/05 §2.3 sign-extending `add esi, edx`, returning `None`
+  on signed underflow.
+* `pack_mv_components(vert, horiz, vert_lsb, horiz_lsb) -> u32` —
+  spec/05 §3.3 constructive packer
+  (`((176*vert + horiz) << 2) | (horiz_lsb << 1) | vert_lsb`).
+* Packed-MV constants: `MV_VERT_HALFPEL_BIT` (0x1),
+  `MV_HORIZ_HALFPEL_BIT` (0x2), `MV_MODE_BITS_MASK` (0x3),
+  `MV_PIXEL_OFFSET_SHIFT` (2), `MV_PIXEL_OFFSET_ROW_STRIDE` (176).
 * Constants: `MAGIC_FRMH`, `REQUIRED_DEC_VERSION`,
   `FRAME_HEADER_LEN`, `BITSTREAM_HEADER_LEN`, `COMBINED_HEADER_LEN`,
   `FLAG_YVU9_8BIT`, `NULL_FRAME_DATA_SIZE_BITS`, `MIN_DIMENSION`,

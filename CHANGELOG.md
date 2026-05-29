@@ -8,6 +8,43 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/05 §2.2 / §2.3 / §3.3 / §3.4 packed-MV
+  bit-layout decode and four-way MC dispatch. New
+  `indeo3::mc_packed` module surfacing the §3.4 packed-MV byte
+  layout (`bits 31..2 = pixel_offset`, `bit 1 = horiz half-pel`,
+  `bit 0 = vert half-pel`): `PackedMv::from_raw` wraps the DWORD,
+  `PackedMv::pixel_offset` recovers the signed strip-pixel byte
+  offset via the §2.3 / §3.4 `sar edx, 0x2` at
+  `IR32_32.DLL!0x100066f3` (`MV_PIXEL_OFFSET_SHIFT` = 2),
+  `PackedMv::mode` returns the §2.2 four-way `McDispatchMode`
+  (`FullPel` / `VerticalHalfPel` / `HorizontalHalfPel` /
+  `BothHalfPel`) by inspecting `MV_MODE_BITS_MASK` (0x3) with each
+  variant carrying its inner-loop RVA (`0x1000670d` / `0x10006780`
+  / `0x1000684b` / `0x100068f8`).
+  `apply_mv_source_offset(dst_cell_base, offset)` /
+  `PackedMv::source_address` model the §2.3
+  `src_addr = dst_cell_base + sign_extend(packed_MV >> 2)`,
+  returning `None` on signed underflow as a safe-Rust safety net
+  (per §4.4 the binary itself performs no bounds check).
+  `pack_mv_components(vert, horiz, vert_lsb, horiz_lsb)` is the
+  constructive inverse — the §3.3 closing-arithmetic write
+  `((176*vert + horiz) << 2) | (horiz_lsb << 1) | vert_lsb`. The
+  §3.3 row-stride constant `MV_PIXEL_OFFSET_ROW_STRIDE` (176 / 0xb0)
+  is aliased to `PREDICTOR_ROW_STRIDE` with a `const _`
+  cross-check. 20 new unit tests cover the §3.4 mode-bit
+  disjointness and shift width (3), the §2.2 four-way dispatch
+  including bits-outside-mask invariance and inner-loop-RVA
+  uniqueness (7), the §2.3 sign-extending source-pointer arithmetic
+  including signed underflow (4), and the `pack_mv_components`
+  round-trip across representative `(vert, horiz)` and all four
+  mode-bit pairs (6). Per the §3 / §5 chapter boundary, this round
+  lands the decode + dispatch surface only — not the §5.1 / §5.2 /
+  §5.3 cell copy (per-row byte-pair averaging filter, `0xb0`-stride
+  destination walk), not the `(vert, horiz)` re-decomposition (the
+  dispatcher uses the combined offset directly per §2.3), and not
+  the bounds-check against the strip-buffer arena (per §4.4 the
+  binary has no such check).
+
 - Indeo 3 (IV31 / IV32) spec/05 §1 per-plane packed-MV table layout
   and INTER-leaf indexing surface. New `indeo3::mc_table` module
   surfacing the 1 KiB arena at `inner_instance[0x000..0x3ff]` the
