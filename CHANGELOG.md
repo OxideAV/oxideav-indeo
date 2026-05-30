@@ -8,6 +8,54 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/05 §5.1 / §5.2 / §5.3
+  motion-compensation cell-copy inner-loop kernel. New
+  `indeo3::mc_kernel` module surfacing the §5.1 full-pel inner-loop
+  shape (`MC_ROW_STRIDE` = `0xb0`,
+  `MC_INNER_LOOP_DWORDS_PER_ITER` = 4,
+  `MC_INNER_LOOP_BYTES_PER_ITER` = 16, `MC_BAND_ROWS` = 4,
+  `MC_BAND_BYTE_STRIDE` = `0x2c0`, `MC_COLUMN_GROUP_PIXELS` = 4)
+  and the four hard-coded source-byte offsets at
+  `IR32_32.DLL!0x1000670d..0x1000673d`
+  (`MC_FULL_PEL_ROW_OFFSETS` = `[0, 0xb0, 0x160, 0x210]`,
+  `mc_full_pel_row_dword`, `McKernelStep::for_row`).
+  `McKernelGeometry::new(width_px, height_px)` enforces the §5.1
+  multiple-of-4 width/height invariants and the §5.3 row-stride
+  bound (`MC_MAX_CELL_WIDTH_BYTES` = `0xb0`).
+  The §5.2 per-DWORD averaging kernels: `mc_vert_half_pel_pair`
+  for the `01` path (`(src[i] + src[i + 0xb0]) >> 1` via the
+  shared `average_7bit` SWAR identity,
+  `MC_VERT_HALF_PEL_NEIGHBOUR_OFFSET` = `0xb0`),
+  `mc_horiz_half_pel_pair` for the `10` path
+  (`(src[i] + src[i + 1]) >> 1` with the in-DWORD byte splice
+  `(src_dword >> 8) | (src_dword_next << 24)`,
+  `MC_HORIZ_HALF_PEL_NEIGHBOUR_OFFSET` = `1`), and
+  `mc_both_half_pel_quad` for the `11` path (the §2.2 / §5.2 2×2
+  unweighted box filter, composed horizontal-pair-first /
+  vertical-pair-second). All three kernels share the same
+  `(a + b) >> 1` byte-parallel identity used by
+  `reconstruct::average_7bit`, confirming the §2.2 "no separate
+  filter coefficient tables" disposition. The new
+  `McKernelStep::outer_band_advance()` (`0x2c0`) and
+  `McKernelStep::inner_column_group_advance()` (`4`) helpers
+  surface the inner-loop / outer-loop pointer advances per §5.1.
+  Per the §5 chapter boundary the module deliberately does not
+  own the strip pixel-buffer arena, does not slice-bounds-check
+  source pointers (per §4.4 the binary itself does not), does not
+  address the §5.6 VQ-residual-after-MC chain, and does not
+  validate the §5.4 cell-position decode against the `0xf423f`
+  sanity sentinel (that check lives in `cell_loop`'s
+  `CELL_POSITION_MAX` per §3.3). 31 new unit tests cover the §5.1
+  / §5.3 constants and immediates (8), the §5.1 / §5.3
+  `McKernelGeometry::new` invariants including zero / odd-width /
+  odd-height / over-stride rejections (8), the §5.1 row-offset
+  helper and step-tuple surface (5), the §5.2 averaging kernel
+  correctness across vertical / horizontal / both-half-pel paths
+  including byte-parallel no-bleed verification and rounding
+  semantics (9), and the inter-module row-stride consistency
+  check linking the kernel to `reconstruct::PREDICTOR_ROW_STRIDE`
+  and `mc_packed::MV_PIXEL_OFFSET_ROW_STRIDE` (1).
+
 - Indeo 3 (IV31 / IV32) spec/05 §2.2 / §2.3 / §3.3 / §3.4 packed-MV
   bit-layout decode and four-way MC dispatch. New
   `indeo3::mc_packed` module surfacing the §3.4 packed-MV byte

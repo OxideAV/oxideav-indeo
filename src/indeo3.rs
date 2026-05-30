@@ -90,7 +90,30 @@
 //! `((176*vert + horiz) << 2) | (horiz_lsb << 1) | vert_lsb`. The
 //! §3.3 row-stride constant [`MV_PIXEL_OFFSET_ROW_STRIDE`] (`176`)
 //! aliases [`reconstruct::PREDICTOR_ROW_STRIDE`] with a `const _`
-//! cross-check.
+//! cross-check. Round 14 adds the spec/05 §5.1 / §5.2 / §5.3 MC
+//! cell-copy inner-loop kernel: [`MC_ROW_STRIDE`] (`0xb0`) /
+//! [`MC_INNER_LOOP_DWORDS_PER_ITER`] (`4`) /
+//! [`MC_INNER_LOOP_BYTES_PER_ITER`] (`16`) / [`MC_BAND_ROWS`] (`4`) /
+//! [`MC_BAND_BYTE_STRIDE`] (`0x2c0`) / [`MC_COLUMN_GROUP_PIXELS`]
+//! (`4`) pin the §5.1 inner-loop shape; the
+//! [`MC_FULL_PEL_ROW_OFFSETS`] table mirrors the four `mov [esi +
+//! 0]`, `[esi + 0xb0]`, `[esi + 0x160]`, `[esi + 0x210]` immediates
+//! the full-pel kernel at `IR32_32.DLL!0x1000670d..0x1000673d`
+//! emits; [`mc_full_pel_row_dword`] / [`McKernelStep::for_row`]
+//! expose the same offsets through a typed surface.
+//! [`McKernelGeometry::new`] enforces the §5.1 multiple-of-4
+//! width / height invariants and the §5.3 row-stride bound
+//! ([`MC_MAX_CELL_WIDTH_BYTES`] = `0xb0`). The §5.2 per-DWORD
+//! averaging kernels — [`mc_vert_half_pel_pair`]
+//! ([`MC_VERT_HALF_PEL_NEIGHBOUR_OFFSET`] = `0xb0`),
+//! [`mc_horiz_half_pel_pair`] ([`MC_HORIZ_HALF_PEL_NEIGHBOUR_OFFSET`]
+//! = `1`, with the in-DWORD byte splice for the `[esi]` /
+//! `[esi + 1]` neighbour pair), and [`mc_both_half_pel_quad`]
+//! (the §2.2 2×2 box filter, composed as horizontal-pair-first /
+//! vertical-pair-second) — share the §2.2 / §5.2 byte-parallel
+//! `(a + b) >> 1` SWAR identity with the output-reconstruction
+//! kernel's [`reconstruct::average_7bit`], confirming the
+//! "no separate filter coefficient tables" §2.2 disposition.
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
@@ -102,6 +125,7 @@ mod cell_subarray;
 mod entropy;
 mod header;
 mod macroblock;
+mod mc_kernel;
 mod mc_packed;
 mod mc_table;
 mod picture_layer;
@@ -138,6 +162,14 @@ pub use header::{
 pub use macroblock::{
     decode_plane_tree, Cell, CellTree, MacroblockError, NodeCode, VqCell, VqLeaf, VqNull,
     CHROMA_STRIP_WIDTH, LUMA_STRIP_WIDTH,
+};
+pub use mc_kernel::{
+    mc_both_half_pel_quad, mc_full_pel_row_dword, mc_horiz_half_pel_pair, mc_vert_half_pel_pair,
+    McKernelGeometry, McKernelGeometryError, McKernelStep, MC_BAND_BYTE_STRIDE, MC_BAND_ROWS,
+    MC_BYTES_PER_DWORD, MC_COLUMN_GROUP_PIXELS, MC_FULL_PEL_ROW_OFFSETS,
+    MC_HORIZ_HALF_PEL_NEIGHBOUR_OFFSET, MC_INNER_LOOP_BYTES_PER_ITER,
+    MC_INNER_LOOP_DWORDS_PER_ITER, MC_MAX_CELL_WIDTH_BYTES, MC_ROW_STRIDE,
+    MC_VERT_HALF_PEL_NEIGHBOUR_OFFSET,
 };
 pub use mc_packed::{
     apply_mv_source_offset, pack_mv_components, McDispatchMode, PackedMv, MV_HORIZ_HALFPEL_BIT,

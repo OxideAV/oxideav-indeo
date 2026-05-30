@@ -5,6 +5,55 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 14 — Indeo 3 (IV31 / IV32) motion-compensation cell-copy
+inner-loop kernel (`spec/05` §5.1 / §5.2 / §5.3).** Round 14 adds
+the `indeo3::mc_kernel` module, the next slice in the MC pipeline
+after round 13's packed-MV decode: once the source-pixel base
+address has been resolved (round 13's
+`PackedMv::source_address` /
+`apply_mv_source_offset`), the per-cell copy kernel reads four
+DWORDs (= 16 bytes) per inner-loop iteration from successive rows
+of the source buffer and writes them into the corresponding rows
+of the destination cell. The §5.1 full-pel inner-loop shape is
+captured by `MC_ROW_STRIDE` (`0xb0`),
+`MC_INNER_LOOP_DWORDS_PER_ITER` (`4`),
+`MC_INNER_LOOP_BYTES_PER_ITER` (`16`), `MC_BAND_ROWS` (`4`),
+`MC_BAND_BYTE_STRIDE` (`0x2c0`) and `MC_COLUMN_GROUP_PIXELS` (`4`);
+the four hard-coded source-byte offsets at
+`IR32_32.DLL!0x1000670d..0x1000673d` are surfaced as
+`MC_FULL_PEL_ROW_OFFSETS = [0, 0xb0, 0x160, 0x210]` and through
+the per-row helper `mc_full_pel_row_dword` / typed
+`McKernelStep::for_row`. `McKernelGeometry::new(width_px,
+height_px)` enforces the §5.1 multiple-of-4 width/height
+invariants and the §5.3 row-stride bound
+(`MC_MAX_CELL_WIDTH_BYTES` = `0xb0`). The §5.2 per-DWORD
+averaging kernels — `mc_vert_half_pel_pair` for the `01` path
+(`(src[i] + src[i + 0xb0]) >> 1` via the shared `average_7bit`
+SWAR identity, `MC_VERT_HALF_PEL_NEIGHBOUR_OFFSET = 0xb0`),
+`mc_horiz_half_pel_pair` for the `10` path (`(src[i] + src[i +
+1]) >> 1` with the in-DWORD byte splice
+`(src_dword >> 8) | (src_dword_next << 24)`,
+`MC_HORIZ_HALF_PEL_NEIGHBOUR_OFFSET = 1`), and
+`mc_both_half_pel_quad` for the `11` path (the §2.2 / §5.2 2×2
+unweighted box filter, composed horizontal-pair-first /
+vertical-pair-second) — share the same `(a + b) >> 1`
+byte-parallel identity with `reconstruct::average_7bit`,
+confirming the §2.2 "no separate filter coefficient tables"
+disposition. 31 new unit tests cover the §5.1 / §5.3 constants
+(8), the geometry-construction invariants (8), the row-offset
+helper + step tuple (5), the §5.2 averaging-kernel correctness
+including byte-parallel no-bleed verification (9) and an
+inter-module row-stride cross-check linking `mc_kernel` to
+`reconstruct::PREDICTOR_ROW_STRIDE` and
+`mc_packed::MV_PIXEL_OFFSET_ROW_STRIDE` (1). Per the §5 chapter
+boundary, the module surfaces the §5.1 / §5.2 / §5.3 kernel
+shape only — not the cell-position decode of §5.4 (table-mediated
+via `bank[+0x300]` / `bank[+0x700]`, values pending an Extractor
+round per §7.5 and §8.2 item 4), not the §5.6 VQ-residual-after-MC
+chain (the spec/06 entry at `IR32_32.DLL!0x10006bac`), and not
+the §4.4 source-pointer bounds check (per spec the binary itself
+does not range-check).
+
 **Round 13 — Indeo 3 (IV31 / IV32) packed-MV bit-layout decode +
 four-way MC dispatch (`spec/05` §2.2 / §2.3 / §3.3 / §3.4).**
 Round 13 adds the `indeo3::mc_packed` module, the next slice in the
