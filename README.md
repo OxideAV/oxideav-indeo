@@ -5,6 +5,60 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 15 — Indeo 3 (IV31 / IV32) cell-position decoding entry
+(`spec/05` §5.4 / §7.2).** Round 15 adds the `indeo3::mc_address`
+module, the bridge between round 14's MC fetcher inner-loop
+kernel (which consumes two pixel-buffer byte addresses
+`dst_addr` / `src_addr`) and the cell-state dispatcher's index-
+arithmetic chain that produces them. The §7.2 / §4.3
+`shl eax, 0x4` step at `IR32_32.DLL!0x10006615` is surfaced as
+[`CELL_SLOT_STRIDE`] (`16`) with the §7.2 "cell-slot index 0..15"
+upper bound as [`CELL_SLOT_INDEX_MAX`] (`15`).
+[`CellSlotBase::from_bank_byte`] applies the post-`shl 0x4` step
+to the raw `bank[+0x200][ch]` one-byte lookup;
+[`CellSubarrayIndex::dst`] / [`CellSubarrayIndex::src`] compose
+`idx_dst = 16 * cell_slot + dst_slot` /
+`idx_src = 16 * cell_slot + src_slot` (the per-cell sub-array
+element indices loaded at `0x10006638..0x10006641`).
+[`CellAddrEntry::dst`] / [`CellAddrEntry::src`] hold the
+destination / source cell-data DWORDs tagged with their
+[`CellAddrRole`] (`Dest` / `Src`) and carry the §7.2 `[esp+0x38]`
+extra-offset companion on the source-role branch.
+[`mc_dest_address`] composes the §5.4 / §7.2
+`dst_addr = dst_cell_data + bank[+0x700][cl]`;
+[`mc_source_address`] composes
+`src_addr = src_cell_data + bank[+0x700][cl] + sign_extend(packed_MV >> 2)`
+by chaining the §5.4 cell-base add with the §2.3
+[`apply_mv_source_offset`] sign-extending MV displacement.
+[`McCellAddressPair::resolve`] runs the complete §7.2 chain in
+one entry point; [`McAddressError`] enumerates the four safe-
+Rust check failures (destination overflow, source overflow, MV
+under/overflow, role mismatch). The `is_self_copy()` predicate
+flags the §8.2 item 8 identity-MV degenerate case
+(`dst_slot == src_slot` + `packed_mv == 0` →
+`dst_addr == src_addr`). 29 new unit tests cover the §7.2 / §4.3
+cell-slot stride constants (3), the [`CellSlotBase`] in-range vs
+out-of-range predicate at the byte boundary (4), the
+[`CellSubarrayIndex`] composition with the §4.2 ping-pong
+`dst_slot - src_slot` delta and the byte-offset = element × 4
+cross-check (4), the [`CellAddrEntry`] role-tagged shape (2),
+the [`mc_dest_address`] / [`mc_source_address`] composition with
+identity / positive / negative displacements and `usize` wrap /
+signed underflow rejections (7), the complete
+[`McCellAddressPair::resolve`] chain including swapped-role
+rejection and all four [`McAddressError`] propagation modes plus
+the §8.2 item 8 self-copy case (8), and a `CELL_STACK_ENTRY_SIZE`
+consistency check linking [`CellSubarrayIndex::byte_offset`] to
+the existing 4-byte-per-entry constant (1). Per the §5.4 / §7
+chapter boundary, the module deliberately does not own the
+`bank[+0x200]` or `bank[+0x700]` table values (§7.5 Extractor
+territory), does not own the strip-context per-cell sub-array
+DWORDs (spec/03 §6 open question 4 pre-frame setup), does not
+perform the §7.2 `[esp+0x34]` boundary-fix-up reduction, does
+not perform the §7.3 reverse `(x, y, w, h)` decomposition, and
+does not perform the §4.2 `frame_flags` bit 9 source /
+destination slot inversion.
+
 **Round 14 — Indeo 3 (IV31 / IV32) motion-compensation cell-copy
 inner-loop kernel (`spec/05` §5.1 / §5.2 / §5.3).** Round 14 adds
 the `indeo3::mc_kernel` module, the next slice in the MC pipeline

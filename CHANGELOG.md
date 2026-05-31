@@ -8,6 +8,73 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/05 §5.4 / §7.2 cell-position decoding
+  entry — the cell-state dispatcher's index-arithmetic chain that
+  resolves the per-cell destination and source pixel-buffer
+  addresses the round-14 MC fetcher's inner loop consumes. New
+  `indeo3::mc_address` module surfacing the §7.2 / §4.3
+  `shl eax, 0x4` at `IR32_32.DLL!0x10006615` as `CELL_SLOT_STRIDE`
+  (`16`) and the §7.2 "cell-slot index 0..15" upper bound as
+  `CELL_SLOT_INDEX_MAX` (`15`). `CellSlotBase::from_bank_byte`
+  applies the post-`shl 0x4` step to the raw `bank[+0x200][ch]`
+  one-byte lookup, returning the cell-slot base index; the
+  `is_within_meaningful_range()` predicate flags the §7.2 in-bound
+  vs out-of-bound ranges without rejecting (per §7.5 the table
+  values themselves are Extractor territory). `CellSubarrayIndex::dst`
+  / `CellSubarrayIndex::src` compose
+  `idx_dst = 16 * cell_slot + dst_slot` /
+  `idx_src = 16 * cell_slot + src_slot` (the §7.2 / §4.3 per-cell
+  sub-array element indices loaded at
+  `IR32_32.DLL!0x10006638..0x10006641`), with `byte_offset()`
+  returning the post-shift `mov edx, [esi + 4 * eax]` byte offset.
+  `CellAddrEntry::dst(cell_data_ptr)` /
+  `CellAddrEntry::src(cell_data_ptr, extra_offset)` hold the
+  destination / source cell-data DWORDs tagged with their
+  `CellAddrRole` (`Dest` / `Src`) and carry the §7.2 `[esp+0x38]`
+  extra-offset companion (loaded from `strip_ctx_arr[idx_src + 1]`,
+  used by the §5.5 boundary fix-up) on the source-role branch.
+  `mc_dest_address(dst_entry, cell_pos_aux)` composes the §5.4 /
+  §7.2 `dst_addr = dst_cell_data + bank[+0x700][cl]` step
+  (`usize::checked_add` for safe-Rust wrap detection — per §4.4
+  the binary itself does not bounds-check). `mc_source_address(src_entry,
+  cell_pos_aux, packed_mv)` composes the §5.4 / §7.2
+  `src_addr = src_cell_data + bank[+0x700][cl] + sign_extend(packed_MV >> 2)`
+  chain, threading the §2.3 / §3.4 `apply_mv_source_offset`
+  sign-extending MV displacement. `McCellAddressPair::resolve`
+  runs the complete §7.2 chain in one entry point, returning the
+  (dst, src) byte-address pair the MC fetcher's inner loop
+  consumes; `McAddressError` enumerates the four safe-Rust check
+  failures (`DestAddressOverflow`, `SrcAddressOverflow`,
+  `SrcMvDisplacementInvalid`, `RoleMismatch`). The `is_self_copy()`
+  predicate flags the §8.2 item 8 identity-MV degenerate case
+  (`dst_slot == src_slot` + `packed_mv == 0` →
+  `dst_addr == src_addr`). Per the §5.4 / §7 chapter boundary, the
+  module deliberately does not own the `bank[+0x200]` slot-index
+  LUT or the `bank[+0x700]` cell-position aux LUT (per-entry values
+  are §7.5 Extractor territory), does not own the strip-context
+  per-cell sub-array DWORDs (pre-frame cell-stack setup is spec/03
+  §6 open question 4), does not perform the §7.2 `[esp+0x34]`
+  boundary-fix-up reduction (composite of `bank[+0x700][cl] sar 2 +
+  extra_offset + ch` — feeds §5.5 not the MC fetcher), does not
+  perform the §7.3 `(x, y, w, h)` reverse decomposition, and does
+  not perform the §4.2 `frame_flags` bit 9 source / destination
+  slot inversion (a per-plane-decoder decision). 29 new unit tests
+  cover the §7.2 / §4.3 cell-slot-stride constants (3), the
+  `CellSlotBase` shape including the §7.2 in-range / out-of-range
+  predicate at the byte boundary (4), the `CellSubarrayIndex`
+  composition including the §4.2 ping-pong `dst_slot - src_slot`
+  delta and the §7.2 byte-offset = element × 4 cross-check (4),
+  the `CellAddrEntry` role-tagged shape (2), the
+  `mc_dest_address` / `mc_source_address` composition covering
+  identity-MV / positive / negative displacements and `usize`
+  wrap / signed underflow rejections (7), the complete
+  `McCellAddressPair::resolve` chain including swapped-role
+  rejection and `McAddressError` propagation for all three
+  arithmetic failure modes plus the §8.2 item 8 self-copy degenerate
+  case (8), and a `CELL_STACK_ENTRY_SIZE` cross-module consistency
+  check linking the new module's `byte_offset()` to the existing
+  `cell_subarray` 4-byte-per-entry constant (1).
+
 - Indeo 3 (IV31 / IV32) spec/05 §5.1 / §5.2 / §5.3
   motion-compensation cell-copy inner-loop kernel. New
   `indeo3::mc_kernel` module surfacing the §5.1 full-pel inner-loop

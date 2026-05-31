@@ -114,6 +114,43 @@
 //! `(a + b) >> 1` SWAR identity with the output-reconstruction
 //! kernel's [`reconstruct::average_7bit`], confirming the
 //! "no separate filter coefficient tables" §2.2 disposition.
+//! Round 15 adds the spec/05 §5.4 / §7.2 cell-position decoding
+//! entry — the cell-state dispatcher's index-arithmetic chain that
+//! resolves the per-cell destination and source pixel-buffer
+//! addresses the round-14 MC fetcher's inner loop consumes:
+//! [`CELL_SLOT_STRIDE`] (`16`, the §7.2 / §4.3 `shl eax, 0x4` at
+//! `IR32_32.DLL!0x10006615`); [`CELL_SLOT_INDEX_MAX`] (`15`, the
+//! §7.2 "cell-slot index 0..15" upper bound); [`CellSlotBase`] /
+//! [`CellSlotBase::from_bank_byte`] surface the post-`shl 0x4`
+//! base index; [`CellSubarrayIndex::dst`] / [`CellSubarrayIndex::src`]
+//! compose `idx_dst = 16 * cell_slot + dst_slot` /
+//! `idx_src = 16 * cell_slot + src_slot` (the §7.2 / §4.3
+//! per-cell sub-array element indices loaded at
+//! `IR32_32.DLL!0x10006638..0x10006641`); [`CellAddrEntry::dst`] /
+//! [`CellAddrEntry::src`] hold the destination / source cell-data
+//! DWORDs tagged with their [`CellAddrRole`] (`Dest` /
+//! `Src`) and carry the §7.2 `[esp+0x38]` extra-offset companion on
+//! the source-role branch; [`mc_dest_address`] composes
+//! `dst_addr = dst_cell_data + cell_pos_aux`, and
+//! [`mc_source_address`] composes
+//! `src_addr = src_cell_data + cell_pos_aux + sign_extend(packed_MV >> 2)`
+//! by chaining the §5.4 cell-base add with the §2.3
+//! [`apply_mv_source_offset`] sign-extending MV displacement.
+//! [`McCellAddressPair::resolve`] runs the complete §7.2 chain in
+//! one entry point and returns the (dst, src) byte-address pair
+//! the MC fetcher's inner loop consumes — with [`McAddressError`]
+//! capturing the four safe-Rust check failures (destination
+//! overflow, source overflow, MV underflow / overflow, and a
+//! role-mismatch type-level guard). Per the §5.4 / §7 chapter
+//! boundary, the module deliberately does not own the `bank[+0x200]`
+//! slot-index LUT or the `bank[+0x700]` cell-position aux LUT (those
+//! per-entry values are §7.5 Extractor territory), does not own the
+//! strip-context per-cell sub-array DWORDs (those are populated by
+//! the spec/03 §6 open-question-4 pre-frame cell-stack setup), does
+//! not perform the §7.2 `[esp+0x34]` boundary-fix-up reduction,
+//! does not perform the §7.3 `(x, y, w, h)` reverse decomposition,
+//! and does not perform the §4.2 `frame_flags` bit 9 source /
+//! destination slot inversion (a per-plane-decoder decision).
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
@@ -125,6 +162,7 @@ mod cell_subarray;
 mod entropy;
 mod header;
 mod macroblock;
+mod mc_address;
 mod mc_kernel;
 mod mc_packed;
 mod mc_table;
@@ -162,6 +200,10 @@ pub use header::{
 pub use macroblock::{
     decode_plane_tree, Cell, CellTree, MacroblockError, NodeCode, VqCell, VqLeaf, VqNull,
     CHROMA_STRIP_WIDTH, LUMA_STRIP_WIDTH,
+};
+pub use mc_address::{
+    mc_dest_address, mc_source_address, CellAddrEntry, CellAddrRole, CellSlotBase,
+    CellSubarrayIndex, McAddressError, McCellAddressPair, CELL_SLOT_INDEX_MAX, CELL_SLOT_STRIDE,
 };
 pub use mc_kernel::{
     mc_both_half_pel_quad, mc_full_pel_row_dword, mc_horiz_half_pel_pair, mc_vert_half_pel_pair,
