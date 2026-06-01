@@ -5,6 +5,52 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 16 — Indeo 3 (IV31 / IV32) ping-pong bank selection
+(`spec/05` §4.2).** Round 16 adds the `indeo3::bank_select` module,
+the typed surface for the `frame_flags` bit 9 source / destination
+slot inversion the per-plane decoder builds at
+`IR32_32.DLL!0x100045b1..0x100045fd` before pushing the
+`[esp+0x54]` / `[esp+0x58]` arguments to the binary-tree walker.
+`BANK_INVERSION_DELTA` (`= 3`) surfaces the §4.2 "plane_idx + 3"
+identity as a named constant aliased to
+`PRIMARY_BANK_SLOTS[i] - SECONDARY_BANK_SLOTS[i]` (cross-checked
+per plane). The `Bank` enum (`Primary` / `Secondary`) carries
+`Bank::from_buffer_selector` (decodes `frame_flags` bit 9 via
+`FrameFlags::buffer_selector()`, matching the parser's
+`test ch, 0x2` on the `frame_flags` high byte), `Bank::opposite()`
+(involution, Primary ⇔ Secondary), and
+`Bank::slot_for_plane(plane_idx)` (with the
+`plane_idx >= PLANE_COUNT` guard matching `strip_slot_index`).
+`McBankAssignment::resolve(flags, plane_idx)` runs the §4.2
+mapping in one entry point and returns the resolved
+`(dst_slot, src_slot, dst_bank)` triple with the source bank
+wired to `dst_bank.opposite()`; `is_self_copy()` flags the §4.2
+"never observed in the binary" same-bank degenerate case (always
+`false` for a well-formed result), and `slot_delta()` is
+identically `BANK_INVERSION_DELTA` for any `resolve()` output.
+Per §4.2 the destination is the bank the *current* frame writes
+into and the source is the bank the *previous* frame wrote into
+(the MC "previous frame" reference); the ping-pong invariant
+holds between consecutive frames whose bit 9 flips — frame N's
+`dst_slot` is frame N+1's `src_slot`. 28 new unit tests cover
+`BANK_INVERSION_DELTA` cross-checks per plane (4), the `Bank`
+constructor against the §4.2 bit-9 / parser convention including
+the "other bits irrelevant" rule (3), `Bank::opposite` involution
+(2), the `is_primary` / `is_secondary` partition (1),
+`Bank::slot_for_plane` against the spec/02 §5.1 tables across all
+three planes (3), the resolved triple for each of the six legal
+`(bit-9, plane)` combinations (6), the `is_self_copy()` /
+`slot_delta()` invariants (3), agreement with the round-8
+`strip_slot_index` for both destination and inverted source (2),
+the source-bank-is-dst-bank-opposite identity (1), out-of-range
+`plane_idx` rejection at the resolver (1), and the ping-pong
+two-frame identity for slots and banks (2). Per §4.2 the module
+deliberately does not perform the strip-context-slot read (that's
+`mc_address::CellSubarrayIndex`), does not load the per-cell
+sub-array DWORDs, and does not own the per-frame bank-state
+machine that flips bit 9 across frames (the encoder owns that
+sequence; the decoder just consults the per-frame value).
+
 **Round 15 — Indeo 3 (IV31 / IV32) cell-position decoding entry
 (`spec/05` §5.4 / §7.2).** Round 15 adds the `indeo3::mc_address`
 module, the bridge between round 14's MC fetcher inner-loop
@@ -570,6 +616,7 @@ if header.bitstream.is_null_frame() {
 | spec/05 §2.3 source-pointer `add esi, sar(packed_mv, 2)` | yes (`apply_mv_source_offset`, `PackedMv::source_address`) |
 | spec/05 §3.3 packing formula `176 * vert + horiz`        | yes (`pack_mv_components`, `MV_PIXEL_OFFSET_ROW_STRIDE`) |
 | spec/05 §3.4 packed-MV byte layout (`bits 31..2`/`bit 1`/`bit 0`) | yes (`PackedMv`, `MV_VERT_HALFPEL_BIT`, `MV_HORIZ_HALFPEL_BIT`, `MV_MODE_BITS_MASK`, `MV_PIXEL_OFFSET_SHIFT`) |
+| spec/05 §4.2 `frame_flags` bit 9 source / destination slot inversion (`0x100045b1..0x100045fd`) | yes (`Bank::from_buffer_selector`, `McBankAssignment::resolve`, `BANK_INVERSION_DELTA`) |
 | spec/05 §5.1 / §5.2 / §5.3 cell-copy inner loop          | deferred (strip pixel-buffer surface) |
 
 "Surfaced" means the field is exposed verbatim on the typed
@@ -745,6 +792,18 @@ chapters that aren't yet in `docs/`.
 * Packed-MV constants: `MV_VERT_HALFPEL_BIT` (0x1),
   `MV_HORIZ_HALFPEL_BIT` (0x2), `MV_MODE_BITS_MASK` (0x3),
   `MV_PIXEL_OFFSET_SHIFT` (2), `MV_PIXEL_OFFSET_ROW_STRIDE` (176).
+* `oxideav_indeo::indeo3::Bank` (`Primary` / `Secondary`,
+  `::from_buffer_selector`, `::opposite`, `::slot_for_plane`,
+  `::is_primary`, `::is_secondary`) — spec/05 §4.2 typed bank
+  enum decoding `frame_flags` bit 9.
+* `oxideav_indeo::indeo3::McBankAssignment::resolve(flags,
+  plane_idx) -> Option<McBankAssignment>` — spec/05 §4.2 ping-pong
+  resolver returning the `(dst_slot, src_slot, dst_bank)` triple
+  the per-plane decoder pushes as `[esp+0x58]` / `[esp+0x54]`.
+  `::src_bank()`, `::is_self_copy()` (`false` for well-formed
+  results), `::slot_delta()` (identically `BANK_INVERSION_DELTA`).
+* `BANK_INVERSION_DELTA` (`= 3`) — the spec/05 §4.2
+  `PRIMARY_BANK_SLOTS[i] - SECONDARY_BANK_SLOTS[i]` identity.
 * Constants: `MAGIC_FRMH`, `REQUIRED_DEC_VERSION`,
   `FRAME_HEADER_LEN`, `BITSTREAM_HEADER_LEN`, `COMBINED_HEADER_LEN`,
   `FLAG_YVU9_8BIT`, `NULL_FRAME_DATA_SIZE_BITS`, `MIN_DIMENSION`,

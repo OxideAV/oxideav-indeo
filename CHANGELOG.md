@@ -8,6 +8,61 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/05 §4.2 ping-pong bank selection — the
+  `frame_flags` bit 9 source / destination slot inversion the
+  per-plane decoder builds at
+  `IR32_32.DLL!0x100045b1..0x100045fd` before pushing the
+  `[esp+0x54]` / `[esp+0x58]` arguments to the binary-tree walker.
+  New `indeo3::bank_select` module surfacing `BANK_INVERSION_DELTA`
+  (`= 3`, the §4.2 "plane_idx + 3" identity aliased to
+  `PRIMARY_BANK_SLOTS[i] - SECONDARY_BANK_SLOTS[i]` and
+  cross-checked per plane), the `Bank` enum (`Primary` / `Secondary`)
+  with `Bank::from_buffer_selector` decoding `frame_flags` bit 9 via
+  the typed `FrameFlags::buffer_selector()` accessor (matching the
+  parser's `test ch, 0x2` on the `frame_flags` high byte at
+  `IR32_32.DLL!0x100045b1`), `Bank::opposite()` (involution,
+  Primary ⇔ Secondary), `Bank::slot_for_plane(plane_idx)` (with the
+  `plane_idx >= PLANE_COUNT` guard matching
+  `strip_slot_index`), and `Bank::is_primary()` /
+  `Bank::is_secondary()` predicates. `McBankAssignment::resolve(flags,
+  plane_idx)` runs the §4.2 mapping in one entry point and returns
+  the resolved `(dst_slot, src_slot, dst_bank)` triple with the
+  source bank wired to `dst_bank.opposite()`. `McBankAssignment::src_bank()`,
+  `is_self_copy()` (always `false` for a well-formed result; the
+  §4.2 "never observed in the binary" same-bank degenerate case),
+  and `slot_delta()` (`abs_diff` of the two slot indices, identically
+  `BANK_INVERSION_DELTA` for any `resolve()` result) round out the
+  surface. Per §4.2 the destination is the bank the *current* frame
+  writes into and the source is the bank the *previous* frame wrote
+  into — i.e. the MC "previous frame" reference; the two slot
+  indices differ by exactly `BANK_INVERSION_DELTA` and the
+  ping-pong invariant holds between consecutive frames whose bit 9
+  flips (frame N's `dst_slot` is frame N+1's `src_slot`). The
+  module deliberately does not perform the strip-context-slot read
+  (that's `mc_address::CellSubarrayIndex`), does not load the
+  per-cell sub-array DWORDs (those are populated by the spec/03 §6
+  open-question-4 pre-frame cell-stack setup), and does not own the
+  per-frame bank-state machine that flips bit 9 across frames (the
+  encoder owns that sequence; the decoder just consults the
+  per-frame value). 28 new unit tests cover `BANK_INVERSION_DELTA`
+  cross-checks per plane (4), the `Bank` constructor against the
+  §4.2 bit-9 / parser convention including the "other bits
+  irrelevant" rule (3), `Bank::opposite` involution (2),
+  `Bank::is_primary` / `is_secondary` partitioning (1),
+  `Bank::slot_for_plane` against the spec/02 §5.1 tables for both
+  banks across all three planes plus the out-of-range plane_idx
+  guard (3), the resolved `(dst, src)` triple for each of the six
+  legal `(bit-9, plane)` combinations (6), the `is_self_copy()` /
+  `slot_delta()` invariants across all combinations (3), agreement
+  with the round-8 `strip_slot_index` for both the destination and
+  the (inverted) source halves (2), the source-bank-is-dst-bank-
+  opposite identity across all combinations (1), the rejection of
+  out-of-range `plane_idx` at the resolver (1), and the ping-pong
+  two-frame identity (frame N's `dst` becomes frame N+1's `src`
+  when bit 9 flips, both for slots and for banks) across all
+  planes (2). The new module is re-exported as `indeo3::Bank`,
+  `indeo3::McBankAssignment`, and `indeo3::BANK_INVERSION_DELTA`.
+
 - Indeo 3 (IV31 / IV32) spec/05 §5.4 / §7.2 cell-position decoding
   entry — the cell-state dispatcher's index-arithmetic chain that
   resolves the per-cell destination and source pixel-buffer

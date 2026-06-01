@@ -151,12 +151,29 @@
 //! does not perform the §7.3 `(x, y, w, h)` reverse decomposition,
 //! and does not perform the §4.2 `frame_flags` bit 9 source /
 //! destination slot inversion (a per-plane-decoder decision).
+//! Round 16 adds the spec/05 §4.2 ping-pong bank-selection surface
+//! the round-15 [`McCellAddressPair::resolve`] entry deferred:
+//! [`Bank`] (the typed primary / secondary bank enum with a
+//! [`Bank::from_buffer_selector`] decoder of `frame_flags` bit 9
+//! per the parser-text `test ch, 0x2` at
+//! `IR32_32.DLL!0x100045b1`), [`BANK_INVERSION_DELTA`] (`= 3`,
+//! the §4.2 "plane_idx + 3" identity surfaced as a named
+//! constant aliased to `PRIMARY_BANK_SLOTS[i] -
+//! SECONDARY_BANK_SLOTS[i]`), and [`McBankAssignment::resolve`]
+//! (the typed `(FrameFlags, plane_idx) → (dst_slot, src_slot,
+//! dst_bank)` mapping the per-plane decoder's
+//! `IR32_32.DLL!0x100045b1..0x100045fd` sequence emits before
+//! pushing `[esp+0x54]` / `[esp+0x58]`, with the source-bank
+//! inversion baked in and a defensive [`McBankAssignment::is_self_copy`]
+//! predicate for the §4.2 "never observed in the binary"
+//! same-bank degenerate case).
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
 //! `docs/video/indeo/indeo3/spec/`. Section references in
 //! doc-comments below cite the chapter named in each module.
 
+mod bank_select;
 mod cell_loop;
 mod cell_subarray;
 mod entropy;
@@ -172,6 +189,7 @@ mod strip_context;
 mod strip_edge;
 mod vq;
 
+pub use bank_select::{Bank, McBankAssignment, BANK_INVERSION_DELTA};
 pub use cell_loop::{
     advance_row, dispatch_cell_preamble, iterate_column_rows, read_cell_position_dword,
     read_cl_row_counter, CellLoopPreamble, CellLoopState, CellRowAdvance, CodebookBankView,
