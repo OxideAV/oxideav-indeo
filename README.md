@@ -5,6 +5,62 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 17 — Indeo 3 (IV31 / IV32) strip pixel-buffer arena
+geometry (`spec/05` §4.1).** Round 17 adds the `indeo3::mc_arena`
+module, the typed §4.1 surface that links round 8's strip-context
+slot layout (the six base-pointer fields at `[ctx+0x00..+0x14]`)
+to round 15's `mc_address` cell-position decoding entry (the
+per-cell `dst_cell_data` / `src_cell_data` DWORDs the MC fetcher
+consumes). `MC_ARENA_LEN` (`= 0x8020`) aliases the round-8
+`PIXEL_BUFFER_ARENA_LEN` heap-block size from
+`IR32_32.DLL!0x10003cdc..0x10003ce3`, with a `const _` cross-check;
+`MC_ARENA_ROW_STRIDE` (`= 0xb0`) is `const _`-checked against
+both `mc_kernel::MC_ROW_STRIDE` and
+`reconstruct::PREDICTOR_ROW_STRIDE`. `STRIP_PIXEL_BUFFER_ALIAS_COUNT`
+(`= 6`) re-exports the §4.1 "six aliases of the strip's pixel
+buffer" identity by its §4.1 name; the
+`StripPixelBufferAlias` enum (`Base0` / `Base1` / `Base2` /
+`Base3` / `Base4` / `Base5`) gives the typed pick of one of the
+six aliases with `from_index(0..6) -> Option<Self>`, `as_index()`,
+and `slot_relative_byte_offset()` returning one of
+`slot_field::BASE_PTR_{0..5}`. `strip_region_bytes(plane_height)`
+runs the §4.1 worked-example arithmetic
+`MC_ARENA_ROW_STRIDE * plane_height_pixels` in `u64`;
+`StripArenaCapacity::for_plane_height` pins the §4.1 footnote
+predicate `region_bytes <= MC_ARENA_LEN` (yielding the boundary
+height `MC_ARENA_LEN / MC_ARENA_ROW_STRIDE = 186`, with the §4.1
+worked-example height 240 flagged as not fitting — surfacing the
+arithmetic discrepancy the §4.1 prose mentions between the arena
+size and the per-strip region size). `base_pointer_aliases_equal`
+encodes the §4.1 / `spec/03 §5.2` "six pointers are aliases of
+the same per-strip region" invariant as a `slot_bytes: &[u8] ->
+Option<bool>` over the six little-endian DWORDs at the slot-
+relative offsets, returning `None` if the slice does not extend
+through the last base-pointer field. 21 new unit tests cover the
+§4.1 arena-geometry constants (3), the alias enum's round-trip
+indexing and out-of-range rejection (4), the alias byte offsets
+against `slot_field::BASE_PTR_*` and the 4-byte-apart DWORD-
+alignment invariant (3), the boundary-with-slot-stride identity
+(1), the `strip_region_bytes` worked example / zero-height /
+no-wrap-on-u32-MAX cases (3), the `StripArenaCapacity` boundary-
+height arithmetic and the §4.1 worked-example "does not fit"
+case (4), the `base_pointer_aliases_equal` well-formed /
+malformed / short-slice / boundary-slice cases (4), and inter-
+module row-stride cross-checks linking `mc_arena` to
+`mc_packed::MV_PIXEL_OFFSET_ROW_STRIDE` and
+`cell_subarray::PER_CELL_EDGE_ROW_STRIDE` (2). Per the §4 chapter
+boundary, the module deliberately does not perform the heap
+allocation itself (the `IR32_32.DLL!0x10003cdc` call is host
+`LocalAlloc` territory), does not enforce per-strip bounds at MC-
+fetcher time (§4.4 the binary itself does not range-check the
+§2.3 source-pointer arithmetic), does not own or populate the
+slot's six base-pointer fields (codec-init at
+`IR32_32.DLL!0x10003edc..0x10003f3a` writes them), does not
+perform the §4.2 ping-pong bank pick or the §4.3 source /
+destination slot inversion (owned by `bank_select`), and does
+not own the arena's per-frame contents (those are written by
+`mc_kernel` and `reconstruct`).
+
 **Round 16 — Indeo 3 (IV31 / IV32) ping-pong bank selection
 (`spec/05` §4.2).** Round 16 adds the `indeo3::bank_select` module,
 the typed surface for the `frame_flags` bit 9 source / destination
