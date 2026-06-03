@@ -8,6 +8,74 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/05 §4.3 source-pointer plumbing —
+  the typed §4.3 surface that links round 16's `bank_select`
+  resolved `(dst_slot, src_slot)` pair to round 15's `mc_address`
+  cell-data DWORD load through the per-plane decoder →
+  cell-state dispatcher stack-frame hand-off the §4.3 four-
+  instruction fragment at
+  `IR32_32.DLL!0x10006638..0x10006641` runs
+  (`sub eax, edi; add eax, [esp + 0x54]; mov edx, [esi + 4 * eax];
+  mov [esp + 0x24], edx`). New `indeo3::mc_source_plumbing` module
+  surfacing the two decoder argument byte-offsets
+  `DECODER_ARG_SRC_SLOT_OFFSET` (`= 0x54`, the source-slot-index
+  argument written by the §4.2 inversion at
+  `IR32_32.DLL!0x100045e9..0x100045fd`) /
+  `DECODER_ARG_DST_SLOT_OFFSET` (`= 0x58`, the destination-slot-
+  index argument written at
+  `IR32_32.DLL!0x100045c3..0x100045d4`), the three cell-state
+  dispatcher scratch-slot byte-offsets
+  `DISPATCHER_SCRATCH_SRC_DATA_OFFSET` (`= 0x24`, the source
+  cell-data DWORD written by the §4.3 fragment's `mov [esp+0x24],
+  edx`), `DISPATCHER_SCRATCH_DST_DATA_OFFSET` (`= 0x28`, the
+  destination cell-data DWORD) /
+  `DISPATCHER_SCRATCH_EXTRA_OFFSET_OFFSET` (`= 0x38`, the §7.2
+  `idx_src + 1` companion that the §5.5 boundary fix-up
+  consumes), and the element-to-byte index shift
+  `STRIP_CTX_ARRAY_ELEMENT_SHIFT` (`= 2`, the §4.3 line 3
+  `mov edx, [esi + 4 * eax]`). `const _` cross-checks pin the
+  `+ 4` adjacency between the two decoder-arg slots and between
+  the two cell-data dispatcher scratch slots. The
+  `DecoderStackArg` enum (`SrcSlot` / `DstSlot`) typed-picks one
+  of the two decoder arguments with `byte_offset()`, `role()`
+  (returning the round-15 `CellAddrRole`), and
+  `dispatcher_scratch()` linking it to its companion
+  `DispatcherScratch`; the `DispatcherScratch` enum
+  (`SrcCellData` / `DstCellData` / `ExtraOffset`) typed-picks one
+  of the three scratch slots with `byte_offset()`, `role()`
+  (extra-offset carries the source role per the §7.2
+  `idx_src + 1` derivation), and `is_source_companion()` (`true`
+  only for `ExtraOffset`). `SourcePlumbingPair::for_role` runs
+  the §4.3 mapping in one entry point and returns the typed
+  `(decoder_arg, dispatcher_scratch)` pair whose two halves share
+  the same role. `is_self_copy_degenerate(dst_slot, src_slot)`
+  surfaces the §4.3 closing predicate
+  (`dst_slot == src_slot` ⇒ self-copy); the §4.3 prose's
+  "no such frame is observed in the binary" is cross-validated
+  against `McBankAssignment::is_self_copy` on every well-formed
+  §4.2 inversion (always `false`, since the §4.2 inversion always
+  produces slots `BANK_INVERSION_DELTA = 3` apart). 33 new unit
+  tests cover the five offset constants (3 + 3 + 3 distinct-slots
+  / adjacency / spec-match), the element-index shift identity
+  (1), the two `DecoderStackArg` variants' getter outputs (6),
+  the three `DispatcherScratch` variants' getter outputs (7),
+  the `SourcePlumbingPair::for_role` round-trip identity over
+  both roles (5), the `is_self_copy_degenerate` predicate over
+  equal slots / distinct slots / every `McBankAssignment::resolve`
+  output / the `McBankAssignment::is_self_copy` agreement (4),
+  and the scratch-vs-arg cross-frame disjoint-ranges invariant
+  (1). Per the §4 chapter boundary, the module deliberately does
+  not perform the cell-data DWORD load itself (owned by
+  `mc_address`), does not resolve `(dst_slot, src_slot)` (owned
+  by `bank_select`), does not perform the §2.3 source-pointer
+  arithmetic (owned by `apply_mv_source_offset`), and does not
+  enforce per-strip bounds (per §4.4 the binary itself does not
+  either). Spec source:
+  `docs/video/indeo/indeo3/spec/05-motion-compensation.md` §4.3
+  cross-referenced with `spec/02 §6` table rows 2-3 and `spec/05
+  §7.2` for the dispatcher-scratch chain. Total `cargo test -p
+  oxideav-indeo` count rises to **374 unit tests** (was 341).
+
 - Indeo 3 (IV31 / IV32) spec/05 §4.1 strip pixel-buffer arena
   geometry — the typed §4.1 surface that links round 8's strip-
   context slot layout (the six base-pointer fields at

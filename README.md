@@ -5,6 +5,66 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 18 — Indeo 3 (IV31 / IV32) §4.3 source-pointer plumbing
+(`spec/05` §4.3).** Round 18 adds the `indeo3::mc_source_plumbing`
+module, the typed surface for the per-plane decoder →
+cell-state dispatcher stack-frame hand-off the §4.3 four-instruction
+fragment at `IR32_32.DLL!0x10006638..0x10006641` runs:
+`sub eax, edi; add eax, [esp + 0x54]; mov edx, [esi + 4 * eax];
+mov [esp + 0x24], edx`. Round 16 (`bank_select`) resolved the §4.2
+`(dst_slot, src_slot)` pair; round 15 (`mc_address`) resolved the
+§7.2 cell-data DWORD load; round 17 (`mc_arena`) pinned the §4.1
+arena the six per-slot base pointers point into. Round 18 owns the
+§4.3 stack-frame link between those three.
+`DECODER_ARG_SRC_SLOT_OFFSET` (`= 0x54`) /
+`DECODER_ARG_DST_SLOT_OFFSET` (`= 0x58`) pin the two per-plane
+decoder argument byte-offsets the §4.2 inversion at
+`IR32_32.DLL!0x100045c3..0x100045fd` writes into;
+`DISPATCHER_SCRATCH_SRC_DATA_OFFSET` (`= 0x24`) /
+`DISPATCHER_SCRATCH_DST_DATA_OFFSET` (`= 0x28`) /
+`DISPATCHER_SCRATCH_EXTRA_OFFSET_OFFSET` (`= 0x38`) pin the three
+cell-state dispatcher scratch slots the §4.3 / §7.2 fragments write
+the resolved cell-data DWORDs to;
+`STRIP_CTX_ARRAY_ELEMENT_SHIFT` (`= 2`) surfaces the `mov edx, [esi
++ 4 * eax]` element-to-byte shift. `const _` cross-checks pin the
+`+ 4` adjacency between the source / destination decoder-arg slots
+and between the source / destination cell-data dispatcher scratch
+slots. The `DecoderStackArg` enum (`SrcSlot` / `DstSlot`) typed-
+picks one of the two decoder arguments with `byte_offset()`,
+`role()` (returning the [`CellAddrRole`] surface from round 15),
+and `dispatcher_scratch()` linking it to its companion
+[`DispatcherScratch`] cell-data slot; the `DispatcherScratch` enum
+(`SrcCellData` / `DstCellData` / `ExtraOffset`) typed-picks one of
+the three scratch slots with `byte_offset()`, `role()`, and
+`is_source_companion()` (`true` only for `ExtraOffset`, the §7.2
+`idx_src + 1` companion that the §5.5 boundary fix-up consumes).
+`SourcePlumbingPair::for_role` runs the §4.3 mapping in one entry
+point and returns the typed `(decoder_arg, dispatcher_scratch)`
+pair whose two halves share the same `CellAddrRole`.
+`is_self_copy_degenerate(dst_slot, src_slot)` surfaces the §4.3
+closing predicate "`dst_slot == src_slot` ⇒ self-copy" — the §4.3
+prose notes "no such frame is observed in the binary", and the
+predicate cross-validates against `McBankAssignment::is_self_copy`
+on every well-formed §4.2 inversion (always `false`). 33 new unit
+tests cover the five offset constants (3 + 3 + 3 distinct-slots /
+adjacency / spec-match), the element-index shift identity (1), the
+two `DecoderStackArg` variants' `byte_offset` / `role` / paired-
+`dispatcher_scratch` getters (6), the three `DispatcherScratch`
+variants' `byte_offset` / `role` / `is_source_companion`
+predicates (7), the `SourcePlumbingPair::for_role` round-trip
+identity over both roles (5), the `is_self_copy_degenerate`
+predicate over equal slots (1) / distinct slots (1) / every
+`McBankAssignment::resolve` output (1) / the
+`McBankAssignment::is_self_copy` agreement (1), and the
+scratch-vs-arg cross-frame disjoint-ranges documentation
+invariant (1). Per the §4 chapter boundary, the module
+deliberately does not perform the cell-data DWORD load itself
+(owned by `mc_address`), does not resolve `(dst_slot, src_slot)`
+(owned by `bank_select`), does not perform the §2.3 source-pointer
+arithmetic (owned by `apply_mv_source_offset`), and does not
+enforce per-strip bounds (per §4.4 the binary itself does not
+either).
+
 **Round 17 — Indeo 3 (IV31 / IV32) strip pixel-buffer arena
 geometry (`spec/05` §4.1).** Round 17 adds the `indeo3::mc_arena`
 module, the typed §4.1 surface that links round 8's strip-context
@@ -673,6 +733,7 @@ if header.bitstream.is_null_frame() {
 | spec/05 §3.3 packing formula `176 * vert + horiz`        | yes (`pack_mv_components`, `MV_PIXEL_OFFSET_ROW_STRIDE`) |
 | spec/05 §3.4 packed-MV byte layout (`bits 31..2`/`bit 1`/`bit 0`) | yes (`PackedMv`, `MV_VERT_HALFPEL_BIT`, `MV_HORIZ_HALFPEL_BIT`, `MV_MODE_BITS_MASK`, `MV_PIXEL_OFFSET_SHIFT`) |
 | spec/05 §4.2 `frame_flags` bit 9 source / destination slot inversion (`0x100045b1..0x100045fd`) | yes (`Bank::from_buffer_selector`, `McBankAssignment::resolve`, `BANK_INVERSION_DELTA`) |
+| spec/05 §4.3 source-pointer plumbing (`0x10006638..0x10006641`) | yes (`DecoderStackArg`, `DispatcherScratch`, `SourcePlumbingPair`, `DECODER_ARG_SRC_SLOT_OFFSET`, `DECODER_ARG_DST_SLOT_OFFSET`, `DISPATCHER_SCRATCH_SRC_DATA_OFFSET`, `DISPATCHER_SCRATCH_DST_DATA_OFFSET`, `DISPATCHER_SCRATCH_EXTRA_OFFSET_OFFSET`, `STRIP_CTX_ARRAY_ELEMENT_SHIFT`, `is_self_copy_degenerate`) |
 | spec/05 §5.1 / §5.2 / §5.3 cell-copy inner loop          | deferred (strip pixel-buffer surface) |
 
 "Surfaced" means the field is exposed verbatim on the typed
@@ -860,6 +921,28 @@ chapters that aren't yet in `docs/`.
   results), `::slot_delta()` (identically `BANK_INVERSION_DELTA`).
 * `BANK_INVERSION_DELTA` (`= 3`) — the spec/05 §4.2
   `PRIMARY_BANK_SLOTS[i] - SECONDARY_BANK_SLOTS[i]` identity.
+* `oxideav_indeo::indeo3::DecoderStackArg` (`SrcSlot` / `DstSlot`,
+  `::byte_offset`, `::role`, `::dispatcher_scratch`) — spec/05 §4.3
+  typed pick of one of the two per-plane decoder stack-frame
+  arguments at `[esp+0x54]` (source slot) / `[esp+0x58]`
+  (destination slot).
+* `oxideav_indeo::indeo3::DispatcherScratch` (`SrcCellData` /
+  `DstCellData` / `ExtraOffset`, `::byte_offset`, `::role`,
+  `::is_source_companion`) — spec/05 §4.3 / §7.2 typed pick of one
+  of the three cell-state dispatcher scratch slots at `[esp+0x24]`
+  / `[esp+0x28]` / `[esp+0x38]`.
+* `oxideav_indeo::indeo3::SourcePlumbingPair::for_role(role)` —
+  spec/05 §4.3 typed `(decoder_arg, dispatcher_scratch)` pair,
+  with `::decoder_arg()`, `::dispatcher_scratch()`, `::role()`.
+* `oxideav_indeo::indeo3::is_self_copy_degenerate(dst_slot,
+  src_slot) -> bool` — spec/05 §4.3 closing predicate
+  (`dst_slot == src_slot` ⇒ self-copy).
+* Source-pointer-plumbing constants: `DECODER_ARG_SRC_SLOT_OFFSET`
+  (`0x54`), `DECODER_ARG_DST_SLOT_OFFSET` (`0x58`),
+  `DISPATCHER_SCRATCH_SRC_DATA_OFFSET` (`0x24`),
+  `DISPATCHER_SCRATCH_DST_DATA_OFFSET` (`0x28`),
+  `DISPATCHER_SCRATCH_EXTRA_OFFSET_OFFSET` (`0x38`),
+  `STRIP_CTX_ARRAY_ELEMENT_SHIFT` (`2`).
 * Constants: `MAGIC_FRMH`, `REQUIRED_DEC_VERSION`,
   `FRAME_HEADER_LEN`, `BITSTREAM_HEADER_LEN`, `COMBINED_HEADER_LEN`,
   `FLAG_YVU9_8BIT`, `NULL_FRAME_DATA_SIZE_BITS`, `MIN_DIMENSION`,

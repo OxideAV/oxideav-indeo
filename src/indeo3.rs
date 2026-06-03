@@ -183,6 +183,7 @@ mod mc_address;
 mod mc_arena;
 mod mc_kernel;
 mod mc_packed;
+mod mc_source_plumbing;
 mod mc_table;
 mod picture_layer;
 mod reconstruct;
@@ -239,6 +240,12 @@ pub use mc_kernel::{
 pub use mc_packed::{
     apply_mv_source_offset, pack_mv_components, McDispatchMode, PackedMv, MV_HORIZ_HALFPEL_BIT,
     MV_MODE_BITS_MASK, MV_PIXEL_OFFSET_ROW_STRIDE, MV_PIXEL_OFFSET_SHIFT, MV_VERT_HALFPEL_BIT,
+};
+pub use mc_source_plumbing::{
+    is_self_copy_degenerate, DecoderStackArg, DispatcherScratch, SourcePlumbingPair,
+    DECODER_ARG_DST_SLOT_OFFSET, DECODER_ARG_SRC_SLOT_OFFSET, DISPATCHER_SCRATCH_DST_DATA_OFFSET,
+    DISPATCHER_SCRATCH_EXTRA_OFFSET_OFFSET, DISPATCHER_SCRATCH_SRC_DATA_OFFSET,
+    STRIP_CTX_ARRAY_ELEMENT_SHIFT,
 };
 pub use mc_table::{
     mv_table_entry_byte_offset, MvIndexFetch, MvIndexValidity, MvTableParserArm, MV_HALFPEL_HORIZ,
