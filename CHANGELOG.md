@@ -8,6 +8,67 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/05 §5.5 chroma-plane scaling surface —
+  the typed §5.5 disposition surface that pins the MC fetcher's
+  behaviour on the chroma slot indices `1, 2, 4, 5` relative to the
+  luma slot indices `0, 3`. New `indeo3::mc_chroma` module surfacing
+  `LUMA_PIXEL_PER_CHROMA_PIXEL` (`= 4`, the §5.5 third-bullet 4:1
+  horizontal × 4:1 vertical YVU9 subsampling ratio) with a `const
+  _` cross-check against the macroblock-layer `LUMA_STRIP_WIDTH` /
+  `CHROMA_STRIP_WIDTH` split (`160 == 40 * 4`),
+  `CHROMA_PACKED_MV_FACTOR_IS_BUFFER_STRIDE` (`= true`, the §5.5
+  fourth-bullet disposition that the §3.3 packed-MV `176`-factor is
+  the buffer-allocated row stride and not a plane-resolution
+  constant) with a `const _` cross-check that
+  `MV_PIXEL_OFFSET_ROW_STRIDE == MC_ARENA_ROW_STRIDE`,
+  `MC_KERNEL_GEOMETRY_IS_PLANE_ROLE_INVARIANT` (`= true`, the §5.5
+  first-bullet disposition that the MC fetcher's inner-loop
+  geometry constants `MC_BAND_BYTE_STRIDE` / `MC_BAND_ROWS` /
+  `MC_BYTES_PER_DWORD` / `MC_INNER_LOOP_BYTES_PER_ITER` /
+  `MC_INNER_LOOP_DWORDS_PER_ITER` are not parameterised on plane
+  role) re-exported under the long-form alias
+  `McKernelGeometryIsPlaneRoleInvariant`,
+  `MvPixelOffsetInterpretation::LumaOrChromaUniformBufferStride`
+  (the §5.5 fourth-bullet typed-surface enum with a single variant
+  pinning the uniform-buffer-stride interpretation) with
+  `pixel_offset_row_stride()` returning the §3.3 row-stride factor
+  `0xb0`, and `McPlaneRole` (`Luma` / `Chroma`) as a local typed
+  surface for the §5.1 slot-index split with
+  `from_strip_slot_index(slot) -> Option<McPlaneRole>` (`0, 3` ⇒
+  `Luma`; `1, 2, 4, 5` ⇒ `Chroma`; other ⇒ `None`),
+  `strip_visible_width()` returning `LUMA_STRIP_WIDTH` /
+  `CHROMA_STRIP_WIDTH`, `strip_allocated_row_stride()` returning
+  the constant `MC_ARENA_ROW_STRIDE` for both roles (the §5.5
+  second bullet "the row stride remains the constant `0xb0`"),
+  `cell_size_subsampling_ratio()` (`1` for luma, `4` for chroma),
+  `is_luma()` / `is_chroma()` predicates, and `chroma_cell_size(
+  luma_width, luma_height) -> Option<(u32, u32)>` const associated
+  function that applies the §5.5 third-bullet integer-multiple
+  4:1 / 4:1 subsampling (returns `None` for non-multiple inputs).
+  30 new unit tests cover the subsampling-ratio constant (2),
+  the packed-MV buffer-stride disposition (2), the kernel-geometry
+  invariance flag and its constants (2), the `MvPixelOffsetInterpretation`
+  enum (2), the slot-index classifier across luma (1), chroma (1),
+  out-of-range (1), and the full in-range `0..=5` coverage (1), the
+  visible-width getters for luma (1) / chroma (1), the
+  allocated-row-stride getters for luma (1) / chroma (1) / cross-
+  role equality (1), the cell-size subsampling-ratio getters (2),
+  the role predicates (1), the `chroma_cell_size` happy paths (3:
+  4×4 / 16×16 / 160×240) and rejections (2: non-multiple width /
+  non-multiple height) and zero-edge (1), and cross-module sanity
+  (4: chroma both-axis subsampling round-trip, visible-width vs
+  luma ratio, row-stride independent of visible width, packed-MV
+  interpretation disposition). Per the §5.5 chapter boundary, the
+  module deliberately does not perform the codec-init population
+  of the codebook-bank `+0x000` / `+0x100` sub-tables with chroma
+  cell sizes (host-side per `spec/04 §5.3`), does not perform the
+  §5.1 inner-loop reads / writes (owned by `mc_kernel`), does not
+  perform the §2.3 source-pointer arithmetic (owned by
+  `apply_mv_source_offset`), and does not derive the luma vs
+  chroma slot-index split itself beyond the §5.1 cross-reference
+  (`strip_context::PlaneRole` owns the strip-context-array
+  dimension's split; this module's `McPlaneRole` is the smaller
+  §5.5-scoped surface for the MC fetcher only).
 - Indeo 3 (IV31 / IV32) spec/05 §4.4 "no explicit boundary check"
   surface — the typed disposition for the absence of a bounds
   check on the §2.3 source-pointer arithmetic. New

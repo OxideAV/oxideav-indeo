@@ -5,6 +5,61 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 20 — Indeo 3 (IV31 / IV32) §5.5 chroma-plane scaling
+surface (`spec/05` §5.5).** Round 20 adds the `indeo3::mc_chroma`
+module, the typed §5.5 disposition surface that pins the MC
+fetcher's behaviour on the chroma slot indices `1, 2, 4, 5`
+relative to the luma slot indices `0, 3`. The §5.5 four-bullet
+disposition is: (1) the MC inner-loop kernel geometry is
+plane-role-invariant, (2) the strip's allocated row stride
+remains the constant `0xb0` for chroma (not the visible 40), (3)
+the codebook-bank cell-size populations are 4:1 / 4:1 subsampled
+in each axis when the slot is chroma, and (4) the packed-MV's
+`176`-factor is a buffer-allocation constant, not a
+plane-resolution constant — applies uniformly across luma and
+chroma. `LUMA_PIXEL_PER_CHROMA_PIXEL` (`= 4`) pins the §5.5
+third-bullet YVU9 subsampling ratio with a `const _` cross-check
+against the macroblock-layer `LUMA_STRIP_WIDTH` /
+`CHROMA_STRIP_WIDTH` split (`160 == 40 * 4`).
+`CHROMA_PACKED_MV_FACTOR_IS_BUFFER_STRIDE` (`= true`) surfaces
+the §5.5 fourth-bullet disposition with a `const _` cross-check
+that `MV_PIXEL_OFFSET_ROW_STRIDE == MC_ARENA_ROW_STRIDE`.
+`MC_KERNEL_GEOMETRY_IS_PLANE_ROLE_INVARIANT` (`= true`,
+re-exported as `McKernelGeometryIsPlaneRoleInvariant`) pins the
+§5.5 first-bullet disposition that the MC fetcher's inner-loop
+geometry constants are not parameterised on plane role. The
+`MvPixelOffsetInterpretation` enum carries the §5.5 fourth-bullet
+disposition's single variant
+`LumaOrChromaUniformBufferStride` with `pixel_offset_row_stride()`
+returning the §3.3 row-stride factor `0xb0`. The local
+`McPlaneRole` enum (`Luma` / `Chroma`) carries the §5.1 slot-
+index split for the MC fetcher only (separate from
+`strip_context::PlaneRole` which carries different invariants);
+`from_strip_slot_index(slot)` classifies `0, 3` ⇒ `Luma`,
+`1, 2, 4, 5` ⇒ `Chroma`, other ⇒ `None`. `strip_visible_width()`
+returns `160` (luma) or `40` (chroma); `strip_allocated_row_stride()`
+returns `0xb0` for both (the §5.5 second-bullet disposition);
+`cell_size_subsampling_ratio()` returns `1` (luma) or `4`
+(chroma); `is_luma()` / `is_chroma()` are disjoint predicates;
+`chroma_cell_size(luma_width, luma_height) -> Option<(u32, u32)>`
+applies the §5.5 third-bullet integer-multiple 4:1 / 4:1
+subsampling (returns `None` for non-multiple inputs). 30 new unit
+tests cover the subsampling-ratio constant (2), the packed-MV
+buffer-stride disposition (2), the kernel-geometry invariance
+flag and its constants (2), the `MvPixelOffsetInterpretation`
+enum (2), the slot-index classifier across luma / chroma /
+out-of-range / full in-range coverage (4), the visible-width and
+row-stride getters (5), the subsampling-ratio getters and role
+predicates (3), the `chroma_cell_size` happy paths / rejections
+/ zero-edge (6), and cross-module sanity (4). Per the §5.5
+chapter boundary, the module deliberately does not perform the
+codec-init population of the codebook-bank `+0x000` / `+0x100`
+sub-tables (host-side per `spec/04 §5.3`), does not perform the
+§5.1 inner-loop reads / writes (owned by `mc_kernel`), does not
+perform the §2.3 source-pointer arithmetic (owned by
+`apply_mv_source_offset`), and does not derive the luma vs
+chroma slot-index split itself beyond the §5.1 cross-reference.
+
 **Round 19 — Indeo 3 (IV31 / IV32) §4.4 "no explicit boundary
 check" surface (`spec/05` §4.4).** Round 19 adds the
 `indeo3::mc_bounds` module, the typed §4.4 disposition surface
