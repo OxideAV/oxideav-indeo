@@ -8,6 +8,62 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/05 §4.4 "no explicit boundary check"
+  surface — the typed disposition for the absence of a bounds
+  check on the §2.3 source-pointer arithmetic. New
+  `indeo3::mc_bounds` module surfacing the `MC_NO_BOUNDARY_CHECK`
+  `const`-`true` flag (the §4.4 paragraph 1 disposition that the
+  parser does not validate the §2.3 `add esi, sign_extend(packed >>
+  2)` against the source strip's allocated buffer), the
+  `SourcePointerBoundsCheck` enum (`BinaryDoesNotCheck` /
+  `CallerOptsIn`) for documentation-time selection of the binary
+  vs safe-Rust-opt-in path, the `MvSourceOffsetClass` enum
+  (`InRegion` / `OutOfRegion` / `Underflow`) classifying the
+  resulting source-pointer byte address against a supplied strip
+  region, and the `mv_source_offset_in_strip_region(dst_cell_base,
+  mv_offset, strip_region_bytes_total) -> MvSourceOffsetClass`
+  const classifier that surfaces the §4.4 paragraph 3 opt-in
+  check without consuming the §2.3 arithmetic itself.
+  `STRIP_REGION_LUMA_240_BYTES` (`= 0xa500`) pins the §4.4
+  paragraph 2 first-bullet worked-example region size (`0xb0 *
+  240` for a 240-pixel-tall luma plane) with `const _`
+  cross-checks against the §4.1 `strip_region_bytes(240)` formula
+  and the §4.4 prose's explicit `0xa500` / decimal `42_240`
+  figures. `STRIP_REGION_LUMA_240_FITS_IN_ARENA` (`= false`)
+  pins the §4.1-footnote-tracked discrepancy that the §4.4 prose's
+  "far smaller than the 0x8020-byte arena's total" claim does
+  *not* hold numerically (`0xa500 > 0x8020`), matching round 17
+  mc_arena's `StripArenaCapacity::fits_in_arena` disposition.
+  `PaddingPixelPreservation` enum (`DeterministicAtCodecInit` /
+  `PreservedAcrossFramesByStripEdgeFixup`) carries the §4.4
+  paragraph 2 second-bullet "the strip allocator initialises the
+  buffer to a deterministic pattern at codec init / the edge
+  fix-up loops preserve those padding pixels across frames"
+  two-half disposition as a typed surface linking `spec/02 §7`
+  codec init to round 11's `StripEdgeFixupDims`. 27 new unit
+  tests cover the disposition flag (1), the worked-example
+  constants and the arena-discrepancy assertion (3),
+  `SourcePointerBoundsCheck` predicates (3), `MvSourceOffsetClass`
+  predicates (3), `mv_source_offset_in_strip_region` happy paths
+  (3: zero-MV / positive-in-region / negative-in-region),
+  out-of-region edges (4: past-end / at-region-end /
+  one-past-end / one-under-end), underflow edges (3: -0x200 from
+  0x100 / -0x100 from 0x100 in-bounds / -0x101 from 0x100
+  underflow), zero-size region (1), saturating add at
+  `u64::MAX` (1), `PaddingPixelPreservation` predicates (3), and
+  cross-module sanity (2: canonical row stride / mid-region
+  zero-MV). Per the §4.4 chapter boundary, the module
+  deliberately does not perform the §2.3 source-pointer
+  arithmetic itself (owned by `apply_mv_source_offset`), does not
+  own the strip allocator or its deterministic-pattern fill
+  (host-side per `spec/02 §7`), does not perform the §5.4
+  strip-edge fix-up (owned by `StripEdgeFixupDims` /
+  `StripEdgeRowIter`), does not range-check `dst_cell_base`
+  against the strip region (assumed in-range from the §7.2
+  `mc_dest_address` chain), and never indicates a malformed
+  stream — per §4.4 the binary "tolerates [out-of-region MVs]
+  without faulting; they are not malformed from the decoder's
+  perspective".
 - Indeo 3 (IV31 / IV32) spec/05 §4.3 source-pointer plumbing —
   the typed §4.3 surface that links round 16's `bank_select`
   resolved `(dst_slot, src_slot)` pair to round 15's `mc_address`

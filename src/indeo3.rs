@@ -181,6 +181,7 @@ mod header;
 mod macroblock;
 mod mc_address;
 mod mc_arena;
+mod mc_bounds;
 mod mc_kernel;
 mod mc_packed;
 mod mc_source_plumbing;
@@ -228,6 +229,11 @@ pub use mc_address::{
 pub use mc_arena::{
     base_pointer_aliases_equal, strip_region_bytes, StripArenaCapacity, StripPixelBufferAlias,
     MC_ARENA_LEN, MC_ARENA_ROW_STRIDE, STRIP_PIXEL_BUFFER_ALIAS_COUNT,
+};
+pub use mc_bounds::{
+    mv_source_offset_in_strip_region, MvSourceOffsetClass, PaddingPixelPreservation,
+    SourcePointerBoundsCheck, MC_NO_BOUNDARY_CHECK, STRIP_REGION_LUMA_240_BYTES,
+    STRIP_REGION_LUMA_240_FITS_IN_ARENA,
 };
 pub use mc_kernel::{
     mc_both_half_pel_quad, mc_full_pel_row_dword, mc_horiz_half_pel_pair, mc_vert_half_pel_pair,

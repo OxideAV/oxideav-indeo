@@ -5,6 +5,65 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 19 — Indeo 3 (IV31 / IV32) §4.4 "no explicit boundary
+check" surface (`spec/05` §4.4).** Round 19 adds the
+`indeo3::mc_bounds` module, the typed §4.4 disposition surface
+that pins the *absence* of a boundary check on the §2.3 source-
+pointer arithmetic — the §4.4 paragraph 1 disposition "the parser
+does not validate that `pixel_offset` (the high 30 bits of the
+packed MV, signed) addresses a byte within the source strip's
+allocated buffer". `MC_NO_BOUNDARY_CHECK` (`= true`) surfaces the
+disposition as a typed `const`-`true` flag callers reference at
+the call site so the disposition is greppable from any audit of
+the §2.3 [`apply_mv_source_offset`] call graph. The
+`SourcePointerBoundsCheck` enum (`BinaryDoesNotCheck` /
+`CallerOptsIn`) names the two documentation-time call-site
+paths: the binary path (no check) vs the safe-Rust opt-in path
+(invoke the §4.4 paragraph 3 classifier before the §2.3 add). The
+`MvSourceOffsetClass` enum (`InRegion` / `OutOfRegion` /
+`Underflow`) classifies a §4.4 source-pointer offset against a
+supplied strip region: `InRegion` ⇒ the §5.1 MC fetcher reads
+valid strip-pixel bytes; `OutOfRegion` ⇒ the §4.4 paragraph 1
+"decoder reads from whatever bytes happen to occupy that part of
+the heap arena" case; `Underflow` ⇒ the signed `add esi, edx`
+goes below zero. `mv_source_offset_in_strip_region(dst_cell_base,
+mv_offset, strip_region_bytes_total)` runs the §4.4 paragraph 3
+classification in one `const` entry point, separately from the
+§2.3 arithmetic itself. `STRIP_REGION_LUMA_240_BYTES` (`= 0xa500`
+= 42_240) pins the §4.4 paragraph 2 first-bullet worked-example
+region size (`0xb0 * 240` for a 240-pixel-tall luma plane) with
+`const _` cross-checks against the §4.1 `strip_region_bytes(240)`
+formula and the §4.4 prose's explicit `0xa500` / decimal `42_240`
+figures. `STRIP_REGION_LUMA_240_FITS_IN_ARENA` (`= false`) pins
+the §4.1 footnote discrepancy that the §4.4 prose's "far smaller
+than the 0x8020-byte arena's total" claim does *not* hold
+numerically (`0xa500 > 0x8020`), matching round 17 mc_arena's
+`StripArenaCapacity::fits_in_arena` disposition. The
+`PaddingPixelPreservation` enum (`DeterministicAtCodecInit` /
+`PreservedAcrossFramesByStripEdgeFixup`) carries the §4.4
+paragraph 2 second-bullet two-half disposition as a typed
+surface linking `spec/02 §7` codec init to round 11's
+`StripEdgeFixupDims`. 27 new unit tests cover the disposition
+flag (1, with `core::hint::black_box` defeating clippy's
+constant-folding lint), the worked-example constants and the
+arena-discrepancy assertion (3), `SourcePointerBoundsCheck`
+predicates (3), `MvSourceOffsetClass` predicates (3),
+`mv_source_offset_in_strip_region` happy paths (3),
+out-of-region edges (4), underflow edges (3), zero-size region
+(1), saturating add at `u64::MAX` (1), `PaddingPixelPreservation`
+predicates (3), and cross-module sanity (2). Per the §4.4
+chapter boundary, the module deliberately does not perform the
+§2.3 source-pointer arithmetic itself (owned by
+`apply_mv_source_offset`), does not own the strip allocator or
+its deterministic-pattern fill (host-side per `spec/02 §7`),
+does not perform the §5.4 strip-edge fix-up (owned by
+`StripEdgeFixupDims` / `StripEdgeRowIter`), does not range-check
+`dst_cell_base` itself against the strip region (assumed in-range
+from the §7.2 `mc_dest_address` chain), and never indicates a
+malformed stream — per §4.4 the binary "tolerates [out-of-region
+MVs] without faulting; they are not malformed from the decoder's
+perspective".
+
 **Round 18 — Indeo 3 (IV31 / IV32) §4.3 source-pointer plumbing
 (`spec/05` §4.3).** Round 18 adds the `indeo3::mc_source_plumbing`
 module, the typed surface for the per-plane decoder →
@@ -734,6 +793,7 @@ if header.bitstream.is_null_frame() {
 | spec/05 §3.4 packed-MV byte layout (`bits 31..2`/`bit 1`/`bit 0`) | yes (`PackedMv`, `MV_VERT_HALFPEL_BIT`, `MV_HORIZ_HALFPEL_BIT`, `MV_MODE_BITS_MASK`, `MV_PIXEL_OFFSET_SHIFT`) |
 | spec/05 §4.2 `frame_flags` bit 9 source / destination slot inversion (`0x100045b1..0x100045fd`) | yes (`Bank::from_buffer_selector`, `McBankAssignment::resolve`, `BANK_INVERSION_DELTA`) |
 | spec/05 §4.3 source-pointer plumbing (`0x10006638..0x10006641`) | yes (`DecoderStackArg`, `DispatcherScratch`, `SourcePlumbingPair`, `DECODER_ARG_SRC_SLOT_OFFSET`, `DECODER_ARG_DST_SLOT_OFFSET`, `DISPATCHER_SCRATCH_SRC_DATA_OFFSET`, `DISPATCHER_SCRATCH_DST_DATA_OFFSET`, `DISPATCHER_SCRATCH_EXTRA_OFFSET_OFFSET`, `STRIP_CTX_ARRAY_ELEMENT_SHIFT`, `is_self_copy_degenerate`) |
+| spec/05 §4.4 "no explicit boundary check" disposition    | yes (`MC_NO_BOUNDARY_CHECK`, `SourcePointerBoundsCheck`, `MvSourceOffsetClass`, `mv_source_offset_in_strip_region`, `STRIP_REGION_LUMA_240_BYTES`, `STRIP_REGION_LUMA_240_FITS_IN_ARENA`, `PaddingPixelPreservation`) |
 | spec/05 §5.1 / §5.2 / §5.3 cell-copy inner loop          | deferred (strip pixel-buffer surface) |
 
 "Surfaced" means the field is exposed verbatim on the typed
@@ -943,6 +1003,34 @@ chapters that aren't yet in `docs/`.
   `DISPATCHER_SCRATCH_DST_DATA_OFFSET` (`0x28`),
   `DISPATCHER_SCRATCH_EXTRA_OFFSET_OFFSET` (`0x38`),
   `STRIP_CTX_ARRAY_ELEMENT_SHIFT` (`2`).
+* `oxideav_indeo::indeo3::MC_NO_BOUNDARY_CHECK` (`= true`) —
+  spec/05 §4.4 paragraph 1 disposition flag: the binary performs
+  no bounds check on the §2.3 source-pointer arithmetic.
+* `oxideav_indeo::indeo3::SourcePointerBoundsCheck`
+  (`BinaryDoesNotCheck` / `CallerOptsIn`, `::is_binary_path`,
+  `::is_caller_opts_in`) — spec/05 §4.4 typed call-site
+  disposition.
+* `oxideav_indeo::indeo3::MvSourceOffsetClass` (`InRegion` /
+  `OutOfRegion` / `Underflow`, `::is_in_region`,
+  `::is_out_of_region`, `::is_underflow`, `::is_out_of_bounds`) —
+  spec/05 §4.4 per-call classification of a source-pointer offset
+  against a supplied strip region.
+* `oxideav_indeo::indeo3::mv_source_offset_in_strip_region(
+  dst_cell_base, mv_offset, strip_region_bytes_total) ->
+  MvSourceOffsetClass` — spec/05 §4.4 paragraph 3 opt-in
+  classifier; does not consume the §2.3 arithmetic itself.
+* §4.4 worked-example constants:
+  `STRIP_REGION_LUMA_240_BYTES` (`= 0xa500` = `42_240`, the §4.4
+  paragraph 2 first-bullet `0xb0 * 240` figure),
+  `STRIP_REGION_LUMA_240_FITS_IN_ARENA` (`= false`, the §4.1
+  footnote discrepancy mirror — `0xa500 > 0x8020`).
+* `oxideav_indeo::indeo3::PaddingPixelPreservation`
+  (`DeterministicAtCodecInit` /
+  `PreservedAcrossFramesByStripEdgeFixup`, `::is_codec_init`,
+  `::is_frame_to_frame`) — spec/05 §4.4 paragraph 2 second-bullet
+  typed disposition of the strip allocator's deterministic-pattern
+  init vs the §5.4 strip-edge fix-up's frame-to-frame
+  preservation.
 * Constants: `MAGIC_FRMH`, `REQUIRED_DEC_VERSION`,
   `FRAME_HEADER_LEN`, `BITSTREAM_HEADER_LEN`, `COMBINED_HEADER_LEN`,
   `FLAG_YVU9_8BIT`, `NULL_FRAME_DATA_SIZE_BITS`, `MIN_DIMENSION`,
