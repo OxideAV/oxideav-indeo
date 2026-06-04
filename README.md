@@ -5,6 +5,66 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 21 — Indeo 3 (IV31 / IV32) §5.6 MC fetcher → VQ residual
+chapter boundary surface (`spec/05` §5.6).** Round 21 adds the
+`indeo3::mc_residual_boundary` module, the typed §5.6 disposition
+surface that pins the MC chapter's terminator and the spec/06
+entropy chapter's start point. `MC_FETCHER_LAST_WRITE_RVA`
+(`= 0x1000_6732`) pins the §5.6 second paragraph "this chapter's
+last instruction for the cell is the final `[edi + 0x20c] = eax`
+of the MC fetcher's inner loop", with a `const _` cross-check that
+the RVA lies within the §5.1 inner-loop range
+`0x1000670d..0x1000673d`. `MC_FETCHER_LAST_WRITE_DST_OFFSET`
+(`= 0x20c`) pins the row-3 destination byte offset, with a `const _`
+cross-check that the offset equals `MC_FULL_PEL_ROW_OFFSETS[3]`
+(`= 0x210`) minus the §5.1 `lea edi, [edi + 0x4]` mid-loop column
+advance. `MC_CHAPTER_LAST_DST_ROW_INDEX` (`= 3`) pins the §5.1
+band's fourth-and-last row index, with a `const _` cross-check
+that `MC_CHAPTER_LAST_DST_ROW_INDEX + 1 == MC_BAND_ROWS`.
+`VQ_RESIDUAL_DISPATCH_RVA` (`= 0x1000_6bac`) pins the §5.6 first
+paragraph + `spec/04 §3.4` per-byte unpacker dispatch entry where
+spec/06 picks up the residual-application chain, with a `const _`
+cross-check that the RVA strictly follows `MC_FETCHER_LAST_WRITE_RVA`
+in code memory. `shares_destination_buffer()` (`const`-`true`)
+surfaces the §5.6 first-paragraph disposition that the MC
+prediction and the VQ residual share the same destination buffer
+(the residual is added in place; no per-cell intermediate copy).
+The `McCellDisposition` enum (`PredictionOnly` /
+`PredictionThenResidual`) classifies the §5.6 first-paragraph
+two-path post-MC chain: a pure-prediction INTER cell whose
+chained-flag arithmetic does not re-enter VQ_TREE vs an INTER cell
+whose `spec/04 §7.5` chained-flag re-entry triggers an in-place
+residual; `requires_residual()` and `residual_application()` are
+the typed predicates. The `ResidualApplication` enum (`None` /
+`InPlaceOverPrediction`) carries the residual-application
+classification with `is_none()` / `is_in_place()` predicates. The
+`McToVqHandoff` composite struct bundles the MC-chapter terminator
+RVA with the spec/06 start RVA at a single typed surface;
+`McToVqHandoff::for_disposition(disp)` returns the populated
+handoff for `PredictionThenResidual` and `None` for
+`PredictionOnly` (the latter case ends the cell at the MC chapter
+terminator without spec/06 dispatch); `rva_delta()` returns the
+positive byte distance between the two RVAs. 25 new unit tests
+cover the four RVA / offset constants (3 + 3 + 2 + 3), the
+shared-destination-buffer disposition (1), the `McCellDisposition`
+predicates and variants (4), the `ResidualApplication` predicates
+and variants (3), the `McToVqHandoff::for_disposition` happy paths
+and round-trip identity (5), and cross-module sanity (3: the row-
+offset table re-use, mode-agnostic terminator across the §2.2
+four-way fork, and the two-path partition of the post-MC chain).
+Per the §5.6 chapter boundary, the module deliberately does not
+perform the MC fetcher's inner-loop reads / writes (owned by
+`mc_kernel`), does not perform the per-byte mode read at
+`IR32_32.DLL!0x10006bac` (owned by the spec/06 unpacker dispatch
+in `entropy`), does not perform the VQ residual addition itself
+(spec/06 unpacker territory), does not classify a cell-state byte
+as chained or unchained (`spec/04 §7.5` territory; this module
+accepts a pre-classified `McCellDisposition` from the caller), and
+does not own the §5.1 inner-loop row layout (owned by
+`MC_FULL_PEL_ROW_OFFSETS`; this module re-uses the final entry
+through `MC_FETCHER_LAST_WRITE_DST_OFFSET`). Total `cargo test -p
+oxideav-indeo` count rises to **456 unit tests** (was 431).
+
 **Round 20 — Indeo 3 (IV31 / IV32) §5.5 chroma-plane scaling
 surface (`spec/05` §5.5).** Round 20 adds the `indeo3::mc_chroma`
 module, the typed §5.5 disposition surface that pins the MC

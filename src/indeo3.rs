@@ -185,6 +185,7 @@ mod mc_bounds;
 mod mc_chroma;
 mod mc_kernel;
 mod mc_packed;
+mod mc_residual_boundary;
 mod mc_source_plumbing;
 mod mc_table;
 mod picture_layer;
@@ -252,6 +253,11 @@ pub use mc_kernel::{
 pub use mc_packed::{
     apply_mv_source_offset, pack_mv_components, McDispatchMode, PackedMv, MV_HORIZ_HALFPEL_BIT,
     MV_MODE_BITS_MASK, MV_PIXEL_OFFSET_ROW_STRIDE, MV_PIXEL_OFFSET_SHIFT, MV_VERT_HALFPEL_BIT,
+};
+pub use mc_residual_boundary::{
+    shares_destination_buffer, McCellDisposition, McToVqHandoff, ResidualApplication,
+    MC_CHAPTER_LAST_DST_ROW_INDEX, MC_FETCHER_LAST_WRITE_DST_OFFSET, MC_FETCHER_LAST_WRITE_RVA,
+    MC_INNER_LOOP_BAND_ROWS_ALIAS, VQ_RESIDUAL_DISPATCH_RVA,
 };
 pub use mc_source_plumbing::{
     is_self_copy_degenerate, DecoderStackArg, DispatcherScratch, SourcePlumbingPair,
