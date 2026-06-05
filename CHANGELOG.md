@@ -8,6 +8,46 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/02 §4 + §5 + §6 picture-layer →
+  strip-context decode-plan bridge — the typed accessor
+  `indeo3::PictureLayer::plane_decode_plan(plane_idx, header,
+  buffer_selector)` returning an `Option<PlaneDecodePlan>` that
+  bundles, for one parsed plane, the §4 `StripGeometry` (plane
+  dimensions + per-plane-class strip width + strip count + §4.1
+  remainder-formula last-strip width), the §5.1 / §5.2
+  `StripSlotDescriptor` (slot index, plane role, per-slot field
+  offsets), and the §3.4 bitstream-payload offset + §3.1
+  `num_vectors` from the round-2 prelude parser at one typed entry
+  point. The new `indeo3::PlaneDecodePlan` struct carries
+  `plane_idx`, `buffer_selector`, the `PlaneRole`, `plane_width`
+  / `plane_height`, `num_vectors`, `bitstream_offset`,
+  `geometry`, `slot_descriptor`, and the `is_luma()` /
+  `is_chroma()` / `is_intra()` predicates. The new
+  `indeo3::chroma_plane_width(luma_width)` helper surfaces the §4
+  picture-decomposition-table `luma_width / 4` chroma subsampling
+  (explicitly without the §7 item 4 `& -0x4` mask the chroma
+  height helper applies). The accessor returns `None` for any
+  `plane_idx ≥ PLANE_COUNT`, for any `PlanePresence::NullFrame` /
+  `Skipped*` plane, and applies the §4 picture-decomposition table
+  for chroma planes (`(chroma_plane_width(luma_width),
+  chroma_plane_height(luma_height))`); for a single-strip plane
+  (§4.2 row 1, `W ≤ strip_width`) it writes the §4.1 remainder
+  width (`((W-1) mod strip_width) + 1`, = the picture width
+  itself) into the slot descriptor's `STRIP_WIDTH` field per §5.2.
+  8 new unit tests cover: §4 luma geometry on a 320×240 picture
+  (slot 3 primary bank, strip_count 2, aligned), §4 chroma
+  subsampled geometry on the V plane of a 320×240 picture (slot 4,
+  plane width 80, plane height 60, INTER 2-MV), §4.2 row 1
+  single-strip remainder-width path on a 144×112 picture (slot's
+  `STRIP_WIDTH` = 144, not the 160 constant), §5.1 secondary-bank
+  slot remapping (Y → 0, V → 1, U → 2 when `frame_flags` bit 9 is
+  set), `None` for every NULL-frame plane, `None` for a skipped
+  plane while sibling planes still return a plan, `None` for
+  out-of-range plane indices, and the `chroma_plane_width`
+  divide-by-4-without-alignment behaviour on luma widths 0, 4, 16,
+  17, 18, 22, 160, 320, 640. Total `cargo test -p oxideav-indeo`
+  count rises to **464 unit tests** (was 456).
+
 - Indeo 3 (IV31 / IV32) spec/05 §5.6 MC fetcher → VQ residual
   chapter boundary surface — the typed §5.6 disposition surface
   that pins the MC chapter's terminator and the spec/06 entropy

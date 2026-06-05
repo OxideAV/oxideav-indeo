@@ -619,6 +619,21 @@ pub fn chroma_plane_height(luma_height: u32) -> u32 {
     (luma_height / 4) & !0x3
 }
 
+/// Spec/02 §4 — chroma plane width (luma width divided by the 4:1
+/// chroma subsampling ratio).
+///
+/// The picture-decomposition table in `spec/02-picture-layer.md` §4
+/// defines the chroma plane dimensions as `(width/4) × (height/4)`.
+/// Unlike [`chroma_plane_height`] the §7 codec-init routine does
+/// **not** apply a multiple-of-4 alignment mask to the width — the
+/// strip-width chain (chroma `0x28` = 40) carries the
+/// per-strip-width remainder accounting (`((W-1) mod strip_width) +
+/// 1` per §4.1) without requiring the plane width itself to be
+/// aligned.
+pub fn chroma_plane_width(luma_width: u32) -> u32 {
+    luma_width / 4
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -959,6 +974,29 @@ mod tests {
         assert_eq!(chroma_plane_height(20), 5 & !0x3); // = 4
         assert_eq!(chroma_plane_height(120), 30 & !0x3); // = 28
         assert_eq!(chroma_plane_height(480), 120);
+    }
+
+    #[test]
+    fn chroma_plane_width_divides_luma_by_four_no_alignment() {
+        // Spec/02 §4 picture-decomposition table —
+        // chroma_plane_width = luma_width / 4.
+        // No multiple-of-4 alignment mask is applied (in contrast
+        // to chroma_plane_height, where §7 item 4's & -0x4 mask
+        // floors the height).
+        assert_eq!(chroma_plane_width(0), 0);
+        assert_eq!(chroma_plane_width(4), 1);
+        assert_eq!(chroma_plane_width(16), 4);
+        // 17 → 17/4 = 4 (integer truncation only; no mask).
+        assert_eq!(chroma_plane_width(17), 4);
+        // 18 → 18/4 = 4. Without the alignment mask the value
+        // stays at 4 (the mask would also produce 4 here).
+        assert_eq!(chroma_plane_width(18), 4);
+        // 22 → 22/4 = 5. Critically not aligned to 4 — confirms
+        // the helper does not apply the §7 height mask.
+        assert_eq!(chroma_plane_width(22), 5);
+        assert_eq!(chroma_plane_width(160), 40);
+        assert_eq!(chroma_plane_width(320), 80);
+        assert_eq!(chroma_plane_width(640), 160);
     }
 
     // ---- internal helpers -------------------------------------------

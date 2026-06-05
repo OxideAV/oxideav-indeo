@@ -5,6 +5,43 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 22 — Indeo 3 (IV31 / IV32) §4 picture-layer → §5 strip-
+context decode-plan bridge (`spec/02` §4 + §5 + §6).** Round 22
+adds the typed accessor `indeo3::PictureLayer::plane_decode_plan`
+that bundles, for one parsed plane, the §4 [`StripGeometry`] (plane
+width / height, per-plane-class strip width, strip count, §4.1
+remainder-formula last-strip width), the §5.1 / §5.2
+[`StripSlotDescriptor`] (slot index keyed by `(plane_idx,
+buffer_selector)`, plane role, per-slot `STRIP_WIDTH` /
+`STRIP_HEIGHT` field offsets), and the §3.4 bitstream-payload
+offset + §3.1 `num_vectors` from the round-2 prelude parser at one
+typed entry point ([`indeo3::PlaneDecodePlan`]). The accessor:
+applies the §4 picture-decomposition table for the chroma planes
+(`(luma_width / 4, chroma_plane_height(luma_height))`), surfaced via
+the new `indeo3::chroma_plane_width` helper that explicitly does
+**not** apply the §7 item 4 `& -0x4` height-alignment mask the
+height helper applies; for a single-strip plane (§4.2 row 1,
+`W ≤ strip_width`) writes the §4.1 remainder width
+(`((W-1) mod strip_width) + 1`, = the picture width itself) into
+the slot descriptor's `STRIP_WIDTH` field per §5.2; returns `None`
+for any plane_idx ≥ 3, for any [`PlanePresence::NullFrame`] /
+`Skipped*` plane (no decode call to plan), and bundles
+[`PlaneRole`] / `is_luma()` / `is_chroma()` / `is_intra()`
+predicates on the plan itself. 8 new unit tests cover: §4 luma
+geometry on a 320×240 picture (slot 3, strip_count 2, aligned), §4
+chroma subsampled geometry on the V plane of a 320×240 picture
+(slot 4, plane width 80, plane height 60, INTER with 2 motion
+vectors), §4.2 row 1 single-strip remainder-width path on a
+144×112 picture (slot's `STRIP_WIDTH` = 144, not the 160 constant),
+§5.1 secondary-bank slot remapping (Y → 0, V → 1, U → 2 when
+`frame_flags` bit 9 is set), `None` for every NULL-frame plane,
+`None` for a skipped plane while sibling planes still return a
+plan, `None` for out-of-range plane indices, and the
+`chroma_plane_width` divide-by-4-without-alignment behaviour on
+luma widths 0, 4, 16, 17, 18, 22, 160, 320, 640. Total
+`cargo test -p oxideav-indeo` count rises to **464 unit tests**
+(was 456).
+
 **Round 21 — Indeo 3 (IV31 / IV32) §5.6 MC fetcher → VQ residual
 chapter boundary surface (`spec/05` §5.6).** Round 21 adds the
 `indeo3::mc_residual_boundary` module, the typed §5.6 disposition

@@ -271,7 +271,7 @@ pub use mc_table::{
     MV_TABLE_ENTRY_SIZE, MV_TABLE_MAX_BYTE_INDEXABLE_ENTRIES,
 };
 pub use picture_layer::{
-    MotionVector, PictureLayer, PictureLayerError, PlanePrelude, PlanePresence,
+    MotionVector, PictureLayer, PictureLayerError, PlaneDecodePlan, PlanePrelude, PlanePresence,
     MC_VECTOR_ENTRY_LEN, MIN_PRELUDE_LEN, NUM_VECTORS_FIELD_LEN, PLANE_COUNT, PLANE_IDX_U,
     PLANE_IDX_V, PLANE_IDX_Y,
 };
@@ -282,8 +282,8 @@ pub use reconstruct::{
     PREDICTOR_ROW_STRIDE, TOP_OF_STRIP_PREDICTOR,
 };
 pub use strip_context::{
-    chroma_plane_height, chroma_strip_slot_count, luma_strip_slot_count, slot_field,
-    strip_slot_index, PerPlaneDecodeCall, PlaneDecodeStatus, PlaneRole, StripGeometry,
+    chroma_plane_height, chroma_plane_width, chroma_strip_slot_count, luma_strip_slot_count,
+    slot_field, strip_slot_index, PerPlaneDecodeCall, PlaneDecodeStatus, PlaneRole, StripGeometry,
     StripSlotDescriptor, DISPATCHABLE_SLOT_COUNT, INSTANCE_CHROMA_CODEBOOK_BANK,
     INSTANCE_LUMA_CODEBOOK_BANK, INSTANCE_SECONDARY_CODEBOOK_PTR, INSTANCE_STATE_LEN,
     INSTANCE_STRIP_ARRAY_VIEW_PTR, PIXEL_BUFFER_ARENA_LEN, PLANE_DECODE_STATUS_MALFORMED,

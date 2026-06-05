@@ -43,6 +43,10 @@
 use super::header::{
     FrameFlags, FrameHeader, BITSTREAM_HEADER_LEN, FRAME_HEADER_LEN, NULL_FRAME_DATA_SIZE_BITS,
 };
+use super::strip_context::{
+    chroma_plane_height, chroma_plane_width, strip_slot_index, PlaneRole, StripGeometry,
+    StripSlotDescriptor,
+};
 
 /// Spec/02 §2 — count of planes a codec frame carries.
 pub const PLANE_COUNT: usize = 3;
@@ -396,6 +400,166 @@ impl PictureLayer {
     /// Borrow the U-plane (chroma) presence record.
     pub fn u(&self) -> &PlanePresence {
         &self.planes[PLANE_IDX_U]
+    }
+
+    /// Spec/02 §4 + §5 + §6 — build the per-plane decode plan that
+    /// bridges this picture-layer view to the strip-context surface.
+    ///
+    /// Given a parsed plane (its [`PlanePrelude`]) and the parsed
+    /// [`FrameHeader`], compose:
+    ///
+    /// * the spec/02 §4 [`StripGeometry`] (plane dimensions + strip
+    ///   width + strip count + last-strip width), with the §4 chroma
+    ///   subsampling table applied for V / U;
+    /// * the spec/02 §5.1 / §5.2 [`StripSlotDescriptor`] (slot index
+    ///   keyed by `(plane_idx, buffer_selector)`, plane role, and
+    ///   per-slot `STRIP_WIDTH` / `STRIP_HEIGHT` field offsets); and
+    /// * the spec/02 §3.4 [`PlanePrelude::bitstream_offset`] the
+    ///   per-plane decoder consumes as its 4th argument (§6 table).
+    ///
+    /// Returns:
+    ///
+    /// * `None` if `plane_idx >= PLANE_COUNT` (the only legal values
+    ///   are the three plane-index constants).
+    /// * `None` if `self.planes[plane_idx]` is anything other than
+    ///   [`PlanePresence::Present`] — there is no decode call to plan
+    ///   for a NULL-frame plane (§1) or a skipped plane (§2).
+    ///
+    /// The `buffer_selector` argument is `header.bitstream.frame_flags
+    /// .buffer_selector()` (§3.2 bit 9) — taken as a parameter so a
+    /// caller modelling the ping-pong frame-to-frame buffer
+    /// alternation can pass either value without re-parsing the
+    /// header.
+    pub fn plane_decode_plan(
+        &self,
+        plane_idx: usize,
+        header: &FrameHeader,
+        buffer_selector: bool,
+    ) -> Option<PlaneDecodePlan> {
+        if plane_idx >= PLANE_COUNT {
+            return None;
+        }
+        let prelude = self.planes[plane_idx].as_prelude()?;
+        let luma_width = u32::from(header.bitstream.width);
+        let luma_height = u32::from(header.bitstream.height);
+
+        let (plane_width, plane_height, geometry) = if plane_idx == PLANE_IDX_Y {
+            (
+                luma_width,
+                luma_height,
+                StripGeometry::for_luma(luma_width, luma_height),
+            )
+        } else {
+            let cw = chroma_plane_width(luma_width);
+            let ch = chroma_plane_height(luma_height);
+            (cw, ch, StripGeometry::for_chroma(cw, ch))
+        };
+
+        let strip_width_field = if geometry.strip_count == 0 {
+            geometry.strip_width
+        } else {
+            // Spec/02 §4.1 — the per-slot `[ctx+0x1c]` field carries
+            // the §4.1 strip-width constant by default, overridden to
+            // the §4.1 remainder formula for a 1-strip plane. With
+            // strip_count = 1 the §4.1 remainder is the only strip's
+            // width.
+            if geometry.strip_count == 1 {
+                geometry.last_strip_width
+            } else {
+                geometry.strip_width
+            }
+        };
+        let slot_descriptor = StripSlotDescriptor::for_dispatch(
+            plane_idx,
+            buffer_selector,
+            strip_width_field,
+            plane_height,
+        )?;
+        let slot_idx = strip_slot_index(plane_idx, buffer_selector)?;
+        let role = PlaneRole::for_slot(slot_idx);
+        Some(PlaneDecodePlan {
+            plane_idx,
+            buffer_selector,
+            role,
+            plane_width,
+            plane_height,
+            num_vectors: prelude.num_vectors,
+            bitstream_offset: prelude.bitstream_offset,
+            geometry,
+            slot_descriptor,
+        })
+    }
+}
+
+/// Spec/02 §4 + §5 + §6 — composite per-plane decode plan.
+///
+/// Built by [`PictureLayer::plane_decode_plan`], this struct bundles
+/// the picture-layer side (the plane index, the §4 strip geometry,
+/// the §3.4 bitstream-payload offset, the §3.1 motion-vector count)
+/// with the strip-context side (the §5.1 / §5.2 slot descriptor and
+/// the §5.1 / §6 plane-role classification) at a single typed
+/// surface. Callers ready to dispatch the §6 per-plane decode call
+/// (`IR32_32.DLL!0x10006538`) can read every per-plane parameter
+/// from this struct without re-traversing the picture layer.
+///
+/// The struct does **not** model the per-plane decoder's seven
+/// cdecl arguments themselves — the
+/// [`super::strip_context::PerPlaneDecodeCall`] type covers that
+/// surface and consumes the [`Self::bitstream_offset`] this plan
+/// carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaneDecodePlan {
+    /// Spec/02 §2 plane index (0 = Y, 1 = V, 2 = U).
+    pub plane_idx: usize,
+    /// Spec/02 §3.2 / §5.1 `frame_flags` bit 9 — secondary (`true`)
+    /// vs primary (`false`) buffer-bank selector. Carried so callers
+    /// can re-derive [`slot_descriptor`](Self::slot_descriptor) for
+    /// the opposite bank without re-parsing the frame header.
+    pub buffer_selector: bool,
+    /// Spec/02 §5.1 / §6 plane-role classification of the strip-
+    /// context slot this plane will write into (Luma for Y, Chroma
+    /// for V / U).
+    pub role: PlaneRole,
+    /// Plane width in samples — luma width for Y, `luma_width / 4`
+    /// for V / U per the §4 picture-decomposition table.
+    pub plane_width: u32,
+    /// Plane height in samples — luma height for Y,
+    /// [`chroma_plane_height`] for V / U.
+    pub plane_height: u32,
+    /// Spec/02 §3.1 `num_vectors` carried over from the parsed
+    /// [`PlanePrelude`].
+    pub num_vectors: u32,
+    /// Spec/02 §3.4 absolute offset (within the codec-frame input
+    /// buffer) of the first byte of the plane's binary-tree / VQ
+    /// bitstream payload (= `plane_base + 4 + 2*num_vectors`).
+    pub bitstream_offset: usize,
+    /// Spec/02 §4.1 / §4.2 strip geometry — plane width / height,
+    /// per-plane-class strip width (160 for luma, 40 for chroma),
+    /// `ceil(plane_width / strip_width)` strip count, and the §4.1
+    /// remainder-formula last-strip width.
+    pub geometry: StripGeometry,
+    /// Spec/02 §5.1 / §5.2 strip-context slot descriptor (slot index,
+    /// role, byte offset of the slot inside the strip-context array,
+    /// and the §4.1 / §4.4 per-slot `STRIP_WIDTH` / `STRIP_HEIGHT`
+    /// values).
+    pub slot_descriptor: StripSlotDescriptor,
+}
+
+impl PlaneDecodePlan {
+    /// Convenience — true iff the plan's plane is the luma plane.
+    pub fn is_luma(&self) -> bool {
+        self.role.is_luma()
+    }
+
+    /// Convenience — true iff the plan's plane is a chroma plane.
+    pub fn is_chroma(&self) -> bool {
+        self.role.is_chroma()
+    }
+
+    /// Spec/02 §3.1 — true iff the plane carries no motion vectors
+    /// (an INTRA-coded plane, per `num_vectors == 0`).
+    pub fn is_intra(&self) -> bool {
+        self.num_vectors == 0
     }
 }
 
@@ -1026,6 +1190,263 @@ mod tests {
             }
             other => panic!("expected MotionVectorArrayTruncated, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn plane_decode_plan_for_present_intra_y_plane_uses_luma_geometry() {
+        // §4 — luma plane uses StripGeometry::for_luma with the
+        // picture's full luma (width, height).
+        let y_prelude = prelude_bytes(0, &[]);
+        let v_prelude = prelude_bytes(0, &[]);
+        let u_prelude = prelude_bytes(0, &[]);
+        let mut buf = build_frame_with_planes(
+            [0x30, 0x34, 0x38],
+            [&y_prelude, &v_prelude, &u_prelude],
+            0x0005, // INTRA, full-pel, primary buffer (bit 9 clear)
+            0x4000,
+        );
+        // Override width / height to spec/02 §4.2 row 3 — 320×240.
+        // The frame-header checksum at bsh edits is not consulted; we
+        // patch the bsh in place and re-parse.
+        let bsh_off = FRAME_HEADER_LEN;
+        buf[bsh_off + 0x0c..bsh_off + 0x0e].copy_from_slice(&240u16.to_le_bytes());
+        buf[bsh_off + 0x0e..bsh_off + 0x10].copy_from_slice(&320u16.to_le_bytes());
+
+        let header = FrameHeader::parse(&buf).expect("header parses");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer parses");
+
+        let plan = layer
+            .plane_decode_plan(PLANE_IDX_Y, &header, false)
+            .expect("Y plan exists");
+        assert_eq!(plan.plane_idx, PLANE_IDX_Y);
+        assert!(plan.is_luma());
+        assert!(!plan.is_chroma());
+        assert!(plan.is_intra());
+        assert_eq!(plan.plane_width, 320);
+        assert_eq!(plan.plane_height, 240);
+        assert_eq!(plan.num_vectors, 0);
+        // §4.2 row 3 with W = 320 → strip_count = 2, aligned.
+        assert_eq!(plan.geometry.strip_count, 2);
+        assert_eq!(plan.geometry.strip_width, 160);
+        assert_eq!(plan.geometry.last_strip_width, 160);
+        // §3.4 + round-2 — bitstream_offset = bsh + plane_offset + 4.
+        assert_eq!(plan.bitstream_offset, FRAME_HEADER_LEN + 0x30 + 4);
+        // §5.1 — primary bank, Y → slot 3.
+        assert_eq!(plan.slot_descriptor.slot_idx, 3);
+        assert_eq!(plan.slot_descriptor.strip_height, 240);
+        // For strip_count > 1 the slot's STRIP_WIDTH field carries
+        // the per-plane-class strip-width constant (160), not the
+        // remainder.
+        assert_eq!(plan.slot_descriptor.strip_width, 160);
+    }
+
+    #[test]
+    fn plane_decode_plan_for_present_chroma_plane_uses_subsampled_geometry() {
+        // §4 — chroma plane uses StripGeometry::for_chroma with
+        // (luma_width/4, chroma_plane_height(luma_height)).
+        let y_prelude = prelude_bytes(0, &[]);
+        let v_prelude = prelude_bytes(2, &[(1, 2), (-3, -4)]);
+        let u_prelude = prelude_bytes(0, &[]);
+        let mut buf = build_frame_with_planes(
+            [0x30, 0x40, 0x50],
+            [&y_prelude, &v_prelude, &u_prelude],
+            0, // INTER, full-pel, primary buffer (bit 9 clear)
+            0x4000,
+        );
+        let bsh_off = FRAME_HEADER_LEN;
+        buf[bsh_off + 0x0c..bsh_off + 0x0e].copy_from_slice(&240u16.to_le_bytes());
+        buf[bsh_off + 0x0e..bsh_off + 0x10].copy_from_slice(&320u16.to_le_bytes());
+
+        let header = FrameHeader::parse(&buf).expect("header parses");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer parses");
+
+        // V plane → chroma; (320/4, (240/4) & !0x3) = (80, 60).
+        let plan = layer
+            .plane_decode_plan(PLANE_IDX_V, &header, false)
+            .expect("V plan exists");
+        assert_eq!(plan.plane_idx, PLANE_IDX_V);
+        assert!(plan.is_chroma());
+        assert!(!plan.is_luma());
+        assert!(!plan.is_intra());
+        assert_eq!(plan.num_vectors, 2);
+        assert_eq!(plan.plane_width, 80);
+        assert_eq!(plan.plane_height, 60);
+        // §4.1 — chroma strip width 40; 80/40 = 2 strips, aligned.
+        assert_eq!(plan.geometry.strip_width, 40);
+        assert_eq!(plan.geometry.strip_count, 2);
+        assert_eq!(plan.geometry.last_strip_width, 40);
+        // §3.4 — bitstream_offset for V = bsh + 0x40 + 4 + 2*2 = +8.
+        assert_eq!(plan.bitstream_offset, FRAME_HEADER_LEN + 0x40 + 4 + 4);
+        // §5.1 — primary bank, V → slot 4.
+        assert_eq!(plan.slot_descriptor.slot_idx, 4);
+        assert_eq!(plan.slot_descriptor.strip_height, 60);
+    }
+
+    #[test]
+    fn plane_decode_plan_remainder_strip_width_single_strip_uses_picture_width() {
+        // §4.2 row 1 — picture width ≤ 160 → 1 luma strip whose
+        // width equals the picture width itself. The slot
+        // descriptor's STRIP_WIDTH field carries the §4.1 remainder
+        // (= picture width) in that case.
+        let buf = build_frame_with_planes(
+            [0x30, 0x34, 0x38],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+            ],
+            0,
+            0x4000,
+        );
+        let mut buf = buf;
+        let bsh_off = FRAME_HEADER_LEN;
+        // 144 × 112 — smaller than 160 luma strip width.
+        buf[bsh_off + 0x0c..bsh_off + 0x0e].copy_from_slice(&112u16.to_le_bytes());
+        buf[bsh_off + 0x0e..bsh_off + 0x10].copy_from_slice(&144u16.to_le_bytes());
+
+        let header = FrameHeader::parse(&buf).expect("header parses");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer parses");
+
+        let plan = layer
+            .plane_decode_plan(PLANE_IDX_Y, &header, false)
+            .expect("Y plan exists");
+        assert_eq!(plan.geometry.strip_count, 1);
+        // Remainder formula: ((144-1) mod 160) + 1 = 144.
+        assert_eq!(plan.geometry.last_strip_width, 144);
+        // Single-strip plane → slot's STRIP_WIDTH field carries the
+        // remainder (= picture width), not the 160 constant.
+        assert_eq!(plan.slot_descriptor.strip_width, 144);
+    }
+
+    #[test]
+    fn plane_decode_plan_secondary_bank_remaps_slot_index() {
+        // §5.1 — secondary bank (frame_flags bit 9 set) routes
+        // (Y, V, U) → slots (0, 1, 2). Passing buffer_selector =
+        // true to plane_decode_plan flips the slot index for the
+        // same plane.
+        let mut buf = build_frame_with_planes(
+            [0x30, 0x34, 0x38],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+            ],
+            0x0205, // BUFFER_SELECTOR bit 9 set + INTRA bits
+            0x4000,
+        );
+        let bsh_off = FRAME_HEADER_LEN;
+        buf[bsh_off + 0x0c..bsh_off + 0x0e].copy_from_slice(&240u16.to_le_bytes());
+        buf[bsh_off + 0x0e..bsh_off + 0x10].copy_from_slice(&320u16.to_le_bytes());
+
+        let header = FrameHeader::parse(&buf).expect("header parses");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer parses");
+
+        // Primary bank → Y = 3, V = 4, U = 5.
+        assert_eq!(
+            layer
+                .plane_decode_plan(PLANE_IDX_Y, &header, false)
+                .unwrap()
+                .slot_descriptor
+                .slot_idx,
+            3
+        );
+        // Secondary bank → Y = 0, V = 1, U = 2.
+        assert_eq!(
+            layer
+                .plane_decode_plan(PLANE_IDX_Y, &header, true)
+                .unwrap()
+                .slot_descriptor
+                .slot_idx,
+            0
+        );
+        assert_eq!(
+            layer
+                .plane_decode_plan(PLANE_IDX_V, &header, true)
+                .unwrap()
+                .slot_descriptor
+                .slot_idx,
+            1
+        );
+        assert_eq!(
+            layer
+                .plane_decode_plan(PLANE_IDX_U, &header, true)
+                .unwrap()
+                .slot_descriptor
+                .slot_idx,
+            2
+        );
+    }
+
+    #[test]
+    fn plane_decode_plan_returns_none_for_null_frame_planes() {
+        // §1 — NULL frame skips plane iteration; every plane is
+        // PlanePresence::NullFrame. plane_decode_plan must return
+        // None for all three plane indices.
+        let buf = build_frame_with_planes(
+            [0x30, 0x40, 0x50],
+            [&[], &[], &[]],
+            0,
+            NULL_FRAME_DATA_SIZE_BITS,
+        );
+        let header = FrameHeader::parse(&buf).expect("null header parses");
+        let layer = PictureLayer::parse(&header, &buf).expect("null layer parses");
+        assert!(layer
+            .plane_decode_plan(PLANE_IDX_Y, &header, false)
+            .is_none());
+        assert!(layer
+            .plane_decode_plan(PLANE_IDX_V, &header, false)
+            .is_none());
+        assert!(layer
+            .plane_decode_plan(PLANE_IDX_U, &header, false)
+            .is_none());
+    }
+
+    #[test]
+    fn plane_decode_plan_returns_none_for_skipped_plane() {
+        // §2 — a plane with a negative offset is skipped; no decode
+        // plan exists for it.
+        let buf = build_frame_with_planes(
+            [0x30, 0xffff_ffff, 0x38],
+            [&prelude_bytes(0, &[]), &[], &prelude_bytes(0, &[])],
+            0,
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header parses");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer parses");
+        assert!(layer.y().is_present());
+        assert!(layer
+            .plane_decode_plan(PLANE_IDX_Y, &header, false)
+            .is_some());
+        // V is skipped — no plan.
+        assert!(layer
+            .plane_decode_plan(PLANE_IDX_V, &header, false)
+            .is_none());
+        assert!(layer.u().is_present());
+        assert!(layer
+            .plane_decode_plan(PLANE_IDX_U, &header, false)
+            .is_some());
+    }
+
+    #[test]
+    fn plane_decode_plan_rejects_out_of_range_plane_idx() {
+        let buf = build_frame_with_planes(
+            [0x30, 0x34, 0x38],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+            ],
+            0,
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header parses");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer parses");
+        assert!(layer
+            .plane_decode_plan(PLANE_COUNT, &header, false)
+            .is_none());
+        assert!(layer
+            .plane_decode_plan(usize::MAX, &header, false)
+            .is_none());
     }
 
     #[test]
