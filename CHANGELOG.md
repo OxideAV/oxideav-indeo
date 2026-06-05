@@ -8,6 +8,35 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/02 §6 picture-layer plan → 7-argument
+  per-plane decode-call bridge — the typed accessor
+  `indeo3::PlaneDecodePlan::to_decode_call()` returning a populated
+  `indeo3::PerPlaneDecodeCall` (the §6 7-argument cdecl frame the
+  per-plane decoder consumes at `IR32_32.DLL!0x10006538`). The
+  bridge keys the §6 codebook-bank discriminant on `plane_idx`
+  (luma → `+0x1a00`, chroma → `+0x400`), populates the §6
+  constants for the strip-context array view (`+0x300c`) and the
+  secondary codebook pointer (`+0x3004`), forwards the plan's §3.4
+  `bitstream_offset` as the §6 4th argument, and per spec/02 §10
+  item 3 sets `slot_idx_src == slot_idx_dst`. Backed by a new
+  sibling constructor
+  `indeo3::PerPlaneDecodeCall::for_plane_and_buffer(plane_idx,
+  buffer_selector, bitstream_payload_offset)` that takes the
+  spec/02 §3.2 / §5.1 buffer-selector bit directly instead of the
+  full `FrameFlags`; the existing
+  `PerPlaneDecodeCall::for_plane(plane_idx, flags, payload)` keeps
+  its signature and delegates to the new constructor (zero
+  behavioural change for prior callers). 6 new unit tests cover
+  PRIMARY luma, primary V/U chroma (`+0x400` bank), SECONDARY Y
+  (slot 0 with luma bank still `+0x1a00` — §6 luma-vs-chroma
+  discriminant keys on `plane_idx`, not the buffer bit), bridge-vs-
+  `FrameFlags` cross-check across all three planes,
+  `for_plane_and_buffer`-vs-`for_plane` equivalence across four
+  flag permutations × three plane indices × four payload offsets,
+  and out-of-range rejection for the new constructor under both
+  buffer-selector polarities. Total unit-test count rises to 470
+  (was 464).
+
 - Indeo 3 (IV31 / IV32) spec/02 §4 + §5 + §6 picture-layer →
   strip-context decode-plan bridge — the typed accessor
   `indeo3::PictureLayer::plane_decode_plan(plane_idx, header,

@@ -547,10 +547,35 @@ impl PerPlaneDecodeCall {
         flags: FrameFlags,
         bitstream_payload_offset: usize,
     ) -> Option<Self> {
+        Self::for_plane_and_buffer(plane_idx, flags.buffer_selector(), bitstream_payload_offset)
+    }
+
+    /// Spec/02 §6 — sibling constructor that takes the spec/02 §3.2 / §5.1
+    /// buffer-selector bit directly, without round-tripping through
+    /// [`FrameFlags`].
+    ///
+    /// Used by [`PlaneDecodePlan::to_decode_call`](super::picture_layer::PlaneDecodePlan::to_decode_call)
+    /// to bridge the picture-layer plan (which already carries the buffer-
+    /// selector bit per spec/02 §5.1) to this §6 call frame without
+    /// reconstructing the full `frame_flags` u16. The two constructors
+    /// produce identical structures for any
+    /// `(plane_idx, FrameFlags::buffer_selector() == buffer_selector,
+    /// bitstream_payload_offset)` triple.
+    ///
+    /// Returns `None` under the same condition as
+    /// [`Self::for_plane`]: `plane_idx >= PLANE_COUNT`.
+    ///
+    /// `slot_idx_src` and `slot_idx_dst` are set to the same value per
+    /// spec/02 §10 item 3 (the only call path observed in the binary
+    /// computes them identically).
+    pub fn for_plane_and_buffer(
+        plane_idx: usize,
+        buffer_selector: bool,
+        bitstream_payload_offset: usize,
+    ) -> Option<Self> {
         if plane_idx >= PLANE_COUNT {
             return None;
         }
-        let buffer_selector = flags.buffer_selector();
         let slot_idx = strip_slot_index(plane_idx, buffer_selector)?;
         let codebook_bank_offset = if plane_idx == PLANE_IDX_Y {
             INSTANCE_LUMA_CODEBOOK_BANK
@@ -915,6 +940,39 @@ mod tests {
     fn per_plane_decode_call_rejects_out_of_range() {
         assert!(PerPlaneDecodeCall::for_plane(PLANE_COUNT, FrameFlags(0x0000), 0).is_none());
         assert!(PerPlaneDecodeCall::for_plane(usize::MAX, FrameFlags(0x0200), 0x1234).is_none());
+    }
+
+    #[test]
+    fn for_plane_and_buffer_matches_for_plane_for_every_legal_input() {
+        // Spec/02 §6 — the bool-direct constructor must produce the
+        // same call frame as the FrameFlags constructor for every
+        // (plane_idx, buffer_selector, bitstream_payload_offset)
+        // triple, since `for_plane` delegates to it.
+        for &flags_raw in &[0x0000_u16, 0x0200_u16, 0x0205_u16, 0x0210_u16] {
+            let flags = FrameFlags(flags_raw);
+            let buffer_selector = flags.buffer_selector();
+            for plane_idx in 0..PLANE_COUNT {
+                for &payload in &[0_usize, 0x1234, 0xdead_beef, usize::MAX] {
+                    let via_flags = PerPlaneDecodeCall::for_plane(plane_idx, flags, payload)
+                        .expect("for_plane Some");
+                    let via_bool = PerPlaneDecodeCall::for_plane_and_buffer(
+                        plane_idx,
+                        buffer_selector,
+                        payload,
+                    )
+                    .expect("for_plane_and_buffer Some");
+                    assert_eq!(via_flags, via_bool);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn for_plane_and_buffer_rejects_out_of_range() {
+        // Spec/02 §6 — same rejection condition as `for_plane`.
+        assert!(PerPlaneDecodeCall::for_plane_and_buffer(PLANE_COUNT, false, 0).is_none());
+        assert!(PerPlaneDecodeCall::for_plane_and_buffer(PLANE_COUNT, true, 0).is_none());
+        assert!(PerPlaneDecodeCall::for_plane_and_buffer(usize::MAX, false, 0x1234).is_none());
     }
 
     // ---- spec/02 §6 (plane-decode status) ---------------------------

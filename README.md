@@ -5,6 +5,41 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 23 — Indeo 3 (IV31 / IV32) §6 picture-layer plan → 7-
+argument per-plane decode-call bridge (`spec/02` §6).** Round 23
+adds the typed accessor `indeo3::PlaneDecodePlan::to_decode_call()`
+that maps a parsed picture-layer plan to a populated
+`indeo3::PerPlaneDecodeCall` (the §6 7-argument cdecl frame the
+per-plane decoder consumes at `IR32_32.DLL!0x10006538`) without
+re-traversing the picture layer. The bridge delegates to a new
+sibling constructor `PerPlaneDecodeCall::for_plane_and_buffer
+(plane_idx, buffer_selector, bitstream_payload_offset)` that takes
+the spec/02 §3.2 / §5.1 buffer-selector bit directly instead of
+round-tripping through `FrameFlags`; the existing
+`PerPlaneDecodeCall::for_plane(plane_idx, flags, payload)` keeps
+its `FrameFlags` signature and now delegates to the bool-direct
+constructor. Both constructors apply the §6 codebook-bank
+discriminant (luma → `+0x1a00`, chroma → `+0x400`), populate the
+§6 constants for the strip-context array view (`+0x300c`) and the
+secondary codebook pointer (`+0x3004`), and per spec/02 §10 item 3
+set `slot_idx_src == slot_idx_dst`. 6 new unit tests cover: a
+PRIMARY-bank luma plan bridging to a slot-3 / `+0x1a00` /
+luma-role call frame with bitstream_payload_offset equal to the
+plan's `bitstream_offset` (§6); chroma V/U plans on a 320×240
+picture surfacing the `+0x400` chroma bank at primary slots 4 / 5
+respectively (§5.1 + §6); a SECONDARY-bank Y plan surfacing slot 0
+with the luma bank still `+0x1a00` (§5.1 + §6 luma-vs-chroma
+discriminant keys on plane_idx not the buffer bit); cross-check
+equality of the bridge constructor against the `FrameFlags`
+constructor over all three planes; cross-check equality of
+`for_plane_and_buffer` against `for_plane` for the four `frame_flags
+& 0x0205 / 0x0200 / 0x0210` permutations × three plane indices ×
+four payload offsets (12+ assertion pairs); and out-of-range
+rejection at `plane_idx == PLANE_COUNT` for the new bool-direct
+constructor under both `buffer_selector` polarities. Total
+`cargo test -p oxideav-indeo` count rises to **470 unit tests**
+(was 464).
+
 **Round 22 — Indeo 3 (IV31 / IV32) §4 picture-layer → §5 strip-
 context decode-plan bridge (`spec/02` §4 + §5 + §6).** Round 22
 adds the typed accessor `indeo3::PictureLayer::plane_decode_plan`

@@ -44,8 +44,8 @@ use super::header::{
     FrameFlags, FrameHeader, BITSTREAM_HEADER_LEN, FRAME_HEADER_LEN, NULL_FRAME_DATA_SIZE_BITS,
 };
 use super::strip_context::{
-    chroma_plane_height, chroma_plane_width, strip_slot_index, PlaneRole, StripGeometry,
-    StripSlotDescriptor,
+    chroma_plane_height, chroma_plane_width, strip_slot_index, PerPlaneDecodeCall, PlaneRole,
+    StripGeometry, StripSlotDescriptor,
 };
 
 /// Spec/02 §2 — count of planes a codec frame carries.
@@ -506,7 +506,8 @@ impl PictureLayer {
 /// cdecl arguments themselves — the
 /// [`super::strip_context::PerPlaneDecodeCall`] type covers that
 /// surface and consumes the [`Self::bitstream_offset`] this plan
-/// carries.
+/// carries. [`Self::to_decode_call`] is the typed bridge between
+/// the two surfaces.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaneDecodePlan {
     /// Spec/02 §2 plane index (0 = Y, 1 = V, 2 = U).
@@ -560,6 +561,52 @@ impl PlaneDecodePlan {
     /// (an INTRA-coded plane, per `num_vectors == 0`).
     pub fn is_intra(&self) -> bool {
         self.num_vectors == 0
+    }
+
+    /// Spec/02 §6 — bridge from this picture-layer plan to the typed
+    /// 7-argument [`PerPlaneDecodeCall`] frame the per-plane decoder
+    /// (`IR32_32.DLL!0x10006538`) consumes.
+    ///
+    /// The plan already carries every value the §6 call frame needs:
+    ///
+    /// * the spec/02 §2 [`plane_idx`](Self::plane_idx),
+    /// * the spec/02 §3.2 / §5.1
+    ///   [`buffer_selector`](Self::buffer_selector), and
+    /// * the spec/02 §3.4
+    ///   [`bitstream_offset`](Self::bitstream_offset) (the §6 table's
+    ///   4th argument — the binary-tree / VQ payload pointer).
+    ///
+    /// The §6 codebook-bank discriminant (luma → `+0x1a00` /
+    /// chroma → `+0x400`) and the constant offsets for the strip-
+    /// context array view (`+0x300c`) and the secondary codebook
+    /// pointer (`+0x3004`) are resolved inside
+    /// [`PerPlaneDecodeCall::for_plane_and_buffer`].
+    ///
+    /// `slot_idx_src` and `slot_idx_dst` are set to the same value
+    /// per spec/02 §10 item 3 — matching the [`slot_descriptor`]'s
+    /// [`slot_index`](super::strip_context::StripSlotDescriptor::slot_index)
+    /// that the picture-layer plan already names. A caller modelling
+    /// the spec/02 §10 item 3 hypothetical inter-bank read may
+    /// override either field on the returned struct after the bridge.
+    ///
+    /// This method never returns `None` because [`PlaneDecodePlan`]
+    /// is only ever constructed from
+    /// [`PictureLayer::plane_decode_plan`], which rejects out-of-range
+    /// plane indices up front. The return type is `PerPlaneDecodeCall`
+    /// directly, not `Option<…>`, to reflect that invariant.
+    ///
+    /// [`slot_descriptor`]: Self::slot_descriptor
+    pub fn to_decode_call(&self) -> PerPlaneDecodeCall {
+        // The unwrap is infallible: `PictureLayer::plane_decode_plan`
+        // rejects `plane_idx >= PLANE_COUNT` at construction time, so
+        // every reachable `PlaneDecodePlan` carries a `plane_idx` that
+        // `PerPlaneDecodeCall::for_plane_and_buffer` accepts.
+        PerPlaneDecodeCall::for_plane_and_buffer(
+            self.plane_idx,
+            self.buffer_selector,
+            self.bitstream_offset,
+        )
+        .expect("PlaneDecodePlan only carries spec/02 §2 plane indices")
     }
 }
 
@@ -1447,6 +1494,185 @@ mod tests {
         assert!(layer
             .plane_decode_plan(usize::MAX, &header, false)
             .is_none());
+    }
+
+    #[test]
+    fn to_decode_call_bridges_luma_plan_to_seven_arg_frame() {
+        // §6 — bridging a PRIMARY-bank luma plan must produce a
+        // PerPlaneDecodeCall whose codebook bank is the luma offset
+        // (`+0x1a00`), whose slot_idx_src == slot_idx_dst == 3 (§5.1
+        // primary Y), and whose §6 4th-argument bitstream-payload
+        // offset is set to the plan's §3.4 bitstream_offset with no
+        // transformation.
+        let buf = build_frame_with_planes(
+            [0x30, 0x34, 0x38],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+            ],
+            0x0005, // INTRA + primary bank
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header parses");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer parses");
+
+        let plan = layer
+            .plane_decode_plan(PLANE_IDX_Y, &header, false)
+            .expect("Y plan exists");
+        let call = plan.to_decode_call();
+
+        assert_eq!(call.plane_idx, PLANE_IDX_Y);
+        assert!(!call.buffer_selector);
+        assert_eq!(call.slot_idx_src, plan.slot_descriptor.slot_idx);
+        assert_eq!(call.slot_idx_dst, plan.slot_descriptor.slot_idx);
+        assert_eq!(call.slot_idx_src, 3);
+        assert_eq!(call.bitstream_payload_offset, plan.bitstream_offset);
+        assert_eq!(
+            call.codebook_bank_offset,
+            crate::indeo3::INSTANCE_LUMA_CODEBOOK_BANK
+        );
+        assert_eq!(
+            call.strip_array_view_offset,
+            0x300c // INSTANCE_STRIP_ARRAY_VIEW_PTR
+        );
+        assert_eq!(
+            call.secondary_codebook_offset,
+            crate::indeo3::INSTANCE_SECONDARY_CODEBOOK_PTR
+        );
+        assert_eq!(call.instance_state_base_offset, 0);
+        assert!(plan.role.is_luma());
+        assert!(call.plane_role().is_luma());
+    }
+
+    #[test]
+    fn to_decode_call_routes_chroma_plan_to_chroma_codebook_bank() {
+        // §6 — chroma plans must surface the chroma codebook bank
+        // offset (`+0x400`) per the §6 luma-vs-chroma discriminant at
+        // `IR32_32.DLL!0x1000458d..0x100045a9`.
+        let buf = build_frame_with_planes(
+            [0x30, 0x40, 0x50],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(2, &[(1, 2), (-3, -4)]),
+                &prelude_bytes(0, &[]),
+            ],
+            0, // INTER + primary
+            0x4000,
+        );
+        let mut buf = buf;
+        let bsh_off = FRAME_HEADER_LEN;
+        buf[bsh_off + 0x0c..bsh_off + 0x0e].copy_from_slice(&240u16.to_le_bytes());
+        buf[bsh_off + 0x0e..bsh_off + 0x10].copy_from_slice(&320u16.to_le_bytes());
+        let header = FrameHeader::parse(&buf).expect("header parses");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer parses");
+
+        let v_plan = layer
+            .plane_decode_plan(PLANE_IDX_V, &header, false)
+            .expect("V plan exists");
+        let v_call = v_plan.to_decode_call();
+        assert_eq!(v_call.plane_idx, PLANE_IDX_V);
+        assert_eq!(
+            v_call.codebook_bank_offset,
+            crate::indeo3::INSTANCE_CHROMA_CODEBOOK_BANK
+        );
+        // §5.1 primary V → slot 4.
+        assert_eq!(v_call.slot_idx_dst, 4);
+        // §3.4 — V's bitstream_offset = bsh + 0x40 + 4 + 2*2.
+        assert_eq!(
+            v_call.bitstream_payload_offset,
+            FRAME_HEADER_LEN + 0x40 + 4 + 4
+        );
+        assert!(v_call.plane_role().is_chroma());
+
+        // U: primary U → slot 5, chroma bank.
+        let u_plan = layer
+            .plane_decode_plan(PLANE_IDX_U, &header, false)
+            .expect("U plan exists");
+        let u_call = u_plan.to_decode_call();
+        assert_eq!(u_call.plane_idx, PLANE_IDX_U);
+        assert_eq!(
+            u_call.codebook_bank_offset,
+            crate::indeo3::INSTANCE_CHROMA_CODEBOOK_BANK
+        );
+        assert_eq!(u_call.slot_idx_dst, 5);
+        assert!(u_call.plane_role().is_chroma());
+    }
+
+    #[test]
+    fn to_decode_call_secondary_bank_routes_slots_to_lower_half() {
+        // §5.1 — secondary bank (frame_flags bit 9 set) routes
+        // (Y, V, U) → slots (0, 1, 2). The bridge must propagate
+        // buffer_selector = true and surface slot index 0 for Y.
+        let mut buf = build_frame_with_planes(
+            [0x30, 0x34, 0x38],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+            ],
+            0x0205, // BUFFER_SELECTOR bit 9 set + INTRA
+            0x4000,
+        );
+        let bsh_off = FRAME_HEADER_LEN;
+        buf[bsh_off + 0x0c..bsh_off + 0x0e].copy_from_slice(&240u16.to_le_bytes());
+        buf[bsh_off + 0x0e..bsh_off + 0x10].copy_from_slice(&320u16.to_le_bytes());
+        let header = FrameHeader::parse(&buf).expect("header parses");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer parses");
+
+        let plan = layer
+            .plane_decode_plan(PLANE_IDX_Y, &header, true)
+            .expect("Y plan with secondary buffer");
+        let call = plan.to_decode_call();
+        assert!(call.buffer_selector);
+        assert_eq!(call.slot_idx_src, 0);
+        assert_eq!(call.slot_idx_dst, 0);
+        // Even on the secondary bank, the luma codebook bank stays
+        // `+0x1a00` — §6 keys it off plane_idx, not the buffer bit.
+        assert_eq!(
+            call.codebook_bank_offset,
+            crate::indeo3::INSTANCE_LUMA_CODEBOOK_BANK
+        );
+    }
+
+    #[test]
+    fn to_decode_call_matches_for_plane_with_full_frameflags() {
+        // The bridge constructor must produce a structurally identical
+        // call frame to the existing `PerPlaneDecodeCall::for_plane`
+        // path that takes a full `FrameFlags`. Cross-check both
+        // constructors return the same PerPlaneDecodeCall for the same
+        // (plane_idx, buffer_selector, bitstream_payload_offset) triple
+        // across all three planes × both banks.
+        let mut buf = build_frame_with_planes(
+            [0x30, 0x34, 0x38],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+            ],
+            0x0005, // primary
+            0x4000,
+        );
+        let bsh_off = FRAME_HEADER_LEN;
+        buf[bsh_off + 0x0c..bsh_off + 0x0e].copy_from_slice(&240u16.to_le_bytes());
+        buf[bsh_off + 0x0e..bsh_off + 0x10].copy_from_slice(&320u16.to_le_bytes());
+        let header = FrameHeader::parse(&buf).expect("header parses");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer parses");
+
+        let flags_primary = header.bitstream.frame_flags;
+        for plane_idx in [PLANE_IDX_Y, PLANE_IDX_V, PLANE_IDX_U] {
+            let plan = layer
+                .plane_decode_plan(plane_idx, &header, false)
+                .expect("plan exists");
+            let via_bridge = plan.to_decode_call();
+            let via_flags = crate::indeo3::PerPlaneDecodeCall::for_plane(
+                plane_idx,
+                flags_primary,
+                plan.bitstream_offset,
+            )
+            .expect("for_plane returns Some for legal plane_idx");
+            assert_eq!(via_bridge, via_flags);
+        }
     }
 
     #[test]
