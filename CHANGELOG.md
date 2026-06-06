@@ -8,6 +8,50 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/05 §7.3 reverse-decomposition surface
+  — the typed `(x, y, w, h)` recovery from the round-15
+  [`indeo3::McCellAddressPair::resolve`] outputs. The new
+  `indeo3::cell_geometry` module surfaces
+  [`CELL_PIXELS_PER_COLUMN_GROUP`] (`4`) and
+  [`CELL_PIXELS_PER_ROW_BAND`] (`4`) — the two §7.3 factors aliased
+  to [`MC_COLUMN_GROUP_PIXELS`] / [`MC_BAND_ROWS`] with `const _`
+  cross-checks; [`cell_width_from_column_group_count`] /
+  [`cell_height_from_row_band_count`] (the §7.3 `cell_w = cl_inner *
+  4` / `cell_h = row_band_count * 4` mappings with §2.4 zero-input
+  rejection and `u32` overflow guards);
+  [`row_band_count_from_ch_register`] (the §7.3 / §7.1 `ecx >> 24`
+  upper-byte extraction from the initial `ch` register snapshot);
+  [`CellCoords`] / [`cell_coords_from_dst_addr`] (the §7.3 modular
+  decomposition `dst_addr → (cell_x = dst_addr mod 0xb0, cell_y =
+  (dst_addr - strip_base) / 0xb0)` against [`MC_ROW_STRIDE`]); and
+  [`CellRect::from_parts`] / [`reverse_decompose`] — the typed
+  shape descriptor + single-call composition of the three sub-
+  facets — with a typed [`CellRectDecodeError`] surface for the
+  four failure modes (dst-address-below-strip-base, zero column-
+  group count, zero row-band count, dimension overflow). Per the
+  §7.3 chapter boundary, the module accepts pre-resolved
+  `cl_inner` bytes (§7.5 Extractor territory for
+  `bank[+0x000][cl]`), leaves strip-pixel-buffer-to-frame
+  composition to `spec/07 §5.7`, and leaves visible-width
+  classification to [`McPlaneRole::strip_visible_width`]. 34 new
+  unit tests cover the two factor constants, the
+  `cell_width_from_column_group_count` mapping at typical
+  intra-cell + full-strip + chroma-strip widths (with zero-input
+  rejection + max-byte arithmetic), the
+  `cell_height_from_row_band_count` mapping at typical heights
+  (with the same edge cases), the `row_band_count_from_ch_register`
+  upper-byte extraction across four bit-patterns, the
+  `cell_coords_from_dst_addr` modular decomposition (at strip
+  origin, within first row, one row below base, last column of
+  strip row, arbitrary strip position + caller-contract violation),
+  the `CellRect::from_parts` assembly + per-factor error
+  propagation, the `reverse_decompose` end-to-end composition
+  including the four-way error fan-out, the cross-module
+  consistency identities (`MC_ROW_STRIDE` modulus alignment +
+  `MC_COLUMN_GROUP_PIXELS` / `MC_BAND_ROWS` factor equivalence),
+  and a forward-reverse round-trip at arbitrary coordinates. Total
+  unit-test count rises to 504 (was 470).
+
 - Indeo 3 (IV31 / IV32) spec/02 §6 picture-layer plan → 7-argument
   per-plane decode-call bridge — the typed accessor
   `indeo3::PlaneDecodePlan::to_decode_call()` returning a populated

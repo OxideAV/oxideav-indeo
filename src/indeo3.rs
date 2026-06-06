@@ -166,7 +166,36 @@
 //! pushing `[esp+0x54]` / `[esp+0x58]`, with the source-bank
 //! inversion baked in and a defensive [`McBankAssignment::is_self_copy`]
 //! predicate for the §4.2 "never observed in the binary"
-//! same-bank degenerate case).
+//! same-bank degenerate case). Round 17 adds the spec/05 §7.3
+//! reverse-decomposition surface that round 15's [`McCellAddressPair::resolve`]
+//! deferred ("does not perform the §7.3 `(x, y, w, h)` recovery from
+//! the `dst_addr` byte address back into pixel coordinates"):
+//! [`CELL_PIXELS_PER_COLUMN_GROUP`] (`4`, the §7.3 `cl_inner * 4`
+//! factor aliased to [`MC_COLUMN_GROUP_PIXELS`] with a `const _`
+//! cross-check), [`CELL_PIXELS_PER_ROW_BAND`] (`4`, the §7.3
+//! `row_band_count * 4` factor aliased to [`MC_BAND_ROWS`]),
+//! [`cell_width_from_column_group_count`] / [`cell_height_from_row_band_count`]
+//! (the §7.3 `cell_w = cl_inner * 4` / `cell_h = row_band_count * 4`
+//! mappings with `u32` overflow guards and §2.4 minimum-cell-size
+//! zero-input rejection), [`row_band_count_from_ch_register`] (the
+//! §7.3 / §7.1 `ecx >> 24` upper-byte extraction from the initial
+//! `ch` register snapshot), [`CellCoords`] / [`cell_coords_from_dst_addr`]
+//! (the §7.3 modular decomposition
+//! `dst_addr → (cell_x = dst_addr mod 0xb0, cell_y = (dst_addr -
+//! strip_base) / 0xb0)` against [`MC_ROW_STRIDE`]), and the
+//! [`CellRect::from_parts`] / [`reverse_decompose`] entry points
+//! that compose the three sub-facets into the full §7.3
+//! `(cell_x, cell_y, cell_w, cell_h)` shape descriptor, with a
+//! typed [`CellRectDecodeError`] surface for the four failure
+//! modes (dst-address-below-strip-base, zero column-group count,
+//! zero row-band count, dimension overflow). Per the §7.3 chapter
+//! boundary, the module does not own the codebook-bank
+//! `bank[+0x000]` LUT values (§7.5 Extractor territory; passed as
+//! pre-resolved bytes), does not bridge strip-pixel-buffer
+//! coordinates into whole-frame coordinates (`spec/07 §5.7`
+//! strip-to-frame assembly), and does not validate the rectangle
+//! against the §5.5 plane-role visible width (plane-role
+//! classification stays with [`McPlaneRole::strip_visible_width`]).
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
@@ -174,6 +203,7 @@
 //! doc-comments below cite the chapter named in each module.
 
 mod bank_select;
+mod cell_geometry;
 mod cell_loop;
 mod cell_subarray;
 mod entropy;
@@ -195,6 +225,11 @@ mod strip_edge;
 mod vq;
 
 pub use bank_select::{Bank, McBankAssignment, BANK_INVERSION_DELTA};
+pub use cell_geometry::{
+    cell_coords_from_dst_addr, cell_height_from_row_band_count, cell_width_from_column_group_count,
+    reverse_decompose, row_band_count_from_ch_register, CellCoords, CellRect, CellRectDecodeError,
+    CELL_PIXELS_PER_COLUMN_GROUP, CELL_PIXELS_PER_ROW_BAND,
+};
 pub use cell_loop::{
     advance_row, dispatch_cell_preamble, iterate_column_rows, read_cell_position_dword,
     read_cl_row_counter, CellLoopPreamble, CellLoopState, CellRowAdvance, CodebookBankView,

@@ -5,6 +5,62 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 24 — Indeo 3 (IV31 / IV32) §7.3 reverse-decomposition
+surface (`spec/05` §7.3).** Round 24 adds the
+`indeo3::cell_geometry` module — the typed `(x, y, w, h)` recovery
+from the round-15 [`McCellAddressPair::resolve`] outputs that
+round 15 deliberately deferred ("does not perform the §7.3 `(x, y,
+w, h)` recovery from the `dst_addr` byte address back into pixel
+coordinates"). The surface splits the §7.3 recipe into three
+sub-facets: cell shape from the `(ch, cl)` cell-state-byte
+registers (`cell_w = cl_inner * 4` / `cell_h = row_band_count *
+4`), cell top-left coordinates from `dst_addr` (`cell_x = dst_addr
+mod 0xb0`, `cell_y = (dst_addr - strip_base) / 0xb0`), and the
+typed [`CellRect`] composition. [`CELL_PIXELS_PER_COLUMN_GROUP`]
+(`4`) and [`CELL_PIXELS_PER_ROW_BAND`] (`4`) alias the §5.1
+[`MC_COLUMN_GROUP_PIXELS`] / [`MC_BAND_ROWS`] inner-loop-kernel
+constants via `const _` cross-checks so the §7.3 reverse surface
+does not have to reach into the kernel constants directly.
+[`cell_width_from_column_group_count`] /
+[`cell_height_from_row_band_count`] apply the §2.4 minimum-cell-size
+zero-input rejection and `u32` overflow guards.
+[`row_band_count_from_ch_register`] surfaces the §7.3 / §7.1
+`ecx >> 24` upper-byte extraction from the initial `ch` register
+snapshot. [`CellCoords`] / [`cell_coords_from_dst_addr`] perform
+the §7.3 modular decomposition against [`MC_ROW_STRIDE`], with
+defensive `None` on caller-contract violation (`dst_addr <
+strip_base`). [`CellRect::from_parts`] / [`reverse_decompose`]
+compose the three sub-facets into the full §7.3 shape descriptor,
+with a typed [`CellRectDecodeError`] surface for the four failure
+modes (dst-address-below-strip-base, zero column-group count,
+zero row-band count, dimension overflow). Per the §7.3 chapter
+boundary, the module accepts pre-resolved `cl_inner` bytes (the
+codebook-bank `bank[+0x000][cl]` LUT values are §7.5 Extractor
+territory), leaves strip-pixel-buffer-to-frame composition to
+`spec/07 §5.7`, and leaves visible-width classification to
+[`McPlaneRole::strip_visible_width`]. 34 new unit tests cover: the
+two factor constants pinned to the §5.1 surfaces;
+`cell_width_from_column_group_count` at one column-group, full-
+strip width (44 → 176 px), typical chroma-cell width (10 → 40
+px), zero-input rejection, and max-byte arithmetic;
+`cell_height_from_row_band_count` at typical heights (1 → 4, 10
+→ 40) with zero-input rejection and max-byte arithmetic;
+`row_band_count_from_ch_register` extraction across four
+bit-patterns including lower-three-byte masking and zero-`ch`
+edge case; `cell_coords_from_dst_addr` at strip origin, within
+first row, one row below base, last column of strip row (175,
+0), arbitrary position (16, 7) via 7 * 0xb0 + 16 offset, and the
+caller-contract violation (`dst_addr < strip_base`);
+`CellRect::from_parts` at full-strip 176×40 and typical 16×16
+INTRA cells with per-factor error propagation; `reverse_decompose`
+end-to-end composition at strip origin + arbitrary (8, 4) 8×8
+cell with the four-way error fan-out; cross-module identities
+pinning the `MC_ROW_STRIDE` modulus alignment, the
+`MC_COLUMN_GROUP_PIXELS` / `MC_BAND_ROWS` factor equivalence, and
+a forward-reverse round-trip at arbitrary `(cell_x, cell_y) =
+(24, 9)` coordinates. Total `cargo test -p oxideav-indeo` count
+rises to **504 unit tests** (was 470).
+
 **Round 23 — Indeo 3 (IV31 / IV32) §6 picture-layer plan → 7-
 argument per-plane decode-call bridge (`spec/02` §6).** Round 23
 adds the typed accessor `indeo3::PlaneDecodePlan::to_decode_call()`
