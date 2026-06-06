@@ -31,8 +31,10 @@
 //!    `(ch, cl)` cell-state-byte registers via the `bank[+0x000]`
 //!    column-group LUT and the `ch >> 24` row-band-count extraction:
 //!
-//!        cell_w = cl_inner * 4    ; cl_inner = bank[+0x000][cl]
-//!        cell_h = row_band_count * 4
+//!    ```text
+//!    cell_w = cl_inner * 4    ; cl_inner = bank[+0x000][cl]
+//!    cell_h = row_band_count * 4
+//!    ```
 //!
 //!    The `* 4` factors are §5.1's [`super::MC_COLUMN_GROUP_PIXELS`]
 //!    (the four pixels per column-group inner-loop iteration) and
@@ -44,8 +46,10 @@
 //!    recovered from the destination byte address via the strip
 //!    pixel-buffer's row stride [`super::MC_ROW_STRIDE`] = `0xb0`:
 //!
-//!        cell_x = dst_addr mod 0xb0
-//!        cell_y = (dst_addr - strip_base) / 0xb0
+//!    ```text
+//!    cell_x = dst_addr mod 0xb0
+//!    cell_y = (dst_addr - strip_base) / 0xb0
+//!    ```
 //!
 //!    where `strip_base` is the strip-context slot's `[+0x00]` base
 //!    pointer the per-plane decoder hands in via the §5 / §6 plumbing.
