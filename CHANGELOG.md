@@ -8,6 +8,41 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/03 §5.4 end-of-strip edge fix-up
+  executor — `indeo3::StripEdgeFixupDims::apply_to_buffer` runs the
+  per-row rightmost-column byte duplication
+  (`dest[r * 0xb0 + width] = src[r * 0xb0 + width - 1]`) on a
+  caller-supplied `&mut [u8]` strip pixel-buffer slice, walking
+  `strip_height` rows at the [`STRIP_EDGE_ROW_STRIDE`] (`0xb0`)
+  per-row pointer-advance stride. The earlier round surfaced only
+  the §5.4 parameter / iteration descriptors and explicitly deferred
+  the byte-copy execution to the caller; this round closes that
+  contract with a safe-Rust slice executor and a typed
+  [`StripEdgeApplyError`] failure surface covering three §5.4
+  boundary conditions: `ZeroWidthStrip` (the `mov al, [edi - 1]`
+  load lacks a source position), `WidthExceedsRowStride` (the
+  `mov [edi], al` write would land on the next row's leading
+  cursor, violating §5.2's "visible width sits strictly inside the
+  0xb0 allocated stride" invariant), and `BufferTooShort` (the
+  slice has fewer bytes than `strip_height × 0xb0`, with both the
+  required and supplied byte counts carried for diagnostics). A
+  zero-row strip short-circuits to `Ok(0)` without touching the
+  buffer (matching the §5.4 spec's `while (rows_remaining)` guard).
+  10 new unit tests cover: the zero-row early return; the
+  zero-width error; the width-at-stride error; the buffer-too-short
+  error with required + supplied counts; the single-row duplication
+  (offset 159 → 160 for a luma strip of width 160); the chroma
+  walk after the `sar 2` divide (a 240-row stored chroma slot
+  walks 60 rows at width 40, with each padding slot at offset 40
+  mirroring the rightmost-column byte at offset 39); the
+  non-padding-byte preservation invariant (every byte outside the
+  per-row write target is left as supplied); the oversize-buffer
+  acceptance (only the first `strip_height × 0xb0` bytes are
+  touched); the via-`for_slot` luma full-height walk (480 rows);
+  and the error-display spec-citation surface (every variant cites
+  `spec/03 §5.4`). All offsets, the row stride, the chroma divide,
+  and the per-row read/write byte positions trace to
+  `03-macroblock-layer.md` §5.4 verbatim.
 - Indeo 3 (IV31 / IV32) spec/05 §7.3 reverse-decomposition surface
   — the typed `(x, y, w, h)` recovery from the round-15
   [`indeo3::McCellAddressPair::resolve`] outputs. The new

@@ -42,10 +42,17 @@
 //!   slot's `+0x00..+0x14` table resolved to (spec/03 §5.2); this
 //!   module surfaces the *relative* offsets, not the absolute
 //!   addresses.
-//! * It does not execute the byte copy itself. The §5.4 byte loop is
-//!   a one-line `dest[i] = src[i - 1]` in any caller's pixel-buffer
-//!   view; this module's job is the parameter / iteration surface
-//!   that drives the loop.
+//!
+//! Round 18 (this round) closes the §5.4 executor surface that round 11
+//! deferred to the caller: [`StripEdgeFixupDims::apply_to_buffer`] runs
+//! the per-row `dest[r * 0xb0 + width] = src[r * 0xb0 + width - 1]`
+//! rightmost-column duplication on a caller-supplied `&mut [u8]` strip
+//! pixel buffer view, walking `strip_height` rows at the
+//! [`STRIP_EDGE_ROW_STRIDE`] (`0xb0`) row stride. The function is
+//! safe-Rust over a slice and surfaces [`StripEdgeApplyError`] for the
+//! three failure modes the §5.4 contract leaves open to the caller
+//! (zero-width strip, last-row-write-out-of-buffer, and
+//! buffer-too-short).
 //!
 //! All offsets, field widths, and divide-by-4 disposition are taken
 //! from `03-macroblock-layer.md` §5.4. RVAs cited in doc-comments
@@ -270,6 +277,176 @@ pub const fn strip_edge_byte_copy_offsets() -> (i32, i32) {
     (STRIP_EDGE_BYTE_READ_OFFSET, STRIP_EDGE_BYTE_WRITE_OFFSET)
 }
 
+// ---- §5.4 (per-row byte-copy executor) -----------------------------
+
+/// Spec/03 §5.4 — failure modes the byte-copy executor surfaces when
+/// the caller's pixel-buffer view cannot host the per-row
+/// rightmost-column duplication.
+///
+/// The §5.4 spec describes the byte-copy in terms of an `edi` cursor
+/// positioned at the rightmost column of the strip. In a safe-Rust
+/// slice view, that cursor's read at `[edi - 1]` and write at
+/// `[edi]` correspond to row-relative byte offsets of `width - 1`
+/// (read source: the rightmost stored pixel) and `width` (write
+/// destination: the padding byte one position to the right of the
+/// rightmost stored pixel). These offsets, scaled by the per-row
+/// stride [`STRIP_EDGE_ROW_STRIDE`] (`0xb0`), index into the
+/// caller's pixel buffer. The three failure modes below capture the
+/// out-of-bounds cases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StripEdgeApplyError {
+    /// The dims report a zero `strip_width`; the §5.4 fix-up cannot
+    /// derive a "one-byte-before-rightmost" read offset because there
+    /// is no rightmost stored pixel. The spec's `mov al, [edi - 1]`
+    /// load presumes a non-empty row; a zero-width strip is a
+    /// caller-side construction error.
+    ZeroWidthStrip,
+    /// The caller's pixel buffer has fewer than `strip_height * 0xb0`
+    /// bytes available, so at least one row's `width`-relative cursor
+    /// would address past the slice's end. Carries the required
+    /// byte count + the supplied byte count for diagnostic purposes.
+    BufferTooShort {
+        /// Number of bytes the §5.4 walk requires (`strip_height *
+        /// STRIP_EDGE_ROW_STRIDE`).
+        required_bytes: usize,
+        /// Number of bytes the caller actually supplied.
+        supplied_bytes: usize,
+    },
+    /// The strip's stored `strip_width` is at least the per-row
+    /// [`STRIP_EDGE_ROW_STRIDE`] (`0xb0` = 176). The §5.4 fix-up
+    /// would write at row-relative offset `strip_width` (the
+    /// position one byte past the rightmost stored pixel), which
+    /// must lie strictly inside the same row's allocated stride. The
+    /// strip allocator at `spec/03 §5.2` documents `0xb0` as the
+    /// strip pixel buffer's allocated row stride (visible width fits
+    /// strictly within the stride, with the trailing bytes serving
+    /// as boundary padding) — the §5.4 destination position is part
+    /// of that padding region. `strip_width >= 0xb0` therefore
+    /// signals a malformed dimension pair: it leaves no padding
+    /// position for the duplicated byte.
+    WidthExceedsRowStride {
+        /// The supplied `strip_width` (in pixels).
+        supplied_width: u32,
+        /// The fixed [`STRIP_EDGE_ROW_STRIDE`] (`0xb0`).
+        row_stride: usize,
+    },
+}
+
+impl core::fmt::Display for StripEdgeApplyError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            StripEdgeApplyError::ZeroWidthStrip => f.write_str(
+                "spec/03 §5.4: zero-width strip — `mov al, [edi - 1]` source position is undefined",
+            ),
+            StripEdgeApplyError::BufferTooShort {
+                required_bytes,
+                supplied_bytes,
+            } => write!(
+                f,
+                "spec/03 §5.4: pixel-buffer slice has {supplied_bytes} bytes; \
+                 fix-up requires at least {required_bytes} (strip_height × 0xb0)"
+            ),
+            StripEdgeApplyError::WidthExceedsRowStride {
+                supplied_width,
+                row_stride,
+            } => write!(
+                f,
+                "spec/03 §5.4: strip_width = {supplied_width} reaches or exceeds row stride 0x{row_stride:x} \
+                 (spec/03 §5.2 keeps visible width strictly within the allocated stride)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StripEdgeApplyError {}
+
+impl StripEdgeFixupDims {
+    /// Spec/03 §5.4 — execute the per-row rightmost-column byte
+    /// duplication on a caller-supplied strip-pixel-buffer slice.
+    ///
+    /// For each row `r` in `0..strip_height`, the function reads the
+    /// byte at position `r * 0xb0 + (strip_width - 1)` (the rightmost
+    /// stored pixel, equivalent to the spec's `[edi - 1]` load) and
+    /// writes that byte to position `r * 0xb0 + strip_width` (the
+    /// padding byte just past the rightmost stored pixel, equivalent
+    /// to the spec's `[edi]` store). This realises the "across-strip-
+    /// boundary pixel duplication" the §5.4 prose describes
+    /// ("copies the rightmost column of pixels from `[edi-1]` to
+    /// `[edi]` ... for the strip's full height").
+    ///
+    /// The `pixel_buffer` slice is the strip-context slot's pixel-
+    /// buffer base (per `spec/03 §5.2`'s `+0x00..+0x14` pointer
+    /// table) viewed as a flat byte slice. The function does not
+    /// allocate, does not perform interior mutability, and uses one
+    /// per-row read + write per iteration (matching the spec's
+    /// per-row `mov al, [edi - 1]; mov [edi], al` pair).
+    ///
+    /// Errors are reported via [`StripEdgeApplyError`]. The four
+    /// short-circuit conditions are:
+    ///
+    /// * `strip_height == 0` — the §5.4 spec's `while (rows_remaining)`
+    ///   guard exits at the first check and the function returns
+    ///   `Ok(0)` (zero rows walked) without touching the buffer.
+    /// * `strip_width == 0` — yields
+    ///   [`StripEdgeApplyError::ZeroWidthStrip`] because the
+    ///   `[edi - 1]` source position falls before the row's leading
+    ///   cursor.
+    /// * `strip_width >= STRIP_EDGE_ROW_STRIDE` — yields
+    ///   [`StripEdgeApplyError::WidthExceedsRowStride`] because the
+    ///   write at row-relative offset `strip_width` would land inside
+    ///   the next row's leading cursor, violating the `spec/03 §5.2`
+    ///   "strip width sits strictly inside the allocated row stride"
+    ///   invariant.
+    /// * The slice has fewer bytes than `strip_height *
+    ///   STRIP_EDGE_ROW_STRIDE` — yields
+    ///   [`StripEdgeApplyError::BufferTooShort`] with the required +
+    ///   supplied byte counts.
+    ///
+    /// Returns `Ok(rows_walked)` on success, where `rows_walked`
+    /// equals `strip_height` (the iterator emits one byte-copy per
+    /// row top-to-bottom).
+    pub fn apply_to_buffer(self, pixel_buffer: &mut [u8]) -> Result<u32, StripEdgeApplyError> {
+        if self.strip_height == 0 {
+            return Ok(0);
+        }
+        if self.strip_width == 0 {
+            return Err(StripEdgeApplyError::ZeroWidthStrip);
+        }
+        let width = self.strip_width as usize;
+        if width >= STRIP_EDGE_ROW_STRIDE {
+            return Err(StripEdgeApplyError::WidthExceedsRowStride {
+                supplied_width: self.strip_width,
+                row_stride: STRIP_EDGE_ROW_STRIDE,
+            });
+        }
+        let required_bytes = (self.strip_height as usize)
+            .checked_mul(STRIP_EDGE_ROW_STRIDE)
+            .ok_or(StripEdgeApplyError::BufferTooShort {
+                required_bytes: usize::MAX,
+                supplied_bytes: pixel_buffer.len(),
+            })?;
+        if pixel_buffer.len() < required_bytes {
+            return Err(StripEdgeApplyError::BufferTooShort {
+                required_bytes,
+                supplied_bytes: pixel_buffer.len(),
+            });
+        }
+
+        // §5.4 per-row body: read `[edi - 1]`, write `[edi]`. With the
+        // row's leading cursor at `r * 0xb0`, `edi` for the rightmost-
+        // column slot sits at `r * 0xb0 + strip_width`; the read at
+        // `edi - 1` is therefore at `r * 0xb0 + strip_width - 1` and
+        // the write at `edi` is at `r * 0xb0 + strip_width`.
+        for row in 0..self.strip_height {
+            let row_base = (row as usize) * STRIP_EDGE_ROW_STRIDE;
+            let read_at = row_base + width - 1;
+            let write_at = row_base + width;
+            pixel_buffer[write_at] = pixel_buffer[read_at];
+        }
+        Ok(self.strip_height)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,5 +651,224 @@ mod tests {
             rows.last().unwrap().row_cursor_byte_offset,
             239 * STRIP_EDGE_ROW_STRIDE
         );
+    }
+
+    // ---- §5.4 (per-row byte-copy executor) -------------------------
+
+    #[test]
+    fn apply_to_buffer_zero_height_returns_zero_rows() {
+        // §5.4: zero-row strip walks no rows. The buffer is untouched.
+        let dims = StripEdgeFixupDims {
+            strip_height: 0,
+            strip_width: 160,
+            plane_role: PlaneRole::Luma,
+        };
+        let mut buf = vec![0xaau8; STRIP_EDGE_ROW_STRIDE];
+        let rows = dims.apply_to_buffer(&mut buf).unwrap();
+        assert_eq!(rows, 0);
+        // Buffer untouched.
+        for b in &buf {
+            assert_eq!(*b, 0xaa);
+        }
+    }
+
+    #[test]
+    fn apply_to_buffer_zero_width_errors() {
+        // §5.4: zero-width strip has no `[edi - 1]` source.
+        let dims = StripEdgeFixupDims {
+            strip_height: 4,
+            strip_width: 0,
+            plane_role: PlaneRole::Luma,
+        };
+        let mut buf = vec![0u8; 4 * STRIP_EDGE_ROW_STRIDE];
+        assert_eq!(
+            dims.apply_to_buffer(&mut buf),
+            Err(StripEdgeApplyError::ZeroWidthStrip)
+        );
+    }
+
+    #[test]
+    fn apply_to_buffer_width_at_stride_errors() {
+        // §5.4 / §5.2: visible width must sit strictly inside the
+        // 0xb0 row stride; width == stride leaves no padding column
+        // for the duplicated byte.
+        let dims = StripEdgeFixupDims {
+            strip_height: 1,
+            strip_width: STRIP_EDGE_ROW_STRIDE as u32,
+            plane_role: PlaneRole::Luma,
+        };
+        let mut buf = vec![0u8; STRIP_EDGE_ROW_STRIDE];
+        assert_eq!(
+            dims.apply_to_buffer(&mut buf),
+            Err(StripEdgeApplyError::WidthExceedsRowStride {
+                supplied_width: STRIP_EDGE_ROW_STRIDE as u32,
+                row_stride: STRIP_EDGE_ROW_STRIDE,
+            })
+        );
+    }
+
+    #[test]
+    fn apply_to_buffer_too_short_errors() {
+        // §5.4 walks `strip_height * 0xb0` bytes; a slice with fewer
+        // bytes yields BufferTooShort with both counts.
+        let dims = StripEdgeFixupDims {
+            strip_height: 4,
+            strip_width: 160,
+            plane_role: PlaneRole::Luma,
+        };
+        let supplied = 3 * STRIP_EDGE_ROW_STRIDE;
+        let mut buf = vec![0u8; supplied];
+        assert_eq!(
+            dims.apply_to_buffer(&mut buf),
+            Err(StripEdgeApplyError::BufferTooShort {
+                required_bytes: 4 * STRIP_EDGE_ROW_STRIDE,
+                supplied_bytes: supplied,
+            })
+        );
+    }
+
+    #[test]
+    fn apply_to_buffer_single_row_duplicates_byte() {
+        // §5.4 per-row body: read `[r*0xb0 + width - 1]`, write
+        // `[r*0xb0 + width]`. For a single-row luma strip of
+        // width 160, the byte at offset 159 (the rightmost stored
+        // pixel) gets copied to offset 160 (the padding slot).
+        let dims = StripEdgeFixupDims {
+            strip_height: 1,
+            strip_width: 160,
+            plane_role: PlaneRole::Luma,
+        };
+        let mut buf = vec![0u8; STRIP_EDGE_ROW_STRIDE];
+        buf[159] = 0x5a;
+        buf[160] = 0x00; // padding slot before the walk
+        let rows = dims.apply_to_buffer(&mut buf).unwrap();
+        assert_eq!(rows, 1);
+        assert_eq!(buf[159], 0x5a, "source byte preserved");
+        assert_eq!(
+            buf[160], 0x5a,
+            "destination padding byte takes the rightmost-column value"
+        );
+    }
+
+    #[test]
+    fn apply_to_buffer_chroma_strip_walks_quarter_rows() {
+        // §5.4 chroma path: a strip with stored height 240 and width
+        // 160 walks 60 rows at width 40 after the `sar 2` divide
+        // (per StripEdgeFixupDims::for_slot's chroma branch).
+        let dims = StripEdgeFixupDims::for_slot(1, 240, 160).unwrap();
+        assert_eq!(dims.strip_height, 60);
+        assert_eq!(dims.strip_width, 40);
+        let mut buf = vec![0u8; 60 * STRIP_EDGE_ROW_STRIDE];
+        // Seed each row's rightmost-stored byte (offset width-1=39
+        // within the row) with a row-distinct sentinel.
+        for r in 0..60usize {
+            buf[r * STRIP_EDGE_ROW_STRIDE + 39] = (r + 1) as u8;
+        }
+        let rows = dims.apply_to_buffer(&mut buf).unwrap();
+        assert_eq!(rows, 60);
+        // Each row's offset 40 (the padding slot) now mirrors offset 39.
+        for r in 0..60usize {
+            assert_eq!(
+                buf[r * STRIP_EDGE_ROW_STRIDE + 40],
+                (r + 1) as u8,
+                "row={r} padding-slot mirrors the rightmost-column byte"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_to_buffer_leaves_non_padding_bytes_untouched() {
+        // §5.4 writes ONE byte per row (the padding slot at offset
+        // `width`). Every other byte in the buffer is left as the
+        // caller supplied it.
+        let dims = StripEdgeFixupDims {
+            strip_height: 4,
+            strip_width: 160,
+            plane_role: PlaneRole::Luma,
+        };
+        let mut buf = vec![0xeeu8; 4 * STRIP_EDGE_ROW_STRIDE];
+        // Place a unique byte at each row's rightmost-stored slot.
+        for r in 0..4usize {
+            buf[r * STRIP_EDGE_ROW_STRIDE + 159] = 0x11 + (r as u8);
+        }
+        let _ = dims.apply_to_buffer(&mut buf).unwrap();
+        for r in 0..4usize {
+            for c in 0..STRIP_EDGE_ROW_STRIDE {
+                let expected = match c {
+                    // The rightmost-stored slot preserved.
+                    159 => 0x11 + (r as u8),
+                    // The padding slot now mirrors offset 159.
+                    160 => 0x11 + (r as u8),
+                    // Everything else stays at the 0xee fill.
+                    _ => 0xee,
+                };
+                assert_eq!(
+                    buf[r * STRIP_EDGE_ROW_STRIDE + c],
+                    expected,
+                    "row={r} col={c}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn apply_to_buffer_accepts_oversize_buffer() {
+        // §5.4 is happy with a buffer that has more bytes than the
+        // strict minimum; only the first `strip_height * 0xb0` bytes
+        // are touched.
+        let dims = StripEdgeFixupDims {
+            strip_height: 2,
+            strip_width: 40,
+            plane_role: PlaneRole::Chroma,
+        };
+        let oversize = 10 * STRIP_EDGE_ROW_STRIDE;
+        let mut buf = vec![0xa5u8; oversize];
+        buf[39] = 0x77;
+        buf[STRIP_EDGE_ROW_STRIDE + 39] = 0x88;
+        let rows = dims.apply_to_buffer(&mut buf).unwrap();
+        assert_eq!(rows, 2);
+        assert_eq!(buf[40], 0x77, "row 0 padding byte");
+        assert_eq!(buf[STRIP_EDGE_ROW_STRIDE + 40], 0x88, "row 1 padding byte");
+        // Beyond `strip_height * 0xb0` the buffer is untouched.
+        for b in buf.iter().skip(2 * STRIP_EDGE_ROW_STRIDE) {
+            assert_eq!(*b, 0xa5);
+        }
+    }
+
+    #[test]
+    fn apply_to_buffer_via_for_slot_walks_luma_full_height() {
+        // §5.4 luma path: a slot 0 with stored height 480 walks 480
+        // rows; the function returns the same count as
+        // dims.strip_height.
+        let dims = StripEdgeFixupDims::for_slot(0, 480, 160).unwrap();
+        assert_eq!(dims.strip_height, 480);
+        assert_eq!(dims.strip_width, 160);
+        let mut buf = vec![0u8; 480 * STRIP_EDGE_ROW_STRIDE];
+        let rows = dims.apply_to_buffer(&mut buf).unwrap();
+        assert_eq!(rows, 480);
+    }
+
+    #[test]
+    fn apply_error_display_messages_cite_spec() {
+        // Diagnostic surface: every variant cites spec/03 §5.4 by
+        // name so callers debugging a corrupt strip have an
+        // unambiguous source citation.
+        let e1 = StripEdgeApplyError::ZeroWidthStrip;
+        assert!(format!("{e1}").contains("spec/03 §5.4"));
+        let e2 = StripEdgeApplyError::BufferTooShort {
+            required_bytes: 256,
+            supplied_bytes: 128,
+        };
+        let s2 = format!("{e2}");
+        assert!(s2.contains("spec/03 §5.4"));
+        assert!(s2.contains("256"));
+        assert!(s2.contains("128"));
+        let e3 = StripEdgeApplyError::WidthExceedsRowStride {
+            supplied_width: 200,
+            row_stride: STRIP_EDGE_ROW_STRIDE,
+        };
+        let s3 = format!("{e3}");
+        assert!(s3.contains("spec/03 §5.4"));
+        assert!(s3.contains("200"));
     }
 }

@@ -327,9 +327,10 @@ pub use strip_context::{
     STRIP_SLOT_SENTINEL, STRIP_SLOT_STRIDE,
 };
 pub use strip_edge::{
-    strip_edge_byte_copy_offsets, strip_edge_chroma_shift, strip_edge_row_step, StripEdgeFixupDims,
-    StripEdgeRow, StripEdgeRowIter, STRIP_EDGE_BYTE_READ_OFFSET, STRIP_EDGE_BYTE_WRITE_OFFSET,
-    STRIP_EDGE_CHROMA_SHIFT, STRIP_EDGE_ROW_STRIDE,
+    strip_edge_byte_copy_offsets, strip_edge_chroma_shift, strip_edge_row_step,
+    StripEdgeApplyError, StripEdgeFixupDims, StripEdgeRow, StripEdgeRowIter,
+    STRIP_EDGE_BYTE_READ_OFFSET, STRIP_EDGE_BYTE_WRITE_OFFSET, STRIP_EDGE_CHROMA_SHIFT,
+    STRIP_EDGE_ROW_STRIDE,
 };
 pub use vq::{
     seed_dispatch_entries, CellVariant, CodebookEntry, DyadDeltaTable, SeedEntry, VqArena, VqError,

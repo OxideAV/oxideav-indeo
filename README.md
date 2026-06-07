@@ -5,6 +5,39 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 25 — Indeo 3 (IV31 / IV32) §5.4 end-of-strip edge fix-up
+byte-copy executor (`spec/03` §5.4).** Round 25 closes the §5.4
+executor surface the earlier rounds explicitly deferred to the
+caller. `indeo3::StripEdgeFixupDims::apply_to_buffer` runs the
+per-row rightmost-column duplication
+(`dest[r * 0xb0 + width] = src[r * 0xb0 + width - 1]`) on a
+caller-supplied `&mut [u8]` strip pixel-buffer slice, walking
+`strip_height` rows at the `STRIP_EDGE_ROW_STRIDE` (`0xb0`)
+per-row pointer-advance step. The §5.4 spec text describes the
+fix-up at `IR32_32.DLL!0x10006b4b..0x10006b80` as a byte-level
+`mov al, [edi - 1]; mov [edi], al` per row for the strip's full
+height; this round translates that into a safe-Rust slice
+operation. A typed `StripEdgeApplyError` enum surfaces the three
+§5.4 boundary conditions: `ZeroWidthStrip` (the `[edi - 1]` source
+position would precede the row's leading cursor),
+`WidthExceedsRowStride` (the `[edi]` write position would land on
+the next row's leading cursor, violating §5.2's strict-inside-
+the-stride invariant), and `BufferTooShort` (the slice has fewer
+bytes than `strip_height × 0xb0`, with both the required + the
+supplied byte counts carried for diagnostics). A zero-row strip
+short-circuits to `Ok(0)` without touching the buffer (matching
+the §5.4 spec's `while (rows_remaining)` guard). 10 new unit tests
+cover: the zero-row early return; the zero-width error; the
+width-at-stride error; the buffer-too-short error; the single-row
+duplication (offset 159 → 160 for a luma strip of width 160); the
+chroma walk after the `sar 2` divide (a 240-row stored chroma
+slot walks 60 rows at width 40, with each padding slot at offset
+40 mirroring the rightmost-column byte at offset 39); the
+non-padding-byte preservation invariant; the oversize-buffer
+acceptance; the via-`for_slot` luma full-height walk (480 rows);
+and the error-display spec-citation surface. Total `cargo test -p
+oxideav-indeo` count rises to **514 unit tests** (was 504).
+
 **Round 24 — Indeo 3 (IV31 / IV32) §7.3 reverse-decomposition
 surface (`spec/05` §7.3).** Round 24 adds the
 `indeo3::cell_geometry` module — the typed `(x, y, w, h)` recovery
