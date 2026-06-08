@@ -211,6 +211,100 @@ impl MotionVector {
     }
 }
 
+/// Spec/02 §9 — typed view of a single plane's byte-level data
+/// layout within the codec-frame input buffer.
+///
+/// The spec/02 §9 "plane-data byte map" diagram identifies four
+/// landmark offsets per plane:
+///
+/// 1. `plane_base = bsh + plane_offset` — start of the plane's
+///    data (where `num_vectors` lives).
+/// 2. `plane_base + 4` — end of the `num_vectors` u32 / start of
+///    the `mc_vectors[]` array.
+/// 3. `plane_base + 4 + 2*num_vectors` — end of the prelude /
+///    start of the binary-tree + VQ bitstream payload (the same
+///    value as [`PlanePrelude::bitstream_offset`]).
+/// 4. `payload_upper_bound` — strict upper bound on bytes the
+///    binary-tree decoder may consume. The spec/02 §6.1 wording
+///    states the decoder does not validate the gap to the next
+///    plane and the encoder is free to leave unused bytes between
+///    one plane's consumed payload and the start of the next; the
+///    structural maximum the decoder may read is therefore the
+///    start of the **next present** plane (per the spec/02 §2
+///    plane-offset ordering in the bitstream header), falling back
+///    to the codec-frame buffer length when no later present plane
+///    exists. This is the §10 open-question-4 "end-of-plane
+///    padding" surface — the byte budget the decoder may scan,
+///    distinguished from the bytes it actually consumes (which
+///    only the binary-tree walk knows).
+///
+/// All four offsets are **absolute** into the codec-frame input
+/// buffer (the same buffer
+/// [`FrameHeader::parse`](super::header::FrameHeader::parse) and
+/// [`PictureLayer::parse`] consume). They are pre-bounds-checked
+/// during [`PictureLayer::parse`]: `num_vectors_range.end ≤
+/// mc_vectors_range.end ≤ payload_start ≤ payload_upper_bound ≤
+/// buffer_len`.
+///
+/// The map is purely **structural** — it does not consult the
+/// binary-tree codes, does not own any payload bytes, and does not
+/// alter the parsed [`PlanePrelude`]. It is the typed companion to
+/// the §9 ASCII diagram, intended for callers that want to slice
+/// the input buffer per-region (e.g. for hex dumps, debugger
+/// overlays, or pre-payload structural validation) without
+/// reaching into [`PlanePrelude`]'s prelude_len arithmetic
+/// themselves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaneByteMap {
+    /// Spec/02 §2 — plane index this map describes
+    /// (`PLANE_IDX_Y`, `PLANE_IDX_V`, `PLANE_IDX_U`).
+    pub plane_idx: usize,
+    /// Spec/02 §3 — absolute byte offset of `plane_base`
+    /// (= `bsh + plane_offset`).
+    pub plane_base: usize,
+    /// Spec/02 §9 / §3.1 — absolute byte range of the
+    /// `num_vectors` u32 (= `plane_base..plane_base + 4`).
+    pub num_vectors_range: core::ops::Range<usize>,
+    /// Spec/02 §9 / §3.2 — absolute byte range of the
+    /// `mc_vectors[]` array (= `plane_base + 4..plane_base + 4 +
+    /// 2*num_vectors`). Empty range when `num_vectors == 0`
+    /// (INTRA plane).
+    pub mc_vectors_range: core::ops::Range<usize>,
+    /// Spec/02 §9 / §3.4 — absolute byte offset of the first byte
+    /// of the binary-tree / VQ bitstream payload
+    /// (= `plane_base + 4 + 2*num_vectors`). Identical to the
+    /// owning [`PlanePrelude::bitstream_offset`].
+    pub payload_start: usize,
+    /// Spec/02 §6.1 / §10 item 4 — strict upper bound on bytes
+    /// the per-plane decoder may scan from this plane's payload.
+    /// Equals the next present plane's `plane_base` when one
+    /// exists, otherwise the codec-frame buffer length. The
+    /// decoder is not required to consume up to this bound — it
+    /// stops when the binary-tree walk naturally terminates — but
+    /// it is structurally forbidden from reading past it.
+    pub payload_upper_bound: usize,
+}
+
+impl PlaneByteMap {
+    /// Spec/02 §9 — total bytes available to the binary-tree
+    /// decoder for this plane's payload
+    /// (= `payload_upper_bound - payload_start`). Tolerant of an
+    /// upper-bound equal to `payload_start` (returns 0); the
+    /// invariant `payload_start ≤ payload_upper_bound` is enforced
+    /// by the constructor.
+    pub fn payload_budget(&self) -> usize {
+        self.payload_upper_bound.saturating_sub(self.payload_start)
+    }
+
+    /// Spec/02 §3.4 — total prelude byte length
+    /// (`4 + 2*num_vectors`), equivalent to
+    /// [`PlanePrelude::prelude_len`]. Computed from the
+    /// `mc_vectors_range` so the map is self-describing.
+    pub fn prelude_len(&self) -> usize {
+        NUM_VECTORS_FIELD_LEN + (self.mc_vectors_range.end - self.mc_vectors_range.start)
+    }
+}
+
 /// Spec/02 §3 — per-plane prelude (motion-vector array) plus the
 /// computed start of the plane's bitstream payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,6 +494,86 @@ impl PictureLayer {
     /// Borrow the U-plane (chroma) presence record.
     pub fn u(&self) -> &PlanePresence {
         &self.planes[PLANE_IDX_U]
+    }
+
+    /// Spec/02 §9 — return the typed byte map for a present plane.
+    ///
+    /// `plane_idx` selects the plane (`PLANE_IDX_Y`,
+    /// `PLANE_IDX_V`, or `PLANE_IDX_U`); `header` is the parsed
+    /// frame header the layer was built from (its bsh `*_offset`
+    /// fields drive the per-plane base); `buffer_len` is the
+    /// length of the codec-frame input buffer (the same buffer
+    /// [`PictureLayer::parse`] consumed) — needed to compute the
+    /// §6.1 / §10 item 4 `payload_upper_bound` for the
+    /// last-decoded plane.
+    ///
+    /// The §6.1 upper-bound resolution chooses the smallest
+    /// "next-plane base" among the OTHER present planes whose
+    /// base is strictly greater than this plane's
+    /// `payload_start`. Spec/02 §2 admits any plane-iteration
+    /// order so we cannot rely on `plane_idx`-numeric ordering;
+    /// the upper bound is whichever later plane base actually
+    /// follows this plane in the byte layout (or `buffer_len` if
+    /// none does).
+    ///
+    /// Returns `None` when:
+    ///
+    /// * `plane_idx >= PLANE_COUNT`, or
+    /// * `self.planes[plane_idx]` is not
+    ///   [`PlanePresence::Present`] (NULL-frame or skipped plane —
+    ///   no byte map exists for either).
+    pub fn plane_byte_map(
+        &self,
+        plane_idx: usize,
+        header: &FrameHeader,
+        buffer_len: usize,
+    ) -> Option<PlaneByteMap> {
+        if plane_idx >= PLANE_COUNT {
+            return None;
+        }
+        let prelude = self.planes[plane_idx].as_prelude()?;
+        let bsh_base = FRAME_HEADER_LEN;
+        let offsets: [u32; PLANE_COUNT] = [
+            header.bitstream.y_offset,
+            header.bitstream.v_offset,
+            header.bitstream.u_offset,
+        ];
+        let plane_offset = offsets[plane_idx];
+        let plane_base = bsh_base.saturating_add(plane_offset as usize);
+        let mc_start = plane_base + NUM_VECTORS_FIELD_LEN;
+        let mc_end = prelude.bitstream_offset;
+        let payload_start = prelude.bitstream_offset;
+
+        // Spec/02 §6.1 / §10 item 4 — upper bound is the smallest
+        // OTHER-present-plane base strictly greater than this
+        // plane's payload_start, falling back to buffer_len.
+        let mut upper = buffer_len;
+        for (other_idx, presence) in self.planes.iter().enumerate() {
+            if other_idx == plane_idx {
+                continue;
+            }
+            if presence.is_present() {
+                let other_base = bsh_base.saturating_add(offsets[other_idx] as usize);
+                if other_base > payload_start && other_base < upper {
+                    upper = other_base;
+                }
+            }
+        }
+        // Defensive clamp: a malformed parse would have already
+        // raised earlier, but cap at buffer_len in case the
+        // caller passed a buffer_len smaller than payload_start.
+        if upper < payload_start {
+            upper = payload_start;
+        }
+
+        Some(PlaneByteMap {
+            plane_idx,
+            plane_base,
+            num_vectors_range: plane_base..mc_start,
+            mc_vectors_range: mc_start..mc_end,
+            payload_start,
+            payload_upper_bound: upper,
+        })
     }
 
     /// Spec/02 §4 + §5 + §6 — build the per-plane decode plan that
@@ -1673,6 +1847,264 @@ mod tests {
             .expect("for_plane returns Some for legal plane_idx");
             assert_eq!(via_bridge, via_flags);
         }
+    }
+
+    #[test]
+    fn plane_byte_map_inter_frame_y_plane_landmarks_match_spec_9() {
+        // §9 — for a Y plane with 7 motion vectors at plane_offset
+        // 0x30, the byte map exposes:
+        //   plane_base       = bsh + 0x30
+        //   num_vectors_range = [plane_base, plane_base + 4)
+        //   mc_vectors_range  = [plane_base + 4, plane_base + 4 + 14)
+        //   payload_start    = plane_base + 4 + 14
+        //   payload_upper_bound = next present plane's base
+        //                       (V's at 0x80 → bsh + 0x80)
+        let pairs: Vec<(i8, i8)> = (0..7).map(|i| (i, -i)).collect();
+        let y_prelude = prelude_bytes(7, &pairs);
+        let v_prelude = prelude_bytes(0, &[]);
+        let u_prelude = prelude_bytes(0, &[]);
+        let buf = build_frame_with_planes(
+            [0x30, 0x80, 0x90],
+            [&y_prelude, &v_prelude, &u_prelude],
+            0, // INTER, full-pel
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+
+        let map = layer
+            .plane_byte_map(PLANE_IDX_Y, &header, buf.len())
+            .expect("Y map");
+        assert_eq!(map.plane_idx, PLANE_IDX_Y);
+        assert_eq!(map.plane_base, FRAME_HEADER_LEN + 0x30);
+        assert_eq!(
+            map.num_vectors_range,
+            (FRAME_HEADER_LEN + 0x30)..(FRAME_HEADER_LEN + 0x30 + 4)
+        );
+        assert_eq!(
+            map.mc_vectors_range,
+            (FRAME_HEADER_LEN + 0x30 + 4)..(FRAME_HEADER_LEN + 0x30 + 4 + 14)
+        );
+        assert_eq!(map.payload_start, FRAME_HEADER_LEN + 0x30 + 4 + 14);
+        // §6.1 — next present plane after Y is V at 0x80.
+        assert_eq!(map.payload_upper_bound, FRAME_HEADER_LEN + 0x80);
+        assert_eq!(map.prelude_len(), 4 + 7 * 2);
+        assert_eq!(
+            map.payload_budget(),
+            (FRAME_HEADER_LEN + 0x80) - (FRAME_HEADER_LEN + 0x30 + 4 + 14)
+        );
+    }
+
+    #[test]
+    fn plane_byte_map_intra_plane_has_empty_mc_range() {
+        // §3.1 — INTRA plane has num_vectors == 0, so
+        // mc_vectors_range is empty and payload_start follows the
+        // num_vectors u32 directly.
+        let buf = build_frame_with_planes(
+            [0x30, 0x40, 0x50],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+            ],
+            0x0005, // INTRA + primary
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+
+        let map = layer
+            .plane_byte_map(PLANE_IDX_Y, &header, buf.len())
+            .expect("Y map");
+        assert_eq!(map.num_vectors_range.len(), NUM_VECTORS_FIELD_LEN);
+        assert_eq!(map.mc_vectors_range.len(), 0);
+        assert!(map.mc_vectors_range.is_empty());
+        assert_eq!(map.payload_start, map.plane_base + NUM_VECTORS_FIELD_LEN);
+        assert_eq!(map.prelude_len(), 4);
+    }
+
+    #[test]
+    fn plane_byte_map_last_plane_upper_bound_is_buffer_len() {
+        // §6.1 — the LAST plane (by byte ordering — the one with
+        // the largest plane_offset) has no later present plane,
+        // so its upper bound falls back to the codec-frame
+        // buffer length.
+        // Build with Y at 0x30, V at 0x40, U at 0x80 (the
+        // largest). U is therefore the last by byte order.
+        let buf = build_frame_with_planes(
+            [0x30, 0x40, 0x80],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(1, &[(2, 3)]),
+            ],
+            0, // INTER + primary
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+
+        // The build_frame_with_planes helper sizes the buffer to
+        // exactly hold each plane's prelude with no trailing
+        // bytes. Pass a buffer_len value extended by 16 bytes so
+        // the §6.1 "buffer_len fallback" is exercised with a
+        // realistic non-zero budget (a real-world codec frame
+        // would carry the binary-tree payload after the prelude).
+        let buf_len_with_room = buf.len() + 16;
+        let u_map = layer
+            .plane_byte_map(PLANE_IDX_U, &header, buf_len_with_room)
+            .expect("U map");
+        // No later present plane → upper bound = buffer_len.
+        assert_eq!(u_map.payload_upper_bound, buf_len_with_room);
+        // Y and V come before U in byte order, so the upper bound
+        // for U is *not* affected by them.
+        assert!(u_map.payload_upper_bound > u_map.payload_start);
+        // payload_budget equals the room we extended by.
+        assert_eq!(
+            u_map.payload_budget(),
+            buf_len_with_room - u_map.payload_start
+        );
+    }
+
+    #[test]
+    fn plane_byte_map_picks_smallest_following_plane_base() {
+        // §2 admits any iteration order of planes by plane_offset;
+        // the upper bound is the SMALLEST other-plane base
+        // strictly greater than this plane's payload_start, not
+        // the one matching the iteration order.
+        // Y at 0x30, V at 0x80, U at 0x60 — Y's next-by-base is
+        // U at 0x60, not V at 0x80.
+        let buf = build_frame_with_planes(
+            [0x30, 0x80, 0x60],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+            ],
+            0x0005, // INTRA + primary
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+        let y_map = layer
+            .plane_byte_map(PLANE_IDX_Y, &header, buf.len())
+            .expect("Y map");
+        assert_eq!(y_map.payload_upper_bound, FRAME_HEADER_LEN + 0x60);
+    }
+
+    #[test]
+    fn plane_byte_map_skips_non_present_planes_when_computing_upper_bound() {
+        // §2 — a SkippedNegativeOffset plane is not present and
+        // must not contribute to the upper bound. Build Y at
+        // 0x30, V skipped (offset -1), U at 0x80. Y's upper bound
+        // is U's base (0x80), not V's.
+        let buf = build_frame_with_planes(
+            [0x30, 0xffff_ffff, 0x80],
+            [&prelude_bytes(0, &[]), &[], &prelude_bytes(0, &[])],
+            0x0005, // INTRA + primary
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+        // V is skipped → no byte map for V.
+        assert!(layer
+            .plane_byte_map(PLANE_IDX_V, &header, buf.len())
+            .is_none());
+        let y_map = layer
+            .plane_byte_map(PLANE_IDX_Y, &header, buf.len())
+            .expect("Y map");
+        assert_eq!(y_map.payload_upper_bound, FRAME_HEADER_LEN + 0x80);
+    }
+
+    #[test]
+    fn plane_byte_map_returns_none_for_null_frame_or_out_of_range() {
+        // §1 — NULL frame → every plane is NullFrame → no map.
+        let buf = build_frame_with_planes(
+            [0x30, 0x40, 0x50],
+            [&[], &[], &[]],
+            0,
+            NULL_FRAME_DATA_SIZE_BITS,
+        );
+        let header = FrameHeader::parse(&buf).expect("null header");
+        let layer = PictureLayer::parse(&header, &buf).expect("null layer");
+        for plane_idx in [PLANE_IDX_Y, PLANE_IDX_V, PLANE_IDX_U] {
+            assert!(layer
+                .plane_byte_map(plane_idx, &header, buf.len())
+                .is_none());
+        }
+        // Out-of-range plane index → None even on a present layer.
+        let buf = build_frame_with_planes(
+            [0x30, 0x40, 0x50],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+            ],
+            0,
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+        assert!(layer
+            .plane_byte_map(PLANE_COUNT, &header, buf.len())
+            .is_none());
+        assert!(layer
+            .plane_byte_map(usize::MAX, &header, buf.len())
+            .is_none());
+    }
+
+    #[test]
+    fn plane_byte_map_payload_start_matches_prelude_bitstream_offset() {
+        // §9 row 3 — the byte map's payload_start is the same
+        // value as the owning PlanePrelude's bitstream_offset.
+        // Crosscheck across all three planes for an INTER frame.
+        let y_prelude = prelude_bytes(2, &[(1, 2), (3, 4)]);
+        let v_prelude = prelude_bytes(1, &[(-1, -2)]);
+        let u_prelude = prelude_bytes(3, &[(0, 1), (2, -3), (4, -5)]);
+        let buf = build_frame_with_planes(
+            [0x30, 0x60, 0x90],
+            [&y_prelude, &v_prelude, &u_prelude],
+            0,
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+        for plane_idx in [PLANE_IDX_Y, PLANE_IDX_V, PLANE_IDX_U] {
+            let prelude = layer.planes[plane_idx].as_prelude().expect("plane present");
+            let map = layer
+                .plane_byte_map(plane_idx, &header, buf.len())
+                .expect("map");
+            assert_eq!(map.payload_start, prelude.bitstream_offset);
+            assert_eq!(map.prelude_len(), prelude.prelude_len());
+        }
+    }
+
+    #[test]
+    fn plane_byte_map_clamps_upper_bound_to_payload_start_when_buffer_truncated() {
+        // Defensive: if the caller passes a buffer_len smaller
+        // than payload_start (a pathological case), the upper
+        // bound is clamped to payload_start (yielding a zero
+        // payload_budget) rather than producing a Range whose
+        // end < start.
+        let buf = build_frame_with_planes(
+            [0x30, 0x40, 0x50],
+            [
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+                &prelude_bytes(0, &[]),
+            ],
+            0,
+            0x4000,
+        );
+        let header = FrameHeader::parse(&buf).expect("header");
+        let layer = PictureLayer::parse(&header, &buf).expect("layer");
+        let u_map = layer
+            .plane_byte_map(PLANE_IDX_U, &header, 0)
+            .expect("U map");
+        // buffer_len = 0 < payload_start. Upper bound clamps to
+        // payload_start.
+        assert_eq!(u_map.payload_upper_bound, u_map.payload_start);
+        assert_eq!(u_map.payload_budget(), 0);
     }
 
     #[test]

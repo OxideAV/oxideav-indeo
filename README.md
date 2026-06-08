@@ -5,6 +5,38 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 26 — Indeo 3 (IV31 / IV32) §9 typed plane-data byte map
+(`spec/02` §9 / §6.1 / §10 item 4).** Round 26 lands the new
+`indeo3::PlaneByteMap` struct + `PictureLayer::plane_byte_map`
+method — a typed view that exposes the spec/02 §9 "plane-data byte
+map" diagram as absolute byte ranges into the codec-frame input
+buffer. The map carries the four §9 landmarks per present plane:
+the `num_vectors_range` (§3.1 / §9 row 1, the 4-byte u32), the
+`mc_vectors_range` (§3.2 / §9 row 2, the `2*num_vectors`-byte
+motion-vector array — empty on INTRA planes), the `payload_start`
+(§3.4 / §9 row 3, the first byte of the binary-tree / VQ bitstream
+payload, identical to the owning `PlanePrelude::bitstream_offset`),
+and the §6.1 / §10 item 4 `payload_upper_bound` — the strict byte
+budget the binary-tree decoder may scan, resolved by scanning the
+OTHER present planes for the smallest `plane_base` strictly greater
+than `payload_start` and falling back to `buffer_len` when no such
+plane exists. The `payload_budget()` convenience exposes the §10
+item 4 "end-of-plane padding tolerance" surface bridging the
+structural plane layout to the (orthogonal) binary-tree walker's
+actual consumption count. The map is purely structural — it does
+not consult the binary-tree codes, does not own any payload bytes,
+and does not alter the existing `PlanePrelude` parse — and returns
+`None` for out-of-range plane indices, NULL-frame planes, and §2
+skipped planes. Eight new unit tests cover the INTER-Y-plane §9
+row-by-row landmarks, the INTRA empty-`mc_vectors_range` path, the
+last-plane buffer_len fallback, the smallest-following-base
+selection against an unsorted plane-offset triple, the non-present-
+plane exclusion from the upper-bound scan, the NULL-frame +
+out-of-range None paths, the `payload_start`-vs-`PlanePrelude::bitstream_offset`
+cross-check, and the defensive clamp when `buffer_len <
+payload_start`. Total `cargo test -p oxideav-indeo` count rises to
+**522 unit tests** (was 514).
+
 **Round 25 — Indeo 3 (IV31 / IV32) §5.4 end-of-strip edge fix-up
 byte-copy executor (`spec/03` §5.4).** Round 25 closes the §5.4
 executor surface the earlier rounds explicitly deferred to the

@@ -196,6 +196,21 @@
 //! strip-to-frame assembly), and does not validate the rectangle
 //! against the §5.5 plane-role visible width (plane-role
 //! classification stays with [`McPlaneRole::strip_visible_width`]).
+//! A later round adds the spec/02 §9 typed plane-data byte map
+//! ([`PlaneByteMap`]): [`PictureLayer::plane_byte_map`] returns a
+//! per-plane structural view exposing the §9 landmark offsets —
+//! the [`PlaneByteMap::num_vectors_range`] (§3.1 / §9 row 1) and
+//! [`PlaneByteMap::mc_vectors_range`] (§3.2 / §9 row 2) absolute
+//! byte ranges, the [`PlaneByteMap::payload_start`] (§3.4 / §9
+//! row 3) bitstream entry, and the §6.1 / §10 item 4
+//! [`PlaneByteMap::payload_upper_bound`] (the strict byte
+//! budget the decoder may scan, resolved against the next
+//! present plane's `plane_base` or the codec-frame buffer length).
+//! The map's [`PlaneByteMap::payload_budget`] convenience exposes
+//! `upper_bound - payload_start` — the §10 item 4
+//! "end-of-plane padding" surface bridging the structural plane
+//! layout to the (orthogonal) binary-tree walker's actual
+//! consumption count.
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
@@ -306,9 +321,9 @@ pub use mc_table::{
     MV_TABLE_ENTRY_SIZE, MV_TABLE_MAX_BYTE_INDEXABLE_ENTRIES,
 };
 pub use picture_layer::{
-    MotionVector, PictureLayer, PictureLayerError, PlaneDecodePlan, PlanePrelude, PlanePresence,
-    MC_VECTOR_ENTRY_LEN, MIN_PRELUDE_LEN, NUM_VECTORS_FIELD_LEN, PLANE_COUNT, PLANE_IDX_U,
-    PLANE_IDX_V, PLANE_IDX_Y,
+    MotionVector, PictureLayer, PictureLayerError, PlaneByteMap, PlaneDecodePlan, PlanePrelude,
+    PlanePresence, MC_VECTOR_ENTRY_LEN, MIN_PRELUDE_LEN, NUM_VECTORS_FIELD_LEN, PLANE_COUNT,
+    PLANE_IDX_U, PLANE_IDX_V, PLANE_IDX_Y,
 };
 pub use reconstruct::{
     apply_dyad_pair, average_7bit, emit_variant, halve_fefefefe, jns_taken, pack_predictor,

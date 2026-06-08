@@ -8,6 +8,47 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/02 §9 typed plane-data byte map —
+  the new `indeo3::PlaneByteMap` struct + `PictureLayer::plane_byte_map(plane_idx, header, buffer_len) -> Option<PlaneByteMap>`
+  expose the §9 "plane-data byte map" diagram as a typed view on a
+  present plane. The map carries the §9 landmark offsets as
+  absolute byte ranges into the codec-frame input buffer: the
+  `num_vectors_range` (§3.1 / §9 row 1, a four-byte u32 range),
+  the `mc_vectors_range` (§3.2 / §9 row 2, a `2*num_vectors`-byte
+  range — empty on an INTRA plane), the `payload_start` (§3.4 /
+  §9 row 3, the first byte of the binary-tree / VQ bitstream
+  payload — identical to the owning `PlanePrelude::bitstream_offset`),
+  and the §6.1 / §10 item 4 `payload_upper_bound` (the strict
+  byte budget the binary-tree decoder may scan, resolved by
+  scanning the OTHER present planes for the smallest `plane_base`
+  strictly greater than `payload_start` and falling back to
+  `buffer_len` when none exists). The `payload_budget()` /
+  `prelude_len()` convenience methods expose the §10 item 4
+  "end-of-plane padding tolerance" surface and the §3.4 prelude
+  length; `plane_byte_map` returns `None` for out-of-range plane
+  indices, for `PlanePresence::NullFrame`, and for skipped planes
+  (no map exists for either). The upper-bound resolution
+  defensively clamps to `payload_start` when a caller passes a
+  truncated `buffer_len` so the returned `payload_upper_bound`
+  always satisfies `payload_start ≤ payload_upper_bound`. Eight
+  new unit tests cover: an INTER Y plane's §9 row-by-row landmarks
+  (7 motion vectors, V plane at the next base as the upper bound);
+  an INTRA plane's empty `mc_vectors_range` + payload_start
+  immediately after the 4-byte u32; the last-plane buffer_len
+  fallback; the smallest-following-base selection (against an
+  unsorted plane-offset triple); the non-present-plane exclusion
+  from the upper-bound scan (a `SkippedNegativeOffset` plane is
+  ignored); the NULL-frame + out-of-range plane-index `None`
+  paths; the `payload_start`-vs-`PlanePrelude::bitstream_offset`
+  cross-check across all three present planes for an INTER frame;
+  and the defensive clamp behaviour when `buffer_len <
+  payload_start`. The map is purely structural — it does not own
+  any payload bytes, does not consult the binary-tree codes, and
+  does not alter the existing `PlanePrelude` parse — bridging the
+  spec/02 §9 layout to callers that want per-region byte slicing
+  (hex dumps, debugger overlays, structural validators) without
+  reaching into prelude-size arithmetic themselves.
+
 - Indeo 3 (IV31 / IV32) spec/03 §5.4 end-of-strip edge fix-up
   executor — `indeo3::StripEdgeFixupDims::apply_to_buffer` runs the
   per-row rightmost-column byte duplication
