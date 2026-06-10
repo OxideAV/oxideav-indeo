@@ -8,6 +8,35 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/07 §4.3 / §5.6 / §5.7 output-buffer
+  write — the new `indeo3::frame_output` module lands the output
+  stage the round-27 `frame_exit` §6.2 handoff targets.
+  `upshift_7bit_to_8bit` runs the §4.3 1-bit upshift (`shl byte,
+  1`) from the internal 7-bit-per-byte representation to 8-bit
+  output values, discarding the §4.2 / §4.4 `EDGE_MARKER_BIT`
+  sentinel as the spec describes. `OUTPUT_PLANE_ORDER`
+  (`[Y, V, U]`) pins the §5.6 step 2 output plane order with a
+  `const _` cross-check that it is the exact reverse of the §5.2
+  decode-time `PLANE_ITERATION_ORDER` (U → V → Y). `IF09_FOURCC`
+  (`0x39304649`, `const _`-checked to spell `"IF09"` in stream
+  byte order), `IF09_FOURCC_CASE_RVA` (`0x10004576`) and
+  `IF09_PASSTHROUGH_RVA` (`0x1000a53c`) pin the §5.3 / §5.6 IF09 /
+  YVU9 passthrough dispatch surface. `assemble_plane_if09` executes
+  the §5.7 strip-to-frame assembly: it walks a plane's strips left
+  to right, reads each strip's rows from its own
+  `FRAME_OUTPUT_SRC_ROW_STRIDE` (`0xb0`) pixel buffer, applies the
+  per-byte upshift, and writes the corresponding horizontal slice
+  of the caller's full-width output raster, leaving stride padding
+  untouched. `strip_min_buffer_bytes` exposes the per-strip walk's
+  minimum buffer length; the typed `PlaneAssembleError` enum
+  carries the six defensive failure modes (strip-count mismatch,
+  width-sum mismatch, width-exceeds-row-stride, short strip
+  buffer, narrow output stride, short output buffer). Per the
+  chapter boundary the module performs no YUV→RGB conversion
+  (§5.4's LUTs are populated by register-indirect stores the audit
+  could not pin; §7.2 open question), no §5.5 chroma upsampling
+  (IF09 output keeps 4:1:0), and no §6 frame finalisation. 24 new
+  unit tests (560 total, was 536).
 - Indeo 3 (IV31 / IV32) spec/02 §6.2 per-frame plane-iteration
   terminator + output-reconstruction handoff — the new
   `indeo3::frame_exit` module owns the per-frame layer above the

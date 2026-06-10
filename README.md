@@ -5,6 +5,50 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 28 — Indeo 3 (IV31 / IV32) §4.3 / §5.6 / §5.7 output-buffer
+write (`spec/07` §4.3 + §5.6 + §5.7).** Round 28 adds the
+`indeo3::frame_output` module — the output stage the round-27
+`frame_exit` §6.2 handoff targets. `upshift_7bit_to_8bit` runs the
+§4.3 1-bit upshift (`shl byte, 1`) from the internal 7-bit-per-byte
+representation to the 8-bit output range, discarding bit 7 so the
+§4.2 / §4.4 `EDGE_MARKER_BIT` sentinel never reaches the output.
+`OUTPUT_PLANE_ORDER` (`[Y, V, U]` = `[0, 1, 2]`) pins the §5.6
+step 2 output plane order, `const _`-cross-checked as the exact
+reverse of the §5.2 decode-time `PLANE_ITERATION_ORDER`
+(`[2, 1, 0]`, U → V → Y). `IF09_FOURCC` (`0x39304649`,
+`const _`-checked to spell `"IF09"` in stream byte order),
+`IF09_FOURCC_CASE_RVA` (`0x10004576`) and `IF09_PASSTHROUGH_RVA`
+(`0x1000a53c`) pin the §5.3 / §5.6 IF09 / YVU9 passthrough
+dispatch surface. `assemble_plane_if09(geometry, strips, dst,
+dst_stride)` executes the §5.7 strip-to-frame assembly: walking
+the plane's strips in left-to-right order, reading each strip's
+`plane_height` visible rows from its own `FRAME_OUTPUT_SRC_ROW_STRIDE`
+(`0xb0`) pixel buffer, applying the §5.6 step 1b per-byte upshift,
+and writing the corresponding horizontal slice of the caller's
+full-width output raster (stride padding and trailing slack left
+untouched; the last strip carries the spec/02 §4.1 remainder
+width). `strip_min_buffer_bytes` exposes the walk's minimum
+per-strip buffer length; the typed `PlaneAssembleError` enum
+carries the six defensive failure modes (strip-count mismatch,
+width-sum mismatch, width-exceeds-row-stride, short strip buffer,
+narrow output stride, short output buffer). Per the chapter
+boundary the module performs no YUV→RGB conversion (the §5.4 LUT
+contents are populated by register-indirect stores the audit could
+not pin — spec/07 §7.2 open question), no §5.5 chroma upsampling
+(IF09 output keeps the 4:1:0 subsampling), no §6 frame
+finalisation, and no plane decode (the caller supplies the decoded
+strip pixel buffers). 24 new unit tests cover the §4.3 upshift
+(doubling, marker clearing, even-output invariant), the §5.3 /
+§5.6 dispatch constants and FOURCC spelling, the §5.6-vs-§5.2
+plane-order reversal, the cross-pipeline row-stride identity, the
+`strip_min_buffer_bytes` formula, seven §5.7 assembly happy paths
+(single-strip luma, two-strip 320-wide concatenation, 176-wide
+remainder strip, two-strip chroma, wide-stride padding
+preservation, marker-byte assembly, zero-height / zero-width
+planes), the six error paths, and the error-display spec-citation
+surface. Total `cargo test -p oxideav-indeo` count rises to
+**560 unit tests** (was 536).
+
 **Round 27 — Indeo 3 (IV31 / IV32) §6.2 per-frame plane-iteration
 terminator + output-reconstruction handoff (`spec/02` §6 / §6.2 /
 §8).** Round 27 adds the `indeo3::frame_exit` module — the per-frame
@@ -1126,7 +1170,14 @@ if header.bitstream.is_null_frame() {
 | spec/07 §4.1 / §4.2 7-bit-per-byte range + overflow sentinel | yes (`SoftSimdSum`) |
 | spec/07 §2.2 four cell-shape variant inner loops (A–D) | yes (`emit_variant`) |
 | spec/07 §3 static dyad delta-table values | covered by spec/04 `DyadDeltaTable` |
-| spec/07 §4.3 / §5 7→8-bit upshift + YUV→RGB / IF09 | deferred (output-buffer write) |
+| spec/07 §4.3 7→8-bit output upshift (`shl byte, 1`) | yes (`upshift_7bit_to_8bit`, `OUTPUT_UPSHIFT_BITS`) |
+| spec/07 §4.4 edge-marker cleared by upshift | yes (covered by tests) |
+| spec/07 §5.3 / §5.6 IF09 / YVU9 passthrough dispatch | yes (`IF09_FOURCC`, `IF09_FOURCC_CASE_RVA`, `IF09_PASSTHROUGH_RVA`) |
+| spec/07 §5.6 step 2 output plane order Y→V→U | yes (`OUTPUT_PLANE_ORDER`) |
+| spec/07 §5.7 strip-to-frame assembly | yes (`assemble_plane_if09`, `strip_min_buffer_bytes`, `FRAME_OUTPUT_SRC_ROW_STRIDE`) |
+| spec/07 §5.3 / §5.4 YUV→RGB conversion + LUTs | deferred (LUT population unpinned, §7.2) |
+| spec/07 §5.5 chroma upsampling (RGB paths) | deferred (RGB conversion territory) |
+| spec/07 §6 frame finalisation | deferred |
 | spec/03 §5.4 strip-edge fix-up chroma `sar 2` (`0x10006b5e..0x10006b61`) | yes (`STRIP_EDGE_CHROMA_SHIFT`, `StripEdgeFixupDims::for_slot`) |
 | spec/03 §5.4 strip-edge fix-up row stride (`0xb0`) | yes (`STRIP_EDGE_ROW_STRIDE`) |
 | spec/03 §5.4 strip-edge fix-up byte-copy offsets (`[edi-1]` / `[edi]`) | yes (`STRIP_EDGE_BYTE_READ_OFFSET`, `STRIP_EDGE_BYTE_WRITE_OFFSET`) |
@@ -1376,6 +1427,27 @@ chapters that aren't yet in `docs/`.
   typed disposition of the strip allocator's deterministic-pattern
   init vs the §5.4 strip-edge fix-up's frame-to-frame
   preservation.
+* `oxideav_indeo::indeo3::upshift_7bit_to_8bit(u8) -> u8` —
+  spec/07 §4.3 1-bit output upshift (`shl byte, 1`); discards the
+  §4.4 edge-marker bit.
+* `oxideav_indeo::indeo3::assemble_plane_if09(&StripGeometry,
+  &[&[u8]], &mut [u8], dst_stride) -> Result<usize,
+  PlaneAssembleError>` — spec/07 §5.6 / §5.7 IF09 / YVU9
+  passthrough plane assembly: left-to-right strip walk with
+  per-byte upshift out of the 0xb0-stride strip pixel buffers
+  into the caller's full-width raster.
+* `strip_min_buffer_bytes(strip_width, plane_height) -> usize` —
+  spec/07 §5.1 / §5.7 minimum per-strip buffer length for the
+  assembly walk.
+* `PlaneAssembleError` (`StripCountMismatch` /
+  `StripWidthSumMismatch` / `StripWidthExceedsRowStride` /
+  `StripBufferTooShort` / `DstStrideTooNarrow` /
+  `DstBufferTooShort`) — spec/07 §5.7 typed failure modes.
+* Output-write constants: `OUTPUT_UPSHIFT_BITS` (1),
+  `OUTPUT_PLANE_ORDER` (`[Y, V, U]`), `IF09_FOURCC`
+  (`0x39304649`), `IF09_FOURCC_CASE_RVA` (`0x10004576`),
+  `IF09_PASSTHROUGH_RVA` (`0x1000a53c`),
+  `FRAME_OUTPUT_SRC_ROW_STRIDE` (`0xb0`).
 * Constants: `MAGIC_FRMH`, `REQUIRED_DEC_VERSION`,
   `FRAME_HEADER_LEN`, `BITSTREAM_HEADER_LEN`, `COMBINED_HEADER_LEN`,
   `FLAG_YVU9_8BIT`, `NULL_FRAME_DATA_SIZE_BITS`, `MIN_DIMENSION`,

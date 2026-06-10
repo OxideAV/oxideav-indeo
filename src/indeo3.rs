@@ -223,7 +223,18 @@
 //! and [`FramePlaneStatusFold`] fold the three round-8
 //! [`PlaneDecodeStatus`] values, in §8 iteration order, into one
 //! per-frame outcome (proceed-to-reconstruction vs end-of-frame
-//! fault), short-circuiting on the first faulting plane.
+//! fault), short-circuiting on the first faulting plane. A later
+//! round adds the spec/07 §4.3 / §5.6 / §5.7 output-buffer write
+//! (`frame_output`): [`upshift_7bit_to_8bit`] runs the §4.3
+//! 1-bit upshift (`shl byte, 1`, clearing the §4.4
+//! [`EDGE_MARKER_BIT`] sentinel); [`OUTPUT_PLANE_ORDER`] pins the
+//! §5.6 step 2 Y → V → U output plane order (the reverse of the
+//! §5.2 decode order); [`IF09_FOURCC`] / [`IF09_FOURCC_CASE_RVA`] /
+//! [`IF09_PASSTHROUGH_RVA`] pin the §5.3 / §5.6 IF09 dispatch
+//! surface; and [`assemble_plane_if09`] executes the §5.7
+//! strip-to-frame assembly — walking a plane's strips left to
+//! right, upshifting each visible row out of its 0xb0-stride strip
+//! pixel buffer into the caller's full-width output raster.
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
@@ -236,6 +247,7 @@ mod cell_loop;
 mod cell_subarray;
 mod entropy;
 mod frame_exit;
+mod frame_output;
 mod header;
 mod macroblock;
 mod mc_address;
@@ -284,6 +296,11 @@ pub use frame_exit::{
     FRAME_OUTPUT_RECONSTRUCTION_RVA, PER_PLANE_DECODE_ARG_COUNT, PER_PLANE_DECODE_CALL_SITE_RVA,
     PER_PLANE_DECODE_ENTRY_RVA, PER_PLANE_DECODE_RET_CLEANUP_BYTES, PER_PLANE_DECODE_RET_RVA,
     PLANE_ITERATION_ORDER,
+};
+pub use frame_output::{
+    assemble_plane_if09, strip_min_buffer_bytes, upshift_7bit_to_8bit, PlaneAssembleError,
+    FRAME_OUTPUT_SRC_ROW_STRIDE, IF09_FOURCC, IF09_FOURCC_CASE_RVA, IF09_PASSTHROUGH_RVA,
+    OUTPUT_PLANE_ORDER, OUTPUT_UPSHIFT_BITS,
 };
 pub use header::{
     alt_quant_indices, BitstreamHeader, FrameFlags, FrameHeader, FrameHeaderPreamble, HeaderError,
