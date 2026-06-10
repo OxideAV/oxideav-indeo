@@ -210,7 +210,20 @@
 //! `upper_bound - payload_start` — the §10 item 4
 //! "end-of-plane padding" surface bridging the structural plane
 //! layout to the (orthogonal) binary-tree walker's actual
-//! consumption count.
+//! consumption count. A later round adds the spec/02 §6.2 per-frame
+//! plane-iteration terminator ([`frame_exit`]): [`PLANE_ITERATION_ORDER`]
+//! pins the §8 `[2, 1, 0]` (U, V, Y) count-down loop order;
+//! [`PER_PLANE_DECODE_CALL_SITE_RVA`] / [`PER_PLANE_DECODE_ENTRY_RVA`]
+//! / [`PER_PLANE_DECODE_RET_RVA`] / [`PER_PLANE_DECODE_RET_CLEANUP_BYTES`]
+//! pin the §6 call site, entry, and `ret 0x1c` seven-argument cdecl
+//! cleanup; [`FRAME_OUTPUT_RECONSTRUCTION_RVA`] /
+//! [`FRAME_FAULT_RETURN_RVA`] pin the §6.2 success handoff
+//! (`IR32_32.DLL!0x10004644`) and the §6 end-of-frame fault path
+//! (`IR32_32.DLL!0x10006ba2`, status `3`); [`FrameExitDisposition`]
+//! and [`FramePlaneStatusFold`] fold the three round-8
+//! [`PlaneDecodeStatus`] values, in §8 iteration order, into one
+//! per-frame outcome (proceed-to-reconstruction vs end-of-frame
+//! fault), short-circuiting on the first faulting plane.
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
@@ -222,6 +235,7 @@ mod cell_geometry;
 mod cell_loop;
 mod cell_subarray;
 mod entropy;
+mod frame_exit;
 mod header;
 mod macroblock;
 mod mc_address;
@@ -264,6 +278,12 @@ pub use entropy::{
     ModeByteKind, PositionClass, RleEscape, ARENA_BAND_STRIDE, CONTINUATION_XOR, LITERAL_MODE_MAX,
     PRIMARY_TABLE_DISP, RLE_ESCAPE_MIN, SECONDARY_TABLE_DISP, VARIANT_A_ENTRY, VARIANT_B_ENTRY,
     VARIANT_C_ENTRY, VARIANT_D_ENTRY,
+};
+pub use frame_exit::{
+    FrameExitDisposition, FramePlaneStatusFold, FRAME_FAULT_RETURN_RVA,
+    FRAME_OUTPUT_RECONSTRUCTION_RVA, PER_PLANE_DECODE_ARG_COUNT, PER_PLANE_DECODE_CALL_SITE_RVA,
+    PER_PLANE_DECODE_ENTRY_RVA, PER_PLANE_DECODE_RET_CLEANUP_BYTES, PER_PLANE_DECODE_RET_RVA,
+    PLANE_ITERATION_ORDER,
 };
 pub use header::{
     alt_quant_indices, BitstreamHeader, FrameFlags, FrameHeader, FrameHeaderPreamble, HeaderError,

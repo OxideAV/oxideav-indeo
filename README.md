@@ -5,6 +5,43 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 27 — Indeo 3 (IV31 / IV32) §6.2 per-frame plane-iteration
+terminator + output-reconstruction handoff (`spec/02` §6 / §6.2 /
+§8).** Round 27 adds the `indeo3::frame_exit` module — the per-frame
+layer above round 8's per-plane `PlaneDecodeStatus` classifier.
+`PLANE_ITERATION_ORDER` (`[2, 1, 0]`) pins the §8 U → V → Y
+count-down loop order with `const _` permutation cross-checks.
+`PER_PLANE_DECODE_CALL_SITE_RVA` (`0x10004637`),
+`PER_PLANE_DECODE_ENTRY_RVA` (`0x10006538`),
+`PER_PLANE_DECODE_RET_RVA` (`0x10006b94`),
+`PER_PLANE_DECODE_RET_CLEANUP_BYTES` (`0x1c`) and
+`PER_PLANE_DECODE_ARG_COUNT` (`7`) pin the §6 call site, decoder
+entry, and `ret 0x1c` seven-argument cdecl callee stack-cleanup
+(with a `const _` cross-check that `0x1c == 7 * 4`).
+`FRAME_OUTPUT_RECONSTRUCTION_RVA` (`0x10004644`) and
+`FRAME_FAULT_RETURN_RVA` (`0x10006ba2`) pin the §6.2 success handoff
+to the output-reconstruction stage and the §6 end-of-frame fault
+path that returns the §6 status `3`. `FrameExitDisposition`
+(`ProceedToReconstruction` / `EndOfFrameFault`) carries
+`proceeds_to_reconstruction()` / `is_fault()` / `target_rva()` /
+`frame_status()`. `FramePlaneStatusFold::from_iteration_order` /
+`from_plane_idx_order` fold the three `PlaneDecodeStatus` values
+into one per-frame disposition, short-circuiting on the first
+faulting plane in §8 iteration order and recording both the faulting
+plane's iteration index and its `plane_idx`. Per the §6 chapter
+boundary the module is purely dispositional — it does not perform
+the per-plane binary-tree walk (spec/03), does not classify a single
+plane's `eax` (round-8 `PlaneDecodeStatus`), does not own the §6.1
+per-plane payload byte budget (`PlaneByteMap`), and does not perform
+the output-reconstruction stage the §6.2 handoff targets (spec/07).
+14 new unit tests cover the §8 iteration order + permutation, the §6
+RVA / cleanup constants, the code-memory ordering, the
+reconstruction handoff, both disposition variants' getters, and the
+fold across all-ok / first-plane-fault / last-plane-fault /
+multiple-fault short-circuit / plane-idx reordering / order-agnostic
+agreement. Total `cargo test -p oxideav-indeo` count rises to
+**536 unit tests** (was 522).
+
 **Round 26 — Indeo 3 (IV31 / IV32) §9 typed plane-data byte map
 (`spec/02` §9 / §6.1 / §10 item 4).** Round 26 lands the new
 `indeo3::PlaneByteMap` struct + `PictureLayer::plane_byte_map`

@@ -8,6 +8,44 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/02 §6.2 per-frame plane-iteration
+  terminator + output-reconstruction handoff — the new
+  `indeo3::frame_exit` module owns the per-frame layer above the
+  round-8 `PlaneDecodeStatus` per-plane classifier. `PLANE_ITERATION_ORDER`
+  pins the §8 `[2, 1, 0]` (U, V, Y) count-down loop order (with
+  `const _` permutation cross-checks). `PER_PLANE_DECODE_CALL_SITE_RVA`
+  (`0x10004637`), `PER_PLANE_DECODE_ENTRY_RVA` (`0x10006538`),
+  `PER_PLANE_DECODE_RET_RVA` (`0x10006b94`),
+  `PER_PLANE_DECODE_RET_CLEANUP_BYTES` (`0x1c`) and
+  `PER_PLANE_DECODE_ARG_COUNT` (`7`) pin the §6 call site, entry,
+  and `ret 0x1c` seven-argument cdecl callee stack-cleanup (with a
+  `const _` cross-check that `0x1c == 7 * 4`).
+  `FRAME_OUTPUT_RECONSTRUCTION_RVA` (`0x10004644`) and
+  `FRAME_FAULT_RETURN_RVA` (`0x10006ba2`) pin the §6.2 success
+  handoff and the §6 end-of-frame fault path (which returns the §6
+  status `3`). `FrameExitDisposition` (`ProceedToReconstruction` /
+  `EndOfFrameFault`) carries `proceeds_to_reconstruction()` /
+  `is_fault()` / `target_rva()` / `frame_status()`.
+  `FramePlaneStatusFold::from_iteration_order` /
+  `from_plane_idx_order` fold the three round-8 `PlaneDecodeStatus`
+  values into one per-frame disposition, short-circuiting on the
+  first faulting plane in §8 iteration order and recording the
+  faulting plane's iteration index (`first_fault_iteration_index`)
+  and `plane_idx` (`first_fault_plane_idx()`). The module is purely
+  dispositional — it does not perform the per-plane binary-tree
+  walk (spec/03), does not classify a single plane's `eax` (round-8
+  `PlaneDecodeStatus`), does not own the §6.1 per-plane payload byte
+  budget (`PlaneByteMap`), and does not perform the output-
+  reconstruction stage the §6.2 handoff targets (spec/07). 14 new
+  unit tests cover the §8 iteration order + permutation, the §6 RVA
+  / cleanup constants, the entry-precedes-ret-and-fault code-memory
+  ordering, the reconstruction handoff, both `FrameExitDisposition`
+  variants' getters, and the `FramePlaneStatusFold` fold across
+  all-ok / first-plane-fault / last-plane-fault / multiple-fault
+  short-circuit / plane-idx-order reordering / order-agnostic
+  disposition agreement. Total `cargo test -p oxideav-indeo` lib
+  count rises to **536 unit tests** (was 522).
+
 - Indeo 3 (IV31 / IV32) spec/02 §9 typed plane-data byte map —
   the new `indeo3::PlaneByteMap` struct + `PictureLayer::plane_byte_map(plane_idx, header, buffer_len) -> Option<PlaneByteMap>`
   expose the §9 "plane-data byte map" diagram as a typed view on a
