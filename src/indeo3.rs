@@ -234,7 +234,27 @@
 //! surface; and [`assemble_plane_if09`] executes the §5.7
 //! strip-to-frame assembly — walking a plane's strips left to
 //! right, upshifting each visible row out of its 0xb0-stride strip
-//! pixel buffer into the caller's full-width output raster.
+//! pixel buffer into the caller's full-width output raster. A later
+//! round adds the spec/05 §5.1 / §5.2 / §7.2 + spec/03 §5.5
+//! buffer-mutating MC executor ([`mc_exec`]):
+//! [`boundary_fixup_dst_cell_offset`] runs the §7.2 `[esp+0x34]`
+//! boundary-fix-up reduction (`bank[+0x700][cl] sar 2 +
+//! extra_offset + ch`, [`BOUNDARY_FIXUP_SCRATCH_OFFSET`] /
+//! [`BOUNDARY_FIXUP_AUX_SHIFT`]) that round 15 deferred, with
+//! [`advance_boundary_fixup_row`] applying the spec/07 §1.2
+//! per-row `add [esp+0x34], 0xb0` ([`BOUNDARY_FIXUP_ROW_ADVANCE`]);
+//! [`mc_copy_cell`] executes the §5.1 / §5.2 cell copy over a strip
+//! pixel buffer in the inner-loop order (read rows 0+1, write rows
+//! 0+1, read rows 2+3, write rows 2+3; columns then bands) through
+//! the round-14 per-DWORD kernels, with [`mc_copy_cell_mv`] driving
+//! it from a [`PackedMv`] (§2.2 mode + §2.3 displacement) and
+//! [`McCopyError`] carrying the safe-Rust arena-edge bounds the
+//! binary omits per §4.4; [`apply_per_cell_edge_fixup`] executes the
+//! spec/03 §5.5 inter-cell edge fix-up loop (the spec/07 §1.3
+//! predictor-continuity exchange: `[esi+0x24]` → `[edi-4]`,
+//! `[edi]` → `[esi+0x28]`, one row stride per iteration, do-while
+//! `edx -= 4`), with [`PerCellEdgeFixupError`] for the buffer-edge
+//! failure modes.
 //!
 //! All offsets, field widths, validation rules, and sentinel
 //! values are taken from the per-chapter spec under
@@ -254,6 +274,7 @@ mod mc_address;
 mod mc_arena;
 mod mc_bounds;
 mod mc_chroma;
+mod mc_exec;
 mod mc_kernel;
 mod mc_packed;
 mod mc_residual_boundary;
@@ -328,6 +349,11 @@ pub use mc_chroma::{
     McKernelGeometryIsPlaneRoleInvariant, McPlaneRole, MvPixelOffsetInterpretation,
     CHROMA_PACKED_MV_FACTOR_IS_BUFFER_STRIDE, LUMA_PIXEL_PER_CHROMA_PIXEL,
     MC_KERNEL_GEOMETRY_IS_PLANE_ROLE_INVARIANT,
+};
+pub use mc_exec::{
+    advance_boundary_fixup_row, apply_per_cell_edge_fixup, boundary_fixup_dst_cell_offset,
+    mc_copy_cell, mc_copy_cell_mv, McCopyError, PerCellEdgeFixupError, BOUNDARY_FIXUP_AUX_SHIFT,
+    BOUNDARY_FIXUP_ROW_ADVANCE, BOUNDARY_FIXUP_SCRATCH_OFFSET,
 };
 pub use mc_kernel::{
     mc_both_half_pel_quad, mc_full_pel_row_dword, mc_horiz_half_pel_pair, mc_vert_half_pel_pair,

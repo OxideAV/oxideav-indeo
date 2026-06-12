@@ -5,6 +5,53 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 29 — Indeo 3 (IV31 / IV32) §7.2 boundary fix-up + MC
+inner-loop executor (`spec/05` §5.1 / §5.2 / §7.2 + `spec/03`
+§5.5).** Round 29 adds the `indeo3::mc_exec` module — the first
+buffer-mutating stage of the MC pipeline, executing what rounds
+13–17 had pinned structurally. `boundary_fixup_dst_cell_offset`
+runs the spec/05 §7.2 `[esp+0x34]` reduction
+(`bank[+0x700][cl] sar 2 + extra_offset + ch`) that round 15's
+`mc_address` explicitly deferred, with `BOUNDARY_FIXUP_SCRATCH_OFFSET`
+(`0x34`, `const _`-checked distinct from the three §4.3 dispatcher
+scratch slots), `BOUNDARY_FIXUP_AUX_SHIFT` (`2`, aliasing
+`MV_PIXEL_OFFSET_SHIFT`) and the arithmetic-shift sign behaviour
+pinned per the §3.2 `sar` disposition; `advance_boundary_fixup_row`
+applies the spec/07 §1.2 per-row `add [esp+0x34], 0xb0`
+(`BOUNDARY_FIXUP_ROW_ADVANCE`). `mc_copy_cell(buf, dst_off,
+src_off, geometry, mode)` executes the §5.1 / §5.2 cell copy over a
+real strip pixel buffer in the binary's inner-loop order (rows 0+1
+read then written, rows 2+3 read then written; column groups across
+a 4-row band, bands top to bottom) through the round-14 per-DWORD
+kernels, covering all four `McDispatchMode` arms — full-pel DWORD
+copy, vertical / horizontal half-pel averaging (including the §5.2
+one-row-below and one-DWORD-right §4.4 padding reads, accounted in
+the safe-Rust bound check), and the 2×2 both-half-pel box filter.
+`mc_copy_cell_mv` drives it from a `PackedMv` (§2.2 mode bits +
+§2.3 `dst + sar(packed_mv, 2)` displacement); typed `McCopyError` /
+`PerCellEdgeFixupError` carry the buffer-edge failure modes the
+binary omits per §4.4. `apply_per_cell_edge_fixup` executes the
+spec/03 §5.5 inter-cell edge fix-up loop (the spec/07 §1.3
+predictor-continuity exchange: `[esi+0x24]` → `[edi-4]`, `[edi]` →
+`[esi+0x28]`, one `0xb0` row stride per iteration, do-while
+`edx -= 4` so `ceil(h/4)` iterations). 28 new unit tests pin the
+§7.2 reduction (composition, `sar` sign, no-wrap widening, row
+advance), the four copy modes against scalar per-byte references
+(exact full-pel reproduction, floor-rounded vertical / horizontal /
+2×2 averages, uniform-source fixed point, untouched-byte
+preservation, self-copy identity), the MV-driven entry against the
+direct call for all four modes, the half-pel-aware bound checks,
+the §5.5 fix-up's DWORD exchange / per-row advance / do-while
+rounding / error paths, and an end-to-end fixture run over a
+spec/02 §7-sized `0x8020` arena: pack a §3.3 MV → §2.2 / §2.3
+decode → §5.1 cell copy from a reference region → §5.5 inter-cell
+fix-up → spec/07 §4.3 upshift to actual 8-bit output pixels. Total
+`cargo test -p oxideav-indeo` count rises to **588 unit tests**
+(was 560). The remaining gap between this executor and a real-
+bitstream pixel decode is the codebook-bank `+0x000` / `+0x100` /
+`+0x200` / `+0x300` / `+0x700` per-entry values (spec/05 §7.5
+Extractor territory) plus a staged IV31 / IV32 bitstream fixture.
+
 **Round 28 — Indeo 3 (IV31 / IV32) §4.3 / §5.6 / §5.7 output-buffer
 write (`spec/07` §4.3 + §5.6 + §5.7).** Round 28 adds the
 `indeo3::frame_output` module — the output stage the round-27

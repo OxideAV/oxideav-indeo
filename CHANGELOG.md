@@ -8,6 +8,36 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/05 §5.1 / §5.2 / §7.2 + spec/03 §5.5
+  motion-compensation executor — the new `indeo3::mc_exec` module
+  lands the first buffer-mutating stage of the MC pipeline.
+  `boundary_fixup_dst_cell_offset` runs the §7.2 `[esp+0x34]`
+  boundary-fix-up reduction (`bank[+0x700][cl] sar 2 + extra_offset
+  + ch`) that the round-15 `mc_address` module deferred, with
+  `BOUNDARY_FIXUP_SCRATCH_OFFSET` (`0x34`),
+  `BOUNDARY_FIXUP_AUX_SHIFT` (`2`) and
+  `advance_boundary_fixup_row` (the spec/07 §1.2 per-row
+  `add [esp+0x34], 0xb0`, `BOUNDARY_FIXUP_ROW_ADVANCE`).
+  `mc_copy_cell` executes the §5.1 / §5.2 cell copy over a strip
+  pixel buffer in the binary's inner-loop order (rows 0+1 read then
+  written, rows 2+3 read then written; column groups within a
+  4-row band, bands top to bottom) through the round-14 per-DWORD
+  kernels, covering all four `McDispatchMode` arms with the §5.2
+  half-pel neighbour reads accounted in the safe-Rust bound check
+  the binary omits per §4.4; `mc_copy_cell_mv` drives the copy from
+  a `PackedMv` (§2.2 mode bits + §2.3 displacement); typed
+  `McCopyError` reports the buffer-edge failure modes.
+  `apply_per_cell_edge_fixup` executes the spec/03 §5.5 inter-cell
+  edge fix-up loop (the spec/07 §1.3 predictor-continuity DWORD
+  exchange `[esi+0x24]` → `[edi-4]` / `[edi]` → `[esi+0x28]`, one
+  `0xb0` row stride per iteration, do-while `edx -= 4`), with
+  `PerCellEdgeFixupError` for its failure modes. 28 new unit tests
+  cover the §7.2 reduction, the four copy modes against scalar
+  per-byte references, the MV-driven entry, the half-pel-aware
+  bound checks, the §5.5 fix-up semantics, and an end-to-end
+  fixture run over a spec/02 §7-sized arena from a packed MV to
+  actual 8-bit output pixels via the spec/07 §4.3 upshift.
+
 - Indeo 3 (IV31 / IV32) spec/07 §4.3 / §5.6 / §5.7 output-buffer
   write — the new `indeo3::frame_output` module lands the output
   stage the round-27 `frame_exit` §6.2 handoff targets.
