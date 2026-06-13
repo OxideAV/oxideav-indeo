@@ -8,6 +8,39 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/07 §1.2 + §2.4 (cross-ref spec/06 §6.3
+  / §6.4) in-cell predictor chain — the new `indeo3::cell_emit`
+  module turns the round-6/7 single-position dyad-pair emission
+  (`emit_variant`) into a complete cell decode over a real strip
+  pixel buffer. `emit_cell_chain(buffer, geometry, deltas)` walks a
+  cell's source rows top to bottom; for each row it reads the
+  row-above predictor DWORD out of the buffer (`[edi - 0xb0]`, or the
+  §1.3 top-of-strip constant `0x00` when the row-above slot falls in
+  the strip's pre-allocated padding), applies the §2.4 left-to-right
+  dyad-pair iteration via `emit_variant`, and writes the emitted
+  row(s) back so the next row's predictor re-read picks them up —
+  reproducing the binary's per-row outer-loop tail at
+  `IR32_32.DLL!0x10006fc0..0x10006fdb` plus the §2.1 inner-loop body
+  at `0x10006e0f..0x10006e2e`. `rows_per_source_row` pins the
+  per-variant destination-pointer advance (variant B advances one
+  `0xb0` row stride; variants A / C / D advance two for the vertical
+  doubling). The §6.4 sign disposition propagates through: a
+  `DyadOutcome::Fault` at any position aborts with
+  `CellEmitError::DyadFault { row, dword }` (the binary's error-code-2
+  fault at `0x1000855f`). `CellEmitGeometry` carries the cell width
+  in dyad-DWORDs, the source-row count, the buffer top-left offset,
+  and the `CellVariant`; `DyadDelta` pairs the per-frame-arena primary
+  DWORD with the secondary-table word; `CellEmitStats` reports the
+  source / emitted row counts and the consumed continuation-byte
+  count. Typed `CellEmitError` covers zero-dimension, delta-count
+  mismatch, write-out-of-bounds, and the dyad fault. Per the §1
+  chapter boundary the module does not read the bitstream (the caller
+  supplies the deltas; the codebook-bank values are §3.4 / §7.1
+  Extractor territory), does not perform the §1.3 cross-cell
+  predictor continuity / §5.5 inter-cell edge fix-up, does not perform
+  the §1.4 VQ_NULL copy-upper path, and does not perform the §4.3
+  output upshift or §5.7 strip-to-frame assembly. 11 new unit tests
+  bring `cargo test -p oxideav-indeo` to 599 (was 588).
 - Indeo 3 (IV31 / IV32) spec/05 §5.1 / §5.2 / §7.2 + spec/03 §5.5
   motion-compensation executor — the new `indeo3::mc_exec` module
   lands the first buffer-mutating stage of the MC pipeline.

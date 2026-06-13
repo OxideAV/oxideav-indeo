@@ -5,6 +5,57 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 30 — Indeo 3 (IV31 / IV32) §1.2 in-cell predictor chain
+row-driver (`spec/07` §1.2 / §2.1 / §2.4 + `spec/06` §6.3 / §6.4).**
+Round 30 adds the `indeo3::cell_emit` module — the per-row
+outer-loop driver that turns rounds 6/7's *single-position*
+dyad-pair emission (`emit_variant`) into a *whole-cell* decode over
+a real strip pixel buffer. Rounds 6/7 answered "given one predictor
+DWORD and one delta entry, form the output pixel-pair DWORD and the
+per-variant store shape"; what they deferred is the **chain** — a
+cell is N rows tall (§1.2 `N ∈ {4, 8}`) and the predictor for row
+`k` is the row the decoder *just emitted* at row `k-1`, read back
+via `[edi - 0xb0]`. `emit_cell_chain(buffer, geometry, deltas)` owns
+that outer loop: it walks a cell's `source_rows` rows top to bottom,
+reading each row's row-above predictor DWORD out of the buffer (or
+the §1.3 top-of-strip constant `0x00` when the row-above slot falls
+in the strip's pre-allocated zero-fill padding), applying the §2.4
+left-to-right dyad-pair iteration through `emit_variant`, and
+writing the emitted row(s) back so the next row's predictor re-read
+picks them up — reproducing the binary's per-row outer-loop tail at
+`IR32_32.DLL!0x10006fc0..0x10006fdb` plus the §2.1 inner-loop body
+at `0x10006e0f..0x10006e2e`. `rows_per_source_row` pins the
+per-variant destination advance (variant B advances one `0xb0` row
+stride; variants A / C / D advance two for the vertical doubling).
+The §6.4 sign disposition propagates straight through: a
+`DyadOutcome::Fault` at any position aborts with
+`CellEmitError::DyadFault { row, dword }` (the binary's error-code-2
+fault at `0x1000855f`). `CellEmitGeometry` carries width-in-dyad-
+DWORDs / source-row count / buffer top-left offset / `CellVariant`;
+`DyadDelta` pairs the per-frame-arena primary DWORD with the
+secondary-table word; `CellEmitStats` reports the source / emitted
+row counts and the consumed continuation-byte count; the typed
+`CellEmitError` covers zero-dimension, delta-count mismatch,
+write-out-of-bounds, and the dyad fault. Per the §1 chapter boundary
+the module does not read the bitstream (the caller supplies the
+deltas; the codebook-bank values stay §3.4 / §7.1 Extractor
+territory), does not perform the §1.3 cross-cell predictor
+continuity / §5.5 inter-cell edge fix-up, does not perform the §1.4
+VQ_NULL copy-upper path, and does not perform the §4.3 output
+upshift or §5.7 strip-to-frame assembly. 11 new unit tests pin the
+dimension constants, the three input-validation rejections, the
+with-edge single-column rolling-predictor chain (replayed against
+the scalar single-position API), the §1.3 top-of-strip zero seed,
+the variant-A two-rows-per-source-row doubling with the two-stride
+advance, the §2.4 two-DWORD left-to-right row iteration, the
+continuation-byte count, the §6.4 fault abort with row/dword
+coordinates, and a full 4×4 INTRA cell end to end. Total `cargo test
+-p oxideav-indeo` count rises to **599 unit tests** (was 588). The
+remaining gap to a real-bitstream pixel decode is the codebook-bank
+`+0x000` / `+0x100` / `+0x200` / `+0x300` / `+0x700` per-entry
+values (spec/07 §3.4 / §7.1 Extractor territory) plus a staged IV31
+/ IV32 bitstream fixture.
+
 **Round 29 — Indeo 3 (IV31 / IV32) §7.2 boundary fix-up + MC
 inner-loop executor (`spec/05` §5.1 / §5.2 / §7.2 + `spec/03`
 §5.5).** Round 29 adds the `indeo3::mc_exec` module — the first

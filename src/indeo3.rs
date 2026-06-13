@@ -262,6 +262,7 @@
 //! doc-comments below cite the chapter named in each module.
 
 mod bank_select;
+mod cell_emit;
 mod cell_geometry;
 mod cell_loop;
 mod cell_subarray;
@@ -287,6 +288,10 @@ mod strip_edge;
 mod vq;
 
 pub use bank_select::{Bank, McBankAssignment, BANK_INVERSION_DELTA};
+pub use cell_emit::{
+    emit_cell_chain, rows_per_source_row, CellEmitError, CellEmitGeometry, CellEmitStats,
+    DyadDelta, PIXELS_PER_DYAD_DWORD,
+};
 pub use cell_geometry::{
     cell_coords_from_dst_addr, cell_height_from_row_band_count, cell_width_from_column_group_count,
     reverse_decompose, row_band_count_from_ch_register, CellCoords, CellRect, CellRectDecodeError,
