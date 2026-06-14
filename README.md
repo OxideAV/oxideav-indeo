@@ -5,6 +5,39 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 32 — Indeo 3 (IV31 / IV32) §4 VQ_NULL `01` mark-edge executor
+(`spec/04` §4 + `spec/07` §4.2 / §4.4).** Round 32 closes the second
+non-degenerate VQ_NULL arm round 31 explicitly deferred. Where the
+copy-upper sub-code (`00`) *copies* the upper-neighbour row, the
+mark-edge sub-code (`01`) *marks* the cell: the body at
+`IR32_32.DLL!0x10006a2f..0x10006a55` walks the cell's own pixel
+positions and or-sets bit 7 (`reconstruct::EDGE_MARKER_BIT` = `0x80`)
+on each, flagging the cell as an edge / boundary cell. Per `spec/07`
+§4.2 bit 7 is a sentinel layered on top of the 7-bit pixel content;
+§4.4 has the output-reconstruction `shl 1` upshift discard it.
+`mark_edge_cell(buffer, geometry)` executes that over a real strip
+pixel buffer: it or-sets bit 7 across each of the cell's `row_count`
+rows × `width_dwords` column groups, walking rows at the
+`PREDICTOR_ROW_STRIDE` (`0xb0`) per-row stride and bytes
+left-to-right, preserving the low 7 bits of every marked byte (the
+body or-sets, it does not overwrite). Unlike copy-upper there is no
+`[edi - 0xb0]` upper-neighbour read, so a top-of-strip cell is a valid
+mark-edge target. `MarkEdgeGeometry` / `MarkEdgeStats` and a typed
+`MarkEdgeError` (zero-width, invalid-row-count, out-of-bounds) mirror
+the copy-upper surface; `VqNullSubCode::is_mark_edge` joins
+`is_copy_upper`. 9 new unit tests pin the predicate, the two
+input-validation rejections, the bit-7-over-cell happy path, the
+low-7-bit preservation, the or-set idempotence on an already-marked
+cell, the partial-row-count lower-band-untouched invariant, the
+out-of-bounds surface with partial mutation through the abort row, and
+the error-display spec-citation surface. Total `cargo test -p
+oxideav-indeo` count rises to **620 unit tests** (was 611). The
+remaining gap to a real-bitstream pixel decode is the codebook-bank
+`+0x000` / `+0x100` / `+0x200` / `+0x300` / `+0x700` per-entry values
+(`spec/04` §3.4 / §5 Extractor territory), the §7.3 "first bit `1`"
+VQ-data-without-index unpacker dispatch, plus a staged IV31 / IV32
+bitstream fixture.
+
 **Round 31 — Indeo 3 (IV31 / IV32) §1.4 VQ_NULL copy-upper executor
 (`spec/07` §1.4 + `spec/04` §4).** Round 31 adds the
 `indeo3::cell_null` module — the one decode path round 30's

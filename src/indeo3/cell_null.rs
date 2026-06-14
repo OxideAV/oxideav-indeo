@@ -45,11 +45,12 @@
 //!   `0x100069f2`) are resolved by the entropy walker (`spec/06`); this
 //!   module is invoked only once that fork has selected the `00`
 //!   copy-upper sub-code.
-//! * It does not perform the `01` mark-edge sub-code (the
-//!   `0x10006a2f..0x10006a55` body that sets the §4.4 / §7
-//!   [`super::EDGE_MARKER_BIT`] on `[eax + 0x58]` bytes). That is a
-//!   distinct VQ_NULL arm — surfaced here only as the typed
-//!   [`VqNullSubCode`] discriminant so callers can route correctly.
+//! * The `01` mark-edge sub-code (the `0x10006a2f..0x10006a55` body that
+//!   sets the §4.4 / §7 [`super::EDGE_MARKER_BIT`] on the cell's pixel
+//!   bytes) is the other non-degenerate VQ_NULL arm: round 32 adds
+//!   [`mark_edge_cell`] alongside [`copy_upper_cell`]. The copy-upper body
+//!   *copies* the upper-neighbour row; the mark-edge body *or-sets* bit 7
+//!   over the cell's own pixel positions, leaving the low 7 bits intact.
 //! * It does not perform the "first bit `1`" VQ-data-without-index
 //!   dispatch to the per-byte unpacker (`0x10006bac`); that re-enters the
 //!   delta path (`spec/06 §3.4`).
@@ -57,7 +58,7 @@
 //!   top-of-strip zero seed setup — it reads whatever the buffer holds at
 //!   `[edi - 0xb0]`, exactly as [`super::emit_cell_chain`] does.
 
-use super::reconstruct::PREDICTOR_ROW_STRIDE;
+use super::reconstruct::{EDGE_MARKER_BIT, PREDICTOR_ROW_STRIDE};
 
 /// Spec/07 §1.4 — the number of destination rows the copy-upper body
 /// writes per column group (`[edi]`, `[edi+0xb0]`, `[edi+0x15c]`,
@@ -107,7 +108,8 @@ pub enum VqNullSubCode {
     /// this module executes — a pure copy of the upper-neighbour row.
     CopyUpper,
     /// First bit `0`, second bit `1` (`0x10006a2f`): the mark-edge body —
-    /// sets the §4.4 / §7 [`super::EDGE_MARKER_BIT`] on the cell's bytes.
+    /// sets the §4.4 / §7 [`super::EDGE_MARKER_BIT`] on the cell's bytes,
+    /// executed by [`mark_edge_cell`].
     MarkEdge,
 }
 
@@ -127,10 +129,16 @@ impl VqNullSubCode {
         }
     }
 
-    /// `true` only for [`VqNullSubCode::CopyUpper`] — the one sub-code
-    /// this module executes.
+    /// `true` only for [`VqNullSubCode::CopyUpper`] — the copy-upper
+    /// sub-code [`copy_upper_cell`] executes.
     pub const fn is_copy_upper(self) -> bool {
         matches!(self, VqNullSubCode::CopyUpper)
+    }
+
+    /// `true` only for [`VqNullSubCode::MarkEdge`] — the mark-edge
+    /// sub-code [`mark_edge_cell`] executes.
+    pub const fn is_mark_edge(self) -> bool {
+        matches!(self, VqNullSubCode::MarkEdge)
     }
 }
 
@@ -283,6 +291,134 @@ pub fn copy_upper_cell(
         rows_written: geometry.row_count,
         column_groups: geometry.width_dwords,
         bytes_copied: geometry.row_count * geometry.width_dwords * COPY_UPPER_COLUMN_GROUP_BYTES,
+    })
+}
+
+/// The geometry of one VQ_NULL mark-edge cell.
+///
+/// The mark-edge body (`spec/04 §4` at `IR32_32.DLL!0x10006a2f`) walks the
+/// cell's own pixel positions and or-sets bit 7 ([`EDGE_MARKER_BIT`]) on
+/// each. Its geometry is the same cell shape the rest of the decoder uses:
+/// `width_dwords` column groups (= width-in-pixels / 4) by `row_count`
+/// rows, with each row at the [`PREDICTOR_ROW_STRIDE`] (`0xb0`) stride.
+///
+/// Unlike [`CopyUpperGeometry`], there is no upper-neighbour read, so the
+/// cell may legitimately sit at the very top of the strip — bit 7 is set on
+/// the cell's own bytes, never on a row above it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarkEdgeGeometry {
+    /// Cell width in column groups (pixels / 4).
+    pub width_dwords: usize,
+    /// Number of cell rows to mark (`1..=COPY_UPPER_ROW_COUNT`).
+    pub row_count: usize,
+    /// Byte offset of the cell's top-left pixel within the strip buffer.
+    pub top_left_offset: usize,
+}
+
+/// The error modes the mark-edge executor surfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkEdgeError {
+    /// `width_dwords` is zero (a degenerate cell with no column groups).
+    ZeroWidth,
+    /// `row_count` is zero or exceeds [`COPY_UPPER_ROW_COUNT`]. Carries
+    /// the supplied count.
+    InvalidRowCount {
+        /// The supplied (out-of-range) row count.
+        supplied: usize,
+    },
+    /// A marked region would land outside the strip buffer. Carries the
+    /// offending exclusive end offset and the buffer length.
+    OutOfBounds {
+        /// The exclusive end byte offset the access would require.
+        end: usize,
+        /// The supplied buffer length.
+        buffer_len: usize,
+    },
+}
+
+impl core::fmt::Display for MarkEdgeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            MarkEdgeError::ZeroWidth => {
+                write!(f, "spec/04 §4: mark-edge cell width is zero")
+            }
+            MarkEdgeError::InvalidRowCount { supplied } => write!(
+                f,
+                "spec/04 §4: mark-edge row count {supplied} not in 1..={COPY_UPPER_ROW_COUNT}"
+            ),
+            MarkEdgeError::OutOfBounds { end, buffer_len } => write!(
+                f,
+                "spec/04 §4: mark-edge access end {end} exceeds strip buffer length {buffer_len}"
+            ),
+        }
+    }
+}
+
+/// The result of a mark-edge cell emission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MarkEdgeStats {
+    /// The number of cell rows marked (= `geometry.row_count`).
+    pub rows_marked: usize,
+    /// The number of column groups marked per row (= `geometry.width_dwords`).
+    pub column_groups: usize,
+    /// The total number of pixel bytes marked
+    /// (`rows_marked * column_groups * 4`).
+    pub bytes_marked: usize,
+}
+
+/// Spec/04 §4 — execute the VQ_NULL `01` mark-edge body over a
+/// caller-supplied strip pixel buffer.
+///
+/// The body at `IR32_32.DLL!0x10006a2f..0x10006a55` walks the cell's own
+/// pixel positions and sets the high bit ([`EDGE_MARKER_BIT`] = `0x80`) of
+/// each, marking the cell as an edge / boundary cell. This module models
+/// that as an or-set of bit 7 over each of the cell's `row_count` rows ×
+/// `width_dwords` column groups, walking rows at the
+/// [`PREDICTOR_ROW_STRIDE`] (`0xb0`) per-row stride and bytes
+/// left-to-right within each row.
+///
+/// The low 7 bits of each marked byte are preserved (the body sets bit 7
+/// with an or, it does not overwrite the pixel value): per `spec/07 §4.2`
+/// the marker is a sentinel layered on top of the existing 7-bit content,
+/// consumed downstream during output reconstruction (the `shl 1` upshift
+/// discards it).
+///
+/// Returns a [`MarkEdgeStats`] on success, or a typed [`MarkEdgeError`]
+/// for a degenerate geometry or an out-of-bounds access. On an
+/// out-of-bounds error the buffer is left mutated up to but not including
+/// the offending access.
+pub fn mark_edge_cell(
+    buffer: &mut [u8],
+    geometry: MarkEdgeGeometry,
+) -> Result<MarkEdgeStats, MarkEdgeError> {
+    if geometry.width_dwords == 0 {
+        return Err(MarkEdgeError::ZeroWidth);
+    }
+    if geometry.row_count == 0 || geometry.row_count > COPY_UPPER_ROW_COUNT {
+        return Err(MarkEdgeError::InvalidRowCount {
+            supplied: geometry.row_count,
+        });
+    }
+
+    let row_bytes = geometry.width_dwords * COPY_UPPER_COLUMN_GROUP_BYTES;
+    for row in 0..geometry.row_count {
+        let row_off = geometry.top_left_offset + row * PREDICTOR_ROW_STRIDE;
+        let row_end = row_off + row_bytes;
+        if row_end > buffer.len() {
+            return Err(MarkEdgeError::OutOfBounds {
+                end: row_end,
+                buffer_len: buffer.len(),
+            });
+        }
+        for byte in &mut buffer[row_off..row_end] {
+            *byte |= EDGE_MARKER_BIT;
+        }
+    }
+
+    Ok(MarkEdgeStats {
+        rows_marked: geometry.row_count,
+        column_groups: geometry.width_dwords,
+        bytes_marked: geometry.row_count * row_bytes,
     })
 }
 
@@ -517,5 +653,157 @@ mod tests {
         }
         .to_string()
         .contains("§1.4"));
+    }
+
+    #[test]
+    fn subcode_is_mark_edge_predicate() {
+        assert!(VqNullSubCode::MarkEdge.is_mark_edge());
+        assert!(!VqNullSubCode::CopyUpper.is_mark_edge());
+        assert!(!VqNullSubCode::VqDataNoIndex.is_mark_edge());
+    }
+
+    #[test]
+    fn mark_edge_zero_width_rejected() {
+        let mut buf = vec![0u8; STRIDE * 4];
+        let g = MarkEdgeGeometry {
+            width_dwords: 0,
+            row_count: 4,
+            top_left_offset: 0,
+        };
+        assert_eq!(mark_edge_cell(&mut buf, g), Err(MarkEdgeError::ZeroWidth));
+    }
+
+    #[test]
+    fn mark_edge_invalid_row_count_rejected() {
+        let mut buf = vec![0u8; STRIDE * 4];
+        let g0 = MarkEdgeGeometry {
+            width_dwords: 1,
+            row_count: 0,
+            top_left_offset: 0,
+        };
+        assert_eq!(
+            mark_edge_cell(&mut buf, g0),
+            Err(MarkEdgeError::InvalidRowCount { supplied: 0 })
+        );
+        let g5 = MarkEdgeGeometry {
+            width_dwords: 1,
+            row_count: 5,
+            top_left_offset: 0,
+        };
+        assert_eq!(
+            mark_edge_cell(&mut buf, g5),
+            Err(MarkEdgeError::InvalidRowCount { supplied: 5 })
+        );
+    }
+
+    #[test]
+    fn mark_edge_sets_bit7_over_cell() {
+        // A 2-column (8-pixel), 4-row cell at the strip top. The mark-edge
+        // body or-sets bit 7 over every cell byte and leaves everything
+        // else untouched.
+        let mut buf = vec![0u8; STRIDE * 6];
+        let top = 0usize; // mark-edge has no upper-neighbour read, so top is fine.
+        let g = MarkEdgeGeometry {
+            width_dwords: 2,
+            row_count: 4,
+            top_left_offset: top,
+        };
+        let stats = mark_edge_cell(&mut buf, g).unwrap();
+        assert_eq!(stats.rows_marked, 4);
+        assert_eq!(stats.column_groups, 2);
+        assert_eq!(stats.bytes_marked, 32);
+        for row in 0..4 {
+            let off = top + row * STRIDE;
+            for c in 0..8 {
+                assert_eq!(buf[off + c], EDGE_MARKER_BIT, "cell byte row {row} col {c}");
+            }
+            // The byte just past the cell width is untouched.
+            assert_eq!(buf[off + 8], 0, "byte past cell row {row}");
+        }
+    }
+
+    #[test]
+    fn mark_edge_preserves_low_seven_bits() {
+        // The body or-sets bit 7; the existing 7-bit pixel content survives.
+        let mut buf = vec![0u8; STRIDE * 2];
+        let top = STRIDE;
+        let content = [0x01u8, 0x42, 0x7f, 0x00];
+        buf[top..top + 4].copy_from_slice(&content);
+        let g = MarkEdgeGeometry {
+            width_dwords: 1,
+            row_count: 1,
+            top_left_offset: top,
+        };
+        mark_edge_cell(&mut buf, g).unwrap();
+        for (i, &orig) in content.iter().enumerate() {
+            assert_eq!(buf[top + i], orig | EDGE_MARKER_BIT);
+            // Low 7 bits unchanged.
+            assert_eq!(buf[top + i] & !EDGE_MARKER_BIT, orig);
+        }
+    }
+
+    #[test]
+    fn mark_edge_already_marked_is_idempotent() {
+        // An or-set is idempotent: re-marking an already-marked cell is a
+        // no-op on the bytes.
+        let mut buf = vec![0u8; STRIDE * 2];
+        let top = 0usize;
+        buf[top..top + 4].copy_from_slice(&[EDGE_MARKER_BIT | 0x11; 4]);
+        let g = MarkEdgeGeometry {
+            width_dwords: 1,
+            row_count: 1,
+            top_left_offset: top,
+        };
+        mark_edge_cell(&mut buf, g).unwrap();
+        assert_eq!(&buf[top..top + 4], &[EDGE_MARKER_BIT | 0x11; 4]);
+    }
+
+    #[test]
+    fn mark_edge_partial_row_count_leaves_lower_rows_untouched() {
+        let mut buf = vec![0u8; STRIDE * 6];
+        let top = 0usize;
+        let g = MarkEdgeGeometry {
+            width_dwords: 1,
+            row_count: 2,
+            top_left_offset: top,
+        };
+        mark_edge_cell(&mut buf, g).unwrap();
+        for row in 0..2 {
+            let off = top + row * STRIDE;
+            assert_eq!(&buf[off..off + 4], &[EDGE_MARKER_BIT; 4]);
+        }
+        for row in 2..4 {
+            let off = top + row * STRIDE;
+            assert_eq!(&buf[off..off + 4], &[0u8; 4], "row {row} must be untouched");
+        }
+    }
+
+    #[test]
+    fn mark_edge_out_of_bounds_surfaced() {
+        // A cell whose row 1 would exceed the buffer surfaces a typed error.
+        let mut buf = vec![0u8; STRIDE + 2]; // room for row 0 (4 bytes) but not row 1.
+        let g = MarkEdgeGeometry {
+            width_dwords: 1,
+            row_count: 2,
+            top_left_offset: 0,
+        };
+        let r = mark_edge_cell(&mut buf, g);
+        assert!(matches!(r, Err(MarkEdgeError::OutOfBounds { .. })));
+        // Row 0 was marked before the out-of-bounds abort on row 1.
+        assert_eq!(&buf[0..4], &[EDGE_MARKER_BIT; 4]);
+    }
+
+    #[test]
+    fn mark_edge_error_display_cites_spec() {
+        assert!(MarkEdgeError::ZeroWidth.to_string().contains("§4"));
+        assert!(MarkEdgeError::InvalidRowCount { supplied: 9 }
+            .to_string()
+            .contains("§4"));
+        assert!(MarkEdgeError::OutOfBounds {
+            end: 10,
+            buffer_len: 4
+        }
+        .to_string()
+        .contains("§4"));
     }
 }

@@ -8,6 +8,24 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/04 §4 VQ_NULL `01` mark-edge executor —
+  the `indeo3::cell_null` module gains `mark_edge_cell(buffer,
+  geometry)`, the second non-degenerate VQ_NULL arm round 31's
+  copy-upper executor deferred. The body at
+  `IR32_32.DLL!0x10006a2f..0x10006a55` walks the cell's own pixel
+  positions and or-sets bit 7 (`EDGE_MARKER_BIT` = `0x80`) on each,
+  marking the cell as an edge / boundary cell (spec/07 §4.2 / §4.4
+  sentinel). The executor or-sets bit 7 over each of the cell's
+  `row_count` rows × `width_dwords` column groups at the `0xb0`
+  per-row stride, preserving the low 7 bits (the marker layers on
+  top of the existing pixel content; the spec/07 §4.3 `shl 1` upshift
+  discards it downstream). Unlike copy-upper there is no
+  upper-neighbour read, so a top-of-strip cell is valid.
+  `MarkEdgeGeometry` / `MarkEdgeStats` / typed `MarkEdgeError`
+  (zero-width, invalid-row-count, out-of-bounds) mirror the
+  copy-upper surface; `VqNullSubCode::is_mark_edge` joins
+  `is_copy_upper`. 9 new unit tests; `cargo test -p oxideav-indeo`
+  rises to 620 (was 611).
 - Indeo 3 (IV31 / IV32) spec/07 §1.4 (cross-ref spec/04 §4) VQ_NULL
   copy-upper executor — the new `indeo3::cell_null` module executes
   the one decode path round 30's `emit_cell_chain` deferred: the only

@@ -306,8 +306,9 @@ pub use cell_loop::{
     SLOT_INDEX_LUT,
 };
 pub use cell_null::{
-    copy_upper_cell, CopyUpperError, CopyUpperGeometry, CopyUpperStats, VqNullSubCode,
-    COPY_UPPER_COLUMN_GROUP_BYTES, COPY_UPPER_RAW_ROW_OFFSETS, COPY_UPPER_ROW_COUNT,
+    copy_upper_cell, mark_edge_cell, CopyUpperError, CopyUpperGeometry, CopyUpperStats,
+    MarkEdgeError, MarkEdgeGeometry, MarkEdgeStats, VqNullSubCode, COPY_UPPER_COLUMN_GROUP_BYTES,
+    COPY_UPPER_RAW_ROW_OFFSETS, COPY_UPPER_ROW_COUNT,
 };
 pub use cell_subarray::{
     cell_stack_array_offset, cell_stack_slot_offset, CellStackReadSite, CellStackTopDispatch,
