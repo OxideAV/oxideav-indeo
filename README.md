@@ -5,6 +5,43 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 31 — Indeo 3 (IV31 / IV32) §1.4 VQ_NULL copy-upper executor
+(`spec/07` §1.4 + `spec/04` §4).** Round 31 adds the
+`indeo3::cell_null` module — the one decode path round 30's
+`emit_cell_chain` explicitly deferred: the only path in the decoder
+where the predictor row is consumed *without* a delta add. When the
+binary-tree walker reaches a VQ_NULL leaf whose first two sub-code
+bits are `0`, `0` (`spec/04` §4), the body at
+`IR32_32.DLL!0x100069f4..0x10006a2d` copies the upper-neighbour row
+(`[edi - 0xb0]`) byte-identically into the cell's pixel buffer for
+up to four rows (`[edi]`, `[edi+0xb0]`, `[edi+0x15c]`, `[edi+0x20c]`,
+advancing `edi += 4` per column group). `copy_upper_cell(buffer,
+geometry)` executes that over a real strip pixel buffer.
+`COPY_UPPER_RAW_ROW_OFFSETS` pins the §1.4 four raw displacements
+with `const _` cross-checks that rows 2 / 3 (`0x15c` / `0x20c`) fold
+the body's interleaved `edi += 4` advance into the displacement
+(`0x15c == 2*0xb0 - 4`, `0x20c == 3*0xb0 - 4`); the module's
+row-aligned `row * 0xb0` walk is byte-for-byte equivalent to the
+binary's interleaved cursor advance. The `VqNullSubCode` enum
+(`VqDataNoIndex` / `CopyUpper` / `MarkEdge`) surfaces all three
+`spec/04` §4 sub-codes with a `from_bits` decoder so a caller
+routing the leaf-type fork has a typed discriminant; only
+`CopyUpper` is executed here. A typed `CopyUpperError` carries the
+zero-width, invalid-row-count, top-of-strip-source (the §1.4 copy
+is a literal row copy with no §1.3 zero-seed substitution), and
+out-of-bounds failure modes. 12 new unit tests pin the §1.4
+constants and `-4` fold, the sub-code decoder + predicate, the four
+input-validation rejections, the single-column four-row copy, the
+multi-column left-to-right walk, the partial-row-count
+lower-band-untouched invariant, the out-of-bounds surface, the
+"identical to upper neighbour at every position" §1.4 disposition,
+and the error-display spec-citation surface. Total `cargo test -p
+oxideav-indeo` count rises to **611 unit tests** (was 599). The
+remaining gap to a real-bitstream pixel decode is the codebook-bank
+`+0x000` / `+0x100` / `+0x200` / `+0x300` / `+0x700` per-entry
+values (`spec/07` §3.4 / §7.1 Extractor territory), the §4
+mark-edge sub-code body, plus a staged IV31 / IV32 bitstream fixture.
+
 **Round 30 — Indeo 3 (IV31 / IV32) §1.2 in-cell predictor chain
 row-driver (`spec/07` §1.2 / §2.1 / §2.4 + `spec/06` §6.3 / §6.4).**
 Round 30 adds the `indeo3::cell_emit` module — the per-row

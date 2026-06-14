@@ -8,6 +8,26 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/07 §1.4 (cross-ref spec/04 §4) VQ_NULL
+  copy-upper executor — the new `indeo3::cell_null` module executes
+  the one decode path round 30's `emit_cell_chain` deferred: the only
+  path where the predictor row is consumed without a delta add. When
+  the binary-tree walker reaches a VQ_NULL leaf whose first two
+  sub-code bits are `0`, `0`, the body at
+  `IR32_32.DLL!0x100069f4..0x10006a2d` copies the upper-neighbour row
+  (`[edi - 0xb0]`) byte-identically into the cell's pixel buffer for
+  up to four rows (`[edi]`, `[edi+0xb0]`, `[edi+0x15c]`,
+  `[edi+0x20c]`). `copy_upper_cell(buffer, geometry)` runs it over a
+  real strip pixel buffer; `COPY_UPPER_RAW_ROW_OFFSETS` pins the four
+  §1.4 displacements with `const _` cross-checks that rows 2 / 3 fold
+  the body's interleaved `edi += 4` advance into the displacement
+  (`0x15c == 2*0xb0 - 4`, `0x20c == 3*0xb0 - 4`). The `VqNullSubCode`
+  enum (`VqDataNoIndex` / `CopyUpper` / `MarkEdge`) with a `from_bits`
+  decoder surfaces all three spec/04 §4 sub-codes as a typed
+  discriminant. Typed `CopyUpperError` covers zero-width,
+  invalid-row-count, top-of-strip-source, and out-of-bounds. 12 new
+  unit tests; `cargo test -p oxideav-indeo` rises to 611 (was 599).
+
 - Indeo 3 (IV31 / IV32) spec/07 §1.2 + §2.4 (cross-ref spec/06 §6.3
   / §6.4) in-cell predictor chain — the new `indeo3::cell_emit`
   module turns the round-6/7 single-position dyad-pair emission

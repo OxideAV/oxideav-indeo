@@ -265,6 +265,7 @@ mod bank_select;
 mod cell_emit;
 mod cell_geometry;
 mod cell_loop;
+mod cell_null;
 mod cell_subarray;
 mod entropy;
 mod frame_exit;
@@ -303,6 +304,10 @@ pub use cell_loop::{
     CELL_BANK_LEN, CELL_DATA_TABLE, CELL_POSITION_MAX, CELL_POSITION_TABLE, CH_CONTROL_LUT,
     CL_ROW_COUNTER_LUT, INTRA_CONTEXT_CLEAR_MASK, INTRA_CONTEXT_FLAG, MIRROR_TABLE_OFFSET,
     SLOT_INDEX_LUT,
+};
+pub use cell_null::{
+    copy_upper_cell, CopyUpperError, CopyUpperGeometry, CopyUpperStats, VqNullSubCode,
+    COPY_UPPER_COLUMN_GROUP_BYTES, COPY_UPPER_RAW_ROW_OFFSETS, COPY_UPPER_ROW_COUNT,
 };
 pub use cell_subarray::{
     cell_stack_array_offset, cell_stack_slot_offset, CellStackReadSite, CellStackTopDispatch,
