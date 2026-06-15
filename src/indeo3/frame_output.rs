@@ -16,6 +16,15 @@
 //!   ([`upshift_7bit_to_8bit`], `shl byte, 1`). The shift discards
 //!   bit 7, so the §4.2 / §4.4 edge-marker sentinel is cleared as a
 //!   side effect ([`super::EDGE_MARKER_BIT`] never reaches the output).
+//! * §5.3 — the full output-format dispatch decision
+//!   ([`select_output_conversion`]): the `sub_4190` selection that
+//!   switches on the input `biCompression` (`'IF09'` / [`BI_RGB`] /
+//!   [`BI_BITFIELDS`]) and, for the RGB arm, the output `biBitCount`
+//!   (8 / 16 / 24, the 24-bpp case split by the colour-space flag),
+//!   resolving to one of the seven [`OutputConversion`] variants with
+//!   its §5.3-table entry RVA ([`OutputConversion::entry_rva`]). Only
+//!   [`OutputConversion::If09Passthrough`] has a landed body (below);
+//!   the RGB variants are §5.4-LUT-driven and deferred.
 //! * §5.3 / §5.6 — the IF09 / YVU9 passthrough dispatch surface:
 //!   the FOURCC the format dispatch compares against
 //!   ([`IF09_FOURCC`], referenced at [`IF09_FOURCC_CASE_RVA`]) and
@@ -106,6 +115,156 @@ const _: () = {
     assert!(OUTPUT_PLANE_ORDER[1] < PLANE_COUNT);
     assert!(OUTPUT_PLANE_ORDER[2] < PLANE_COUNT);
 };
+
+// ---- §5.3 output-format dispatch -------------------------------------
+//
+// After all three planes decode, `IR32_32.DLL!sub_4190`
+// (`0x10004644..0x10004915`) reads the host's requested output format
+// from the output BIH and selects a conversion function pointer into
+// `var_24`, then calls it indirectly (`call [var_24]`). The selection
+// switches first on the *input* `biCompression` and then, for the
+// uncompressed-RGB case, on the *output* `biBitCount`. This module
+// models only the dispatch *decision* — which conversion variant the
+// host request resolves to, and that variant's entry RVA. The
+// conversion arithmetic itself (the §5.4 LUT-driven YUV→RGB matrix)
+// stays deferred: its LUTs are populated at codec-init time via
+// register-indirect stores the audit could not pin (§5.4 audit note,
+// §7.2 open question). The IF09 passthrough row is the one variant
+// whose body (`assemble_plane_if09`) is already implemented above.
+
+/// Spec/07 §5.3 — the `biCompression` the host's *input* BIH carries
+/// for an uncompressed-RGB output request (the dispatch's
+/// `biCompression == 0` arm). `BI_RGB` in the Windows BITMAPINFOHEADER
+/// vocabulary.
+pub const BI_RGB: u32 = 0;
+
+/// Spec/07 §5.3 — the `biCompression` the host's *input* BIH carries
+/// for a bitfield-RGB output request (the dispatch's
+/// `biCompression == 3` arm). `BI_BITFIELDS` in the Windows
+/// BITMAPINFOHEADER vocabulary.
+pub const BI_BITFIELDS: u32 = 3;
+
+/// Spec/07 §5.3 — one selected output-conversion variant.
+///
+/// The seven variants are the rows of the §5.3 RVA table plus the
+/// `biCompression == 3` palette-lookup function. Each carries its
+/// conversion-function entry RVA ([`OutputConversion::entry_rva`]);
+/// the §5.4 LUT contents the RGB variants index are deferred, so this
+/// enum identifies *which* conversion the host requested without
+/// performing it. Only [`OutputConversion::If09Passthrough`] has a
+/// landed body ([`assemble_plane_if09`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputConversion {
+    /// `0x1000a53c` — IF09 / YVU9 planar passthrough (input
+    /// `biCompression == 'IF09'`). 7-bit→8-bit upshift + plane copy.
+    If09Passthrough,
+    /// `0x10008774` — RGB 8-bit indexed, luma-driven palette lookup
+    /// (input `BI_RGB`, output `biBitCount == 8`).
+    Rgb8Indexed,
+    /// `0x10008a50` — RGB 16-bit (5-6-5 or 5-5-5 by colour-space
+    /// flag) (input `BI_RGB`, output `biBitCount == 16`).
+    Rgb16,
+    /// `0x100096fc` — RGB 24-bit, the canonical `IV32 → RGB24` path
+    /// (input `BI_RGB`, output `biBitCount == 24`, colour-space flag
+    /// clear).
+    Rgb24,
+    /// `0x10009aa0` — RGB 24-bit alternate variant (input `BI_RGB`,
+    /// output `biBitCount == 24`, colour-space flag set).
+    Rgb24Alt,
+    /// `0x10006060` — bitfield-RGB palette-lookup variant
+    /// (`sub_6060`, input `biCompression == 3`). Output bit depth is
+    /// taken from the host's field masks rather than `biBitCount`.
+    BitfieldPalette,
+}
+
+impl OutputConversion {
+    /// Spec/07 §5.3 — the conversion function's entry RVA inside
+    /// `IR32_32.DLL` (the `var_24` value the dispatch installs and
+    /// `call [var_24]` invokes).
+    pub const fn entry_rva(self) -> u32 {
+        match self {
+            OutputConversion::If09Passthrough => IF09_PASSTHROUGH_RVA,
+            OutputConversion::Rgb8Indexed => 0x1000_8774,
+            OutputConversion::Rgb16 => 0x1000_8a50,
+            OutputConversion::Rgb24 => 0x1000_96fc,
+            OutputConversion::Rgb24Alt => 0x1000_9aa0,
+            OutputConversion::BitfieldPalette => 0x1000_6060,
+        }
+    }
+
+    /// `true` for the one variant whose conversion body is implemented
+    /// in this crate ([`assemble_plane_if09`]). The RGB variants are
+    /// §5.4-LUT-driven and deferred until the LUT-population evidence
+    /// is staged (§7.2).
+    pub const fn is_implemented(self) -> bool {
+        matches!(self, OutputConversion::If09Passthrough)
+    }
+}
+
+/// Spec/07 §5.3 — why an output-format request resolves to no
+/// conversion variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputDispatchError {
+    /// The input `biCompression` is none of the three the dispatch
+    /// switches on (`'IF09'`, `BI_RGB`, `BI_BITFIELDS`).
+    UnsupportedCompression {
+        /// The host's input `biCompression`.
+        compression: u32,
+    },
+    /// Input `biCompression == BI_RGB`, but the output `biBitCount` is
+    /// none of the three RGB depths the dispatch handles (8, 16, 24).
+    UnsupportedRgbBitCount {
+        /// The host's output `biBitCount`.
+        bit_count: u16,
+    },
+}
+
+/// Spec/07 §5.3 — resolve the host's requested output format to its
+/// conversion variant, mirroring the `sub_4190` selection logic.
+///
+/// `input_compression` is the host's *input* BIH `biCompression`;
+/// `output_bit_count` is the *output* BIH `biBitCount` (only consulted
+/// for the `BI_RGB` arm); `colour_space_flag` is the palette
+/// colour-space bit the 24-bit arm uses to pick between the canonical
+/// and alternate RGB24 variants (and which §5.4 notes also selects
+/// 5-6-5 vs 5-5-5 inside the 16-bit variant's LUT — that bit-layout
+/// choice is internal to [`OutputConversion::Rgb16`] and not split
+/// out here).
+pub const fn select_output_conversion(
+    input_compression: u32,
+    output_bit_count: u16,
+    colour_space_flag: bool,
+) -> Result<OutputConversion, OutputDispatchError> {
+    if input_compression == IF09_FOURCC {
+        Ok(OutputConversion::If09Passthrough)
+    } else if input_compression == BI_RGB {
+        match output_bit_count {
+            8 => Ok(OutputConversion::Rgb8Indexed),
+            16 => Ok(OutputConversion::Rgb16),
+            24 => {
+                if colour_space_flag {
+                    Ok(OutputConversion::Rgb24Alt)
+                } else {
+                    Ok(OutputConversion::Rgb24)
+                }
+            }
+            other => Err(OutputDispatchError::UnsupportedRgbBitCount { bit_count: other }),
+        }
+    } else if input_compression == BI_BITFIELDS {
+        Ok(OutputConversion::BitfieldPalette)
+    } else {
+        Err(OutputDispatchError::UnsupportedCompression {
+            compression: input_compression,
+        })
+    }
+}
+
+/// Spec/07 §5.3 — the host output `biBitCount` that triggers the
+/// per-line stride fix-up at `IR32_32.DLL!sub_5480` (the call at
+/// `0x10004901` in `sub_4190`): a 24-bpp output needs the row-by-row
+/// copy. The constant lets callers test the fix-up trigger without
+/// re-deriving `0x18`.
+pub const RGB24_STRIDE_FIXUP_BIT_COUNT: u16 = 24;
 
 /// Spec/07 §5.1 — the strip pixel buffer's allocated row stride the
 /// assembly reads at (`0xb0`), aliasing the spec/05 §4.1
@@ -407,6 +566,153 @@ mod tests {
         // selects it in code memory. (`black_box` defeats clippy's
         // constant-folding lint, mirroring mc_bounds.)
         assert!(core::hint::black_box(IF09_FOURCC_CASE_RVA) < IF09_PASSTHROUGH_RVA);
+    }
+
+    // ---- §5.3 output-format dispatch ----------------------------------
+
+    #[test]
+    fn dispatch_if09_compression_selects_passthrough() {
+        // §5.3 first arm: input biCompression == 'IF09' → passthrough,
+        // regardless of the output bit count / colour-space flag.
+        for bits in [0u16, 8, 16, 24, 32] {
+            for flag in [false, true] {
+                assert_eq!(
+                    select_output_conversion(IF09_FOURCC, bits, flag),
+                    Ok(OutputConversion::If09Passthrough)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dispatch_bi_rgb_switches_on_bit_count() {
+        // §5.3 second arm: input BI_RGB, output biBitCount picks the
+        // RGB variant.
+        assert_eq!(
+            select_output_conversion(BI_RGB, 8, false),
+            Ok(OutputConversion::Rgb8Indexed)
+        );
+        assert_eq!(
+            select_output_conversion(BI_RGB, 16, false),
+            Ok(OutputConversion::Rgb16)
+        );
+        // 16-bit ignores the colour-space flag at the dispatch level
+        // (the 5-6-5 / 5-5-5 choice is internal to the variant's LUT).
+        assert_eq!(
+            select_output_conversion(BI_RGB, 16, true),
+            Ok(OutputConversion::Rgb16)
+        );
+    }
+
+    #[test]
+    fn dispatch_rgb24_variant_by_colour_space_flag() {
+        // §5.3: biBitCount == 24 picks canonical vs alternate RGB24
+        // by the colour-space flag (`0x100096fc | 0x10009aa0`).
+        assert_eq!(
+            select_output_conversion(BI_RGB, 24, false),
+            Ok(OutputConversion::Rgb24)
+        );
+        assert_eq!(
+            select_output_conversion(BI_RGB, 24, true),
+            Ok(OutputConversion::Rgb24Alt)
+        );
+    }
+
+    #[test]
+    fn dispatch_bitfields_selects_palette_variant() {
+        // §5.3 third arm: input biCompression == 3 → sub_6060.
+        for bits in [0u16, 16, 24, 32] {
+            assert_eq!(
+                select_output_conversion(BI_BITFIELDS, bits, false),
+                Ok(OutputConversion::BitfieldPalette)
+            );
+        }
+    }
+
+    #[test]
+    fn dispatch_unsupported_compression_faults() {
+        // A biCompression the dispatch doesn't switch on (e.g. the
+        // 'IV32' FOURCC itself, or an arbitrary value) has no var_24.
+        let iv32 = u32::from_le_bytes(*b"IV32");
+        assert_eq!(
+            select_output_conversion(iv32, 24, false),
+            Err(OutputDispatchError::UnsupportedCompression { compression: iv32 })
+        );
+        assert_eq!(
+            select_output_conversion(1, 24, false),
+            Err(OutputDispatchError::UnsupportedCompression { compression: 1 })
+        );
+    }
+
+    #[test]
+    fn dispatch_unsupported_rgb_bit_count_faults() {
+        // BI_RGB with an output depth outside {8, 16, 24} (the §5.3
+        // arm has no else branch for 1 / 4 / 32 bpp).
+        for bits in [1u16, 4, 32] {
+            assert_eq!(
+                select_output_conversion(BI_RGB, bits, false),
+                Err(OutputDispatchError::UnsupportedRgbBitCount { bit_count: bits })
+            );
+        }
+    }
+
+    #[test]
+    fn conversion_entry_rvas_match_spec_table() {
+        // §5.3 RVA table — exact entry RVAs per row.
+        assert_eq!(OutputConversion::If09Passthrough.entry_rva(), 0x1000_a53c);
+        assert_eq!(OutputConversion::Rgb8Indexed.entry_rva(), 0x1000_8774);
+        assert_eq!(OutputConversion::Rgb16.entry_rva(), 0x1000_8a50);
+        assert_eq!(OutputConversion::Rgb24.entry_rva(), 0x1000_96fc);
+        assert_eq!(OutputConversion::Rgb24Alt.entry_rva(), 0x1000_9aa0);
+        assert_eq!(OutputConversion::BitfieldPalette.entry_rva(), 0x1000_6060);
+        // The passthrough variant's RVA aliases the standalone const.
+        assert_eq!(
+            OutputConversion::If09Passthrough.entry_rva(),
+            IF09_PASSTHROUGH_RVA
+        );
+    }
+
+    #[test]
+    fn only_if09_passthrough_is_implemented() {
+        // §5.4: the RGB variants are LUT-driven and deferred (§7.2);
+        // only the passthrough body is landed (assemble_plane_if09).
+        assert!(OutputConversion::If09Passthrough.is_implemented());
+        for v in [
+            OutputConversion::Rgb8Indexed,
+            OutputConversion::Rgb16,
+            OutputConversion::Rgb24,
+            OutputConversion::Rgb24Alt,
+            OutputConversion::BitfieldPalette,
+        ] {
+            assert!(!v.is_implemented(), "{v:?} body is not landed yet");
+        }
+    }
+
+    #[test]
+    fn bi_rgb_and_bi_bitfields_match_windows_vocabulary() {
+        // §5.3 — BI_RGB == 0, BI_BITFIELDS == 3 (BITMAPINFOHEADER).
+        assert_eq!(BI_RGB, 0);
+        assert_eq!(BI_BITFIELDS, 3);
+        // Neither aliases the IF09 FOURCC, so the dispatch arms are
+        // disjoint.
+        assert_ne!(BI_RGB, IF09_FOURCC);
+        assert_ne!(BI_BITFIELDS, IF09_FOURCC);
+    }
+
+    #[test]
+    fn rgb24_stride_fixup_trigger_is_24bpp() {
+        // §5.3: the sub_5480 per-line fix-up fires for 24-bpp output.
+        assert_eq!(RGB24_STRIDE_FIXUP_BIT_COUNT, 24);
+        // The two 24-bpp variants are exactly the ones a 24-bpp
+        // output request resolves to.
+        assert_eq!(
+            select_output_conversion(BI_RGB, RGB24_STRIDE_FIXUP_BIT_COUNT, false),
+            Ok(OutputConversion::Rgb24)
+        );
+        assert_eq!(
+            select_output_conversion(BI_RGB, RGB24_STRIDE_FIXUP_BIT_COUNT, true),
+            Ok(OutputConversion::Rgb24Alt)
+        );
     }
 
     #[test]

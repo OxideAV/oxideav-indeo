@@ -331,9 +331,10 @@ pub use frame_exit::{
     PLANE_ITERATION_ORDER,
 };
 pub use frame_output::{
-    assemble_plane_if09, strip_min_buffer_bytes, upshift_7bit_to_8bit, PlaneAssembleError,
+    assemble_plane_if09, select_output_conversion, strip_min_buffer_bytes, upshift_7bit_to_8bit,
+    OutputConversion, OutputDispatchError, PlaneAssembleError, BI_BITFIELDS, BI_RGB,
     FRAME_OUTPUT_SRC_ROW_STRIDE, IF09_FOURCC, IF09_FOURCC_CASE_RVA, IF09_PASSTHROUGH_RVA,
-    OUTPUT_PLANE_ORDER, OUTPUT_UPSHIFT_BITS,
+    OUTPUT_PLANE_ORDER, OUTPUT_UPSHIFT_BITS, RGB24_STRIDE_FIXUP_BIT_COUNT,
 };
 pub use header::{
     alt_quant_indices, BitstreamHeader, FrameFlags, FrameHeader, FrameHeaderPreamble, HeaderError,

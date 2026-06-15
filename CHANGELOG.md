@@ -8,6 +8,27 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/07 §5.3 output-format dispatch decision —
+  `indeo3::frame_output` gains `select_output_conversion`, the
+  `OutputConversion` enum (seven variants), `OutputDispatchError`, the
+  `BI_RGB` / `BI_BITFIELDS` input-`biCompression` constants, and the
+  `RGB24_STRIDE_FIXUP_BIT_COUNT` trigger. This models the `sub_4190`
+  (`0x10004644..0x10004915`) conversion-function-pointer selection that
+  installs `var_24` and invokes it via `call [var_24]`: the dispatch
+  switches first on the host's *input* `biCompression` (`'IF09'` →
+  passthrough; `BI_RGB == 0` → RGB; `BI_BITFIELDS == 3` → palette) and
+  then, for the RGB arm, on the *output* `biBitCount` (8 → `0x10008774`
+  indexed; 16 → `0x10008a50`; 24 → `0x100096fc` canonical / `0x10009aa0`
+  alternate, split by the colour-space flag). `OutputConversion::entry_rva`
+  returns each variant's §5.3-table conversion-function RVA, and
+  `is_implemented` flags the lone landed body (the IF09 passthrough,
+  `assemble_plane_if09`); the RGB variants' §5.4-LUT-driven bodies stay
+  deferred until the codec-init LUT-population evidence is staged
+  (spec/07 §5.4 audit note + §7.2). 12 new unit tests pin the per-arm
+  selection, the colour-space-flag split, the unsupported-compression /
+  unsupported-RGB-bit-count fault paths, the exact entry RVAs, and the
+  24-bpp stride-fix-up trigger; `cargo test -p oxideav-indeo` rises to
+  640 (was 630).
 - Indeo 3 (IV31 / IV32) spec/06 §1.2 / §3.3 per-row continuation-byte
   lookahead offset — `indeo3::entropy` gains `RowLookahead` and the
   `MAX_ROW_LOOKAHEAD_OFFSET` constant (`= 4`), completing the §3.3

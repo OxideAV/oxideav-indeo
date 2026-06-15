@@ -31,7 +31,13 @@ real bitstream end to end. What is implemented and unit-tested:
   RLE-escape classification, the two §3.2 high-nibble jump tables, the
   §4 escape-code dispatch with its §4.3 per-position acceptance matrix
   and §4.4 `0xFB` counter byte, and the §3.3 variable-byte continuation
-  rule including the per-row continuation-byte lookahead offset.
+  rule including the per-row continuation-byte lookahead offset, plus
+  the spec/07 §5.3 output-format dispatch decision — the `sub_4190`
+  selection over input `biCompression` (`IF09` / `BI_RGB` /
+  `BI_BITFIELDS`) and output `biBitCount`, resolving to one of seven
+  conversion variants with its entry RVA (the RGB variants' §5.4
+  LUT-driven bodies remain deferred; only the IF09 passthrough is
+  landed).
 
 Each stage operates on caller-supplied inputs (cells, deltas, pixel
 buffers) and stops at its documented chapter boundary; they are not yet
