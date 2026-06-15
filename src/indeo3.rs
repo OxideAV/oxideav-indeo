@@ -318,10 +318,10 @@ pub use cell_subarray::{
 };
 pub use entropy::{
     apply_continuation_xor, continuation_needed, fb_category, fb_category_table, variant_entry_rva,
-    DyadAddress, FbCategory, FbCounter, HighNibbleAction, JumpTable, LiteralMode, ModeByte,
-    ModeByteKind, PositionClass, RleEscape, ARENA_BAND_STRIDE, CONTINUATION_XOR, LITERAL_MODE_MAX,
-    PRIMARY_TABLE_DISP, RLE_ESCAPE_MIN, SECONDARY_TABLE_DISP, VARIANT_A_ENTRY, VARIANT_B_ENTRY,
-    VARIANT_C_ENTRY, VARIANT_D_ENTRY,
+    DyadAddress, FbCategory, FbCounter, HighNibbleAction, JumpTable, JumpTableEntry, LiteralMode,
+    ModeByte, ModeByteKind, PositionClass, RleEscape, ARENA_BAND_STRIDE, CONTINUATION_XOR,
+    LITERAL_MODE_MAX, PRIMARY_TABLE_DISP, RLE_ESCAPE_MIN, SECONDARY_TABLE_DISP, VARIANT_A_ENTRY,
+    VARIANT_B_ENTRY, VARIANT_C_ENTRY, VARIANT_D_ENTRY,
 };
 pub use frame_exit::{
     FrameExitDisposition, FramePlaneStatusFold, FRAME_FAULT_RETURN_RVA,

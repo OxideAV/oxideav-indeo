@@ -5,6 +5,39 @@ Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec for the
 
 ## Status
 
+**Round 33 — Indeo 3 (IV31 / IV32) §3.2 mode-byte jump-table
+per-entry dispatch (`spec/06` §3.2).** Round 33 replaces round 5's
+coarse `HighNibbleAction::Other` catch-all (which collapsed high
+nibbles `0x2..0xF` into one bucket and discarded the per-slot fault
+information) with the precise §3.2 dispatch. `JumpTable::entry(high_
+nibble)` resolves each of the two 16-entry jump tables'
+(`IR32_32.DLL!0x10006bd4` selected when low-nibble bit 3 is set;
+`0x10006c50` otherwise) sixteen `[base + 4 * high_nibble]` slots into
+a typed `JumpTableEntry`: `Handler(rva)` for the eight real handlers
+(`0x10006c14` / `0x10006c90` / `0x10006c9c` / `0x100072bb` /
+`0x100072c7` / `0x10007a9b` / `0x1000771c` / `0x10007710`), `Fault`
+for the slots routing to `0x10007a96` → `0x1000854b` (error code 1;
+an encoder is forbidden from indexing them in the variant-A flavour),
+and `Unspecified` for the second table's `0x5..0x9` row that §3.2
+records as "various" without enumerating — left un-invented per the
+clean-room wall. `LiteralMode::dispatch_entry()` /
+`LiteralMode::is_fault()` combine the bit-3 table selection with the
+high-nibble index into the single `jmp [4 * high_nibble + base]`
+dispatch the per-cell unpacker performs; the high-nibble index is
+masked to four bits so a raw nibble cannot run off the 16-entry
+table. 7 new unit tests pin both tables entry-by-entry against the
+§3.2 table, the shared (`0x1` / `0x2` / `0x4` / `0xB` / `0xC` /
+`0xD`..`0xF`) versus divergent (`0x0` / `0x3` / `0xA`) slot
+partition, the four-bit index masking, the combined `dispatch_entry`,
+and the `JumpTableEntry` accessor surface. Total `cargo test -p
+oxideav-indeo` count rises to **627 unit tests** (was 620). The
+remaining gap to a real-bitstream pixel decode is the codebook-bank
+`+0x000` / `+0x100` / `+0x200` / `+0x300` / `+0x700` per-entry values
+(`spec/04` §3.4 / §5 Extractor territory), the second jump table's
+`0x5..0x9` "various" entries, the §7.3 "first bit `1`"
+VQ-data-without-index unpacker dispatch (a `spec/04` §7.3 behavioural-
+corpus open question), plus a staged IV31 / IV32 bitstream fixture.
+
 **Round 32 — Indeo 3 (IV31 / IV32) §4 VQ_NULL `01` mark-edge executor
 (`spec/04` §4 + `spec/07` §4.2 / §4.4).** Round 32 closes the second
 non-degenerate VQ_NULL arm round 31 explicitly deferred. Where the
@@ -1323,7 +1356,7 @@ if header.bitstream.is_null_frame() {
 | spec/04 §5.2 per-frame seed-block build   | deferred (Extractor §7.1) |
 | spec/06 §1 entropy-surface inventory (4 mechanisms) | yes (constants + types) |
 | spec/06 §2.3 / §3.1 mode-byte nibble split | yes (`ModeByte` / `LiteralMode`) |
-| spec/06 §3.2 two 16-entry jump tables     | selector (`JumpTable`) |
+| spec/06 §3.2 two 16-entry jump tables     | per-entry (`JumpTable::entry`, `JumpTableEntry`; 2nd-table `0x5..0x9` = `Unspecified`) |
 | spec/06 §3.3 variable-byte continuation   | yes (`continuation_needed`) |
 | spec/06 §3.4 four cell-unpacker variants  | RVA map (`variant_entry_rva`) |
 | spec/06 §4.1 / §4.2 eight RLE escapes     | yes (`RleEscape`) |
@@ -1404,9 +1437,12 @@ chapters that aren't yet in `docs/`.
   `is_escape()`.
 * `LiteralMode` (`::from_byte`, `high_nibble` / `low_nibble` /
   `jump_table_offset` / `arena_band_offset` / `low_nibble_bit3`,
-  `::jump_table()`) + `JumpTable` (`First` / `Second`,
-  `::base_rva()`) + `HighNibbleAction::from_high_nibble` — the
-  §3.1 / §3.2 nibble dispatch.
+  `::jump_table()`, `::dispatch_entry()`, `::is_fault()`) +
+  `JumpTable` (`First` / `Second`, `::base_rva()`, `::entry(high_
+  nibble)`) + `JumpTableEntry` (`Handler(rva)` / `Fault` /
+  `Unspecified`, `::is_fault()`, `::handler_rva()`) +
+  `HighNibbleAction::from_high_nibble` — the §3.1 / §3.2 nibble
+  dispatch.
 * `RleEscape` (`F8..Ff`, `::from_byte`, `::byte()`,
   `::extra_bytes()`, `::accepted_at(PositionClass)`) +
   `PositionClass` (`CellFirst` / `RowFirst` / `Continuation1..3`,

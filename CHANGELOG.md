@@ -8,6 +8,25 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/06 §3.2 mode-byte jump-table per-entry
+  dispatch — `indeo3::entropy` gains `JumpTableEntry` and
+  `JumpTable::entry(high_nibble)`, resolving each of the two 16-entry
+  jump tables' (`0x10006bd4` / `0x10006c50`) slots from the coarse
+  round-5 `HighNibbleAction::Other` catch-all into the precise §3.2
+  per-(table, high-nibble) outcome: a handler RVA, the fault slot
+  (`0x10007a96` → `0x1000854b`, error code 1), or `Unspecified` for the
+  second table's `0x5..=0x9` row the spec records as "various" without
+  enumerating (left un-invented per the clean-room wall). The
+  per-handler RVAs (`0x10006c14` / `0x10006c90` / `0x10006c9c` /
+  `0x100072bb` / `0x100072c7` / `0x10007a9b` / `0x1000771c` /
+  `0x10007710`) are transcribed verbatim from the §3.2 table.
+  `LiteralMode::dispatch_entry()` / `::is_fault()` combine the bit-3
+  table selection with the high-nibble index into the single dispatch
+  the per-cell unpacker performs; the high-nibble index is masked to
+  4 bits so a raw nibble cannot run off the table. 7 new unit tests pin
+  both tables entry-by-entry, the shared-vs-divergent slot partition,
+  the index masking, the combined dispatch, and the accessor surface;
+  `cargo test -p oxideav-indeo` rises to 627 (was 620).
 - Indeo 3 (IV31 / IV32) spec/04 §4 VQ_NULL `01` mark-edge executor —
   the `indeo3::cell_null` module gains `mark_edge_cell(buffer,
   geometry)`, the second non-degenerate VQ_NULL arm round 31's

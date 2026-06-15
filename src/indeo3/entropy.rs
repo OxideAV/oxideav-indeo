@@ -157,6 +157,25 @@ impl LiteralMode {
             JumpTable::Second
         }
     }
+
+    /// Spec/06 §3.2 — resolve this mode byte's full dispatch outcome by
+    /// indexing the bit-3-selected jump table at this byte's high
+    /// nibble (`jmp [4 * high_nibble + base]`). Combines
+    /// [`jump_table`](Self::jump_table) (table selection) and
+    /// [`JumpTable::entry`] (per-high-nibble target) into the single
+    /// dispatch the per-cell unpacker performs at
+    /// `IR32_32.DLL!0x10006bd4` / `0x10006c50`.
+    pub fn dispatch_entry(self) -> JumpTableEntry {
+        self.jump_table().entry(self.high_nibble)
+    }
+
+    /// Spec/06 §3.2 — `true` when this mode byte indexes a fault slot
+    /// (target `0x10007a96` → `0x1000854b`, error code 1) of the
+    /// bit-3-selected jump table. An encoder is forbidden from emitting
+    /// such a byte in the variant-A flavour.
+    pub fn is_fault(self) -> bool {
+        self.dispatch_entry().is_fault()
+    }
 }
 
 /// Spec/06 §3.2 — the two 16-entry mode-byte jump tables.
@@ -182,6 +201,90 @@ impl JumpTable {
             JumpTable::Second => 0x1000_6c50,
         }
     }
+
+    /// Spec/06 §3.2 — resolve the 4-byte entry at index `high_nibble`
+    /// (`[base + 4 * high_nibble]`) into a typed handler classification.
+    ///
+    /// The two tables are indexed identically (`sar eax, 0x2` after
+    /// `and eax, 0xF0` yields `high_nibble * 4`); they differ only at
+    /// the indices where the §3.1 bit-3 distinction is structurally
+    /// meaningful (high nibbles `0x0`, `0x3`, `0xA`). `high_nibble`
+    /// values above `0xF` saturate the 4-bit index and are masked to
+    /// `0x0..=0xF` so a caller passing a raw byte's high nibble cannot
+    /// run off the 16-entry table.
+    pub fn entry(self, high_nibble: u8) -> JumpTableEntry {
+        let hn = high_nibble & 0x0F;
+        match self {
+            JumpTable::First => match hn {
+                0x0 => JumpTableEntry::Handler(0x1000_6c14),
+                0x1 => JumpTableEntry::Handler(0x1000_6c90),
+                0x2 => JumpTableEntry::Fault,
+                0x3 => JumpTableEntry::Handler(0x1000_6c14),
+                0x4 => JumpTableEntry::Handler(0x1000_72bb),
+                0x5..=0x9 => JumpTableEntry::Fault,
+                0xA => JumpTableEntry::Handler(0x1000_6c14),
+                0xB => JumpTableEntry::Handler(0x1000_771c),
+                0xC => JumpTableEntry::Handler(0x1000_7710),
+                _ => JumpTableEntry::Fault, // 0xD..=0xF
+            },
+            JumpTable::Second => match hn {
+                0x0 => JumpTableEntry::Handler(0x1000_6c9c),
+                0x1 => JumpTableEntry::Handler(0x1000_6c90),
+                0x2 => JumpTableEntry::Fault,
+                0x3 => JumpTableEntry::Handler(0x1000_72c7),
+                0x4 => JumpTableEntry::Handler(0x1000_72bb),
+                // §3.2 records the second table's `0x5..=0x9` row as
+                // "various"; the per-entry targets are not enumerated
+                // at the bitstream level, so we do not invent them.
+                0x5..=0x9 => JumpTableEntry::Unspecified,
+                0xA => JumpTableEntry::Handler(0x1000_7a9b),
+                0xB => JumpTableEntry::Handler(0x1000_771c),
+                0xC => JumpTableEntry::Handler(0x1000_7710),
+                _ => JumpTableEntry::Fault, // 0xD..=0xF
+            },
+        }
+    }
+}
+
+/// Spec/06 §3.2 — the classification of a single 16-entry jump-table
+/// slot (`[0x10006bd4 + 4N]` / `[0x10006c50 + 4N]`).
+///
+/// The slot holds a code address; this enum records what category of
+/// handler that address belongs to at the bitstream level. The
+/// per-pixel handler bodies are spec/07's subject — this only pins
+/// the dispatch outcome (accept-and-which-handler / fault / not-pinned)
+/// so a caller routing a mode byte knows which slots an encoder is
+/// forbidden from indexing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JumpTableEntry {
+    /// A real handler at the given `IR32_32.DLL` RVA. The mode byte is
+    /// accepted; the handler emits cell pixels (spec/07).
+    Handler(u32),
+    /// The slot points at the fault handler `0x10007a96` →
+    /// `0x1000854b`, which returns error code 1. An encoder is
+    /// forbidden from emitting a mode byte that indexes here for the
+    /// variant-A flavour.
+    Fault,
+    /// Spec/06 §3.2 records the second table's `0x5..=0x9` entries as
+    /// "various" without enumerating their targets. The dispatch is
+    /// not pinned at the bitstream level; resolving it is an Extractor
+    /// task over the `0x10006c50` table image.
+    Unspecified,
+}
+
+impl JumpTableEntry {
+    /// `true` if the slot routes to the fault handler (`0x10007a96`).
+    pub fn is_fault(self) -> bool {
+        matches!(self, JumpTableEntry::Fault)
+    }
+
+    /// The handler RVA, when the slot is a real handler.
+    pub fn handler_rva(self) -> Option<u32> {
+        match self {
+            JumpTableEntry::Handler(rva) => Some(rva),
+            _ => None,
+        }
+    }
 }
 
 /// Spec/06 §3.1 — the four categories of high-nibble behaviour
@@ -199,8 +302,10 @@ pub enum HighNibbleAction {
     SinglePixelFill,
     /// High nibble `0x2..=0xF` — other per-mode behaviours (QUAD,
     /// doubled-row, row-band advance) whose detailed semantics are
-    /// spec/07 (§3.1 / §3.2). Some of these slots are faults in the
-    /// variant-A table (§3.2); see [`LiteralMode::jump_table`].
+    /// spec/07 (§3.1 / §3.2). Several of these slots are faults; for
+    /// the precise per-(table, high-nibble) dispatch outcome including
+    /// fault detection, use [`LiteralMode::dispatch_entry`] /
+    /// [`JumpTable::entry`] rather than this coarse §3.1 category.
     Other,
 }
 
@@ -686,6 +791,115 @@ mod tests {
                 HighNibbleAction::Other
             );
         }
+    }
+
+    #[test]
+    fn first_jump_table_entries_match_spec_3_2() {
+        // §3.2 column "Entry at 0x10006bd4 + 4N".
+        use JumpTableEntry::*;
+        let t = JumpTable::First;
+        assert_eq!(t.entry(0x0), Handler(0x1000_6c14));
+        assert_eq!(t.entry(0x1), Handler(0x1000_6c90));
+        assert_eq!(t.entry(0x2), Fault);
+        assert_eq!(t.entry(0x3), Handler(0x1000_6c14));
+        assert_eq!(t.entry(0x4), Handler(0x1000_72bb));
+        for hn in 0x5..=0x9 {
+            assert_eq!(t.entry(hn), Fault, "first[{hn:#x}]");
+        }
+        assert_eq!(t.entry(0xA), Handler(0x1000_6c14));
+        assert_eq!(t.entry(0xB), Handler(0x1000_771c));
+        assert_eq!(t.entry(0xC), Handler(0x1000_7710));
+        for hn in 0xD..=0xF {
+            assert_eq!(t.entry(hn), Fault, "first[{hn:#x}]");
+        }
+    }
+
+    #[test]
+    fn second_jump_table_entries_match_spec_3_2() {
+        // §3.2 column "Entry at 0x10006c50 + 4N".
+        use JumpTableEntry::*;
+        let t = JumpTable::Second;
+        assert_eq!(t.entry(0x0), Handler(0x1000_6c9c));
+        assert_eq!(t.entry(0x1), Handler(0x1000_6c90));
+        assert_eq!(t.entry(0x2), Fault);
+        assert_eq!(t.entry(0x3), Handler(0x1000_72c7));
+        assert_eq!(t.entry(0x4), Handler(0x1000_72bb));
+        // §3.2 records 0x5..=0x9 as "various" for the second table —
+        // not enumerated, so not invented.
+        for hn in 0x5..=0x9 {
+            assert_eq!(t.entry(hn), Unspecified, "second[{hn:#x}]");
+        }
+        assert_eq!(t.entry(0xA), Handler(0x1000_7a9b));
+        assert_eq!(t.entry(0xB), Handler(0x1000_771c));
+        assert_eq!(t.entry(0xC), Handler(0x1000_7710));
+        for hn in 0xD..=0xF {
+            assert_eq!(t.entry(hn), Fault, "second[{hn:#x}]");
+        }
+    }
+
+    #[test]
+    fn jump_table_entry_index_masks_to_four_bits() {
+        // A caller passing a raw nibble above 0xF (defensive) must not
+        // run off the 16-entry table: 0x10 wraps to index 0x0.
+        assert_eq!(JumpTable::First.entry(0x10), JumpTable::First.entry(0x0));
+        assert_eq!(JumpTable::Second.entry(0x1F), JumpTable::Second.entry(0xF));
+    }
+
+    #[test]
+    fn shared_entries_identical_across_both_tables() {
+        // §3.2: high nibbles 0x1, 0x2, 0x4, 0xB, 0xC, and the
+        // 0xD..=0xF tail resolve identically in both tables.
+        for hn in [0x1u8, 0x2, 0x4, 0xB, 0xC, 0xD, 0xE, 0xF] {
+            assert_eq!(
+                JumpTable::First.entry(hn),
+                JumpTable::Second.entry(hn),
+                "shared[{hn:#x}]"
+            );
+        }
+    }
+
+    #[test]
+    fn divergent_entries_differ_per_bit3() {
+        // §3.2: high nibbles 0x0, 0x3, 0xA diverge between the tables.
+        for hn in [0x0u8, 0x3, 0xA] {
+            assert_ne!(
+                JumpTable::First.entry(hn),
+                JumpTable::Second.entry(hn),
+                "divergent[{hn:#x}]"
+            );
+        }
+    }
+
+    #[test]
+    fn dispatch_entry_combines_bit3_and_high_nibble() {
+        // 0x08: high nibble 0, low nibble 8 (bit 3 set) → First table,
+        // index 0 → 0x10006c14.
+        assert_eq!(
+            LiteralMode::from_byte(0x08).dispatch_entry(),
+            JumpTableEntry::Handler(0x1000_6c14)
+        );
+        // 0x00: high nibble 0, low nibble 0 (bit 3 clear) → Second
+        // table, index 0 → 0x10006c9c.
+        assert_eq!(
+            LiteralMode::from_byte(0x00).dispatch_entry(),
+            JumpTableEntry::Handler(0x1000_6c9c)
+        );
+        // 0x20: high nibble 2 → fault in both flavours.
+        assert!(LiteralMode::from_byte(0x20).is_fault());
+        assert!(LiteralMode::from_byte(0x28).is_fault());
+    }
+
+    #[test]
+    fn jump_table_entry_accessors() {
+        assert!(JumpTableEntry::Fault.is_fault());
+        assert!(!JumpTableEntry::Handler(0x1000_6c14).is_fault());
+        assert!(!JumpTableEntry::Unspecified.is_fault());
+        assert_eq!(
+            JumpTableEntry::Handler(0x1000_6c14).handler_rva(),
+            Some(0x1000_6c14)
+        );
+        assert_eq!(JumpTableEntry::Fault.handler_rva(), None);
+        assert_eq!(JumpTableEntry::Unspecified.handler_rva(), None);
     }
 
     #[test]
