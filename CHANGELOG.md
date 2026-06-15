@@ -24,7 +24,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `is_implemented` flags the lone landed body (the IF09 passthrough,
   `assemble_plane_if09`); the RGB variants' §5.4-LUT-driven bodies stay
   deferred until the codec-init LUT-population evidence is staged
-  (spec/07 §5.4 audit note + §7.2). 12 new unit tests pin the per-arm
+  (spec/07 §5.4 audit note + §7.2). 10 new unit tests pin the per-arm
   selection, the colour-space-flag split, the unsupported-compression /
   unsupported-RGB-bit-count fault paths, the exact entry RVAs, and the
   24-bpp stride-fix-up trigger; `cargo test -p oxideav-indeo` rises to
