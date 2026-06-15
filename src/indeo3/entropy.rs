@@ -597,6 +597,72 @@ pub fn apply_continuation_xor(dyad_sum: u32) -> u32 {
     dyad_sum ^ CONTINUATION_XOR
 }
 
+/// Spec/06 §1.2 / §3.3 — the per-row continuation-byte lookahead
+/// offset.
+///
+/// When a literal mode byte's primary-table dyad overflows
+/// ([`continuation_needed`] is `true`), the decoder reads the
+/// continuation byte at a fixed **positive** offset from the
+/// bitstream cursor `ebp` — *not* at `[ebp]`. The offset depends on
+/// which row of the cell is being emitted, because the per-row
+/// continuation read sites in the binary load their second byte at a
+/// row-specific displacement:
+///
+/// | Row index | Read site (variant B row-1 tail, §1.2) | Offset |
+/// | --------- | -------------------------------------- | ------ |
+/// | 0         | `IR32_32.DLL!0x10006e18`               | `+1`   |
+/// | 1         | `IR32_32.DLL!0x10006e91`               | `+2`   |
+/// | 2         | `IR32_32.DLL!0x10006f17`               | `+3`   |
+/// | 3         | `IR32_32.DLL!0x10006f98`               | `+4`   |
+///
+/// The §3.3 wording: "the per-row continuation reads its second byte
+/// at a fixed positive offset from `ebp` depending on which row of the
+/// cell is being emitted (row 0: `+1`; row 1: `+2`; row 2: `+3`;
+/// row 3: `+4`)". This is the `mov dl, [ebp + N]` displacement; the
+/// cursor itself advances by one extra byte (`inc ebp`) per
+/// continuation consumed (§3.3), so the displacement equals
+/// `row_index + 1` — one more than the number of `inc ebp` advances
+/// the earlier rows of the same dyad-pair have already issued.
+///
+/// A cell has at most four rows (`spec/03 §2.4`), so the offset is
+/// bounded by [`MAX_ROW_LOOKAHEAD_OFFSET`] (`= 4`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowLookahead {
+    /// The 0-based row index within the cell (`0..=3`).
+    pub row_index: usize,
+    /// The `[ebp + N]` displacement at which the continuation byte for
+    /// this row is read (`row_index + 1`).
+    pub continuation_offset: usize,
+    /// The §1.2 read-site RVA for this row's continuation lookahead
+    /// (cited for provenance).
+    pub read_site_rva: u32,
+}
+
+/// Spec/06 §1.2 / §3.3 — the maximum per-row continuation lookahead
+/// offset (`+4`, the row-3 displacement). A cell has at most four rows
+/// (`spec/03 §2.4`).
+pub const MAX_ROW_LOOKAHEAD_OFFSET: usize = 4;
+
+impl RowLookahead {
+    /// Spec/06 §1.2 / §3.3 — resolve the continuation-byte lookahead
+    /// for the given 0-based cell row index. Returns `None` for a row
+    /// index `>= 4` (no cell exceeds four rows; `spec/03 §2.4`).
+    pub fn for_row(row_index: usize) -> Option<Self> {
+        let read_site_rva = match row_index {
+            0 => 0x1000_6e18,
+            1 => 0x1000_6e91,
+            2 => 0x1000_6f17,
+            3 => 0x1000_6f98,
+            _ => return None,
+        };
+        Some(RowLookahead {
+            row_index,
+            continuation_offset: row_index + 1,
+            read_site_rva,
+        })
+    }
+}
+
 /// Spec/06 §4.4 — the per-byte category looked up for a `0xFB`
 /// counter byte.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1119,6 +1185,40 @@ mod tests {
         assert_eq!(
             PositionClass::Continuation3.variant_a_row0_base_rva(),
             0x1000_6b64
+        );
+    }
+
+    #[test]
+    fn row_lookahead_offsets_match_spec_1_2() {
+        // §1.2 / §3.3: row 0 → +1, row 1 → +2, row 2 → +3, row 3 → +4.
+        for (row, expect) in [(0, 1), (1, 2), (2, 3), (3, 4)] {
+            let l = RowLookahead::for_row(row).expect("row 0..=3 is valid");
+            assert_eq!(l.row_index, row);
+            assert_eq!(l.continuation_offset, expect, "row {row}");
+            // The displacement is exactly one more than the row index.
+            assert_eq!(l.continuation_offset, row + 1);
+        }
+    }
+
+    #[test]
+    fn row_lookahead_read_site_rvas() {
+        // §1.2 "Cross-row escape lookahead" read-site RVAs.
+        assert_eq!(RowLookahead::for_row(0).unwrap().read_site_rva, 0x1000_6e18);
+        assert_eq!(RowLookahead::for_row(1).unwrap().read_site_rva, 0x1000_6e91);
+        assert_eq!(RowLookahead::for_row(2).unwrap().read_site_rva, 0x1000_6f17);
+        assert_eq!(RowLookahead::for_row(3).unwrap().read_site_rva, 0x1000_6f98);
+    }
+
+    #[test]
+    fn row_lookahead_rejects_out_of_range_rows() {
+        // A cell has at most four rows (spec/03 §2.4); row 4+ is invalid.
+        assert!(RowLookahead::for_row(4).is_none());
+        assert!(RowLookahead::for_row(255).is_none());
+        // The max offset constant equals the row-3 displacement.
+        assert_eq!(MAX_ROW_LOOKAHEAD_OFFSET, 4);
+        assert_eq!(
+            RowLookahead::for_row(3).unwrap().continuation_offset,
+            MAX_ROW_LOOKAHEAD_OFFSET
         );
     }
 }

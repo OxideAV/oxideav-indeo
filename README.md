@@ -26,7 +26,12 @@ real bitstream end to end. What is implemented and unit-tested:
   row driver, VQ_NULL copy-upper / mark-edge executors, the §3.2
   mode-byte jump-table dispatch, packed-MV decode + four-way
   motion-compensation dispatch and cell-copy kernels, strip-edge fix-up,
-  and the §4.3 / §5.6 / §5.7 output upshift + strip-to-frame assembly.
+  the §4.3 / §5.6 / §5.7 output upshift + strip-to-frame assembly, and
+  the spec/06 byte-level mode-byte entropy surface — the literal /
+  RLE-escape classification, the two §3.2 high-nibble jump tables, the
+  §4 escape-code dispatch with its §4.3 per-position acceptance matrix
+  and §4.4 `0xFB` counter byte, and the §3.3 variable-byte continuation
+  rule including the per-row continuation-byte lookahead offset.
 
 Each stage operates on caller-supplied inputs (cells, deltas, pixel
 buffers) and stops at its documented chapter boundary; they are not yet

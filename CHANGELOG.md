@@ -8,6 +8,24 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/06 §1.2 / §3.3 per-row continuation-byte
+  lookahead offset — `indeo3::entropy` gains `RowLookahead` and the
+  `MAX_ROW_LOOKAHEAD_OFFSET` constant (`= 4`), completing the §3.3
+  variable-byte continuation surface left after round 314's
+  `continuation_needed` test. When a literal mode byte's primary-table
+  dyad overflows, the continuation byte is read at `[ebp + N]` — a
+  fixed *positive* displacement from the bitstream cursor that depends
+  on which of the cell's (≤ 4) rows is being emitted: row 0 → `+1`,
+  row 1 → `+2`, row 2 → `+3`, row 3 → `+4` (the displacement equals
+  `row_index + 1`, one more than the number of `inc ebp` advances the
+  earlier rows of the same dyad-pair issued). `RowLookahead::for_row`
+  resolves the `(row_index, continuation_offset, read_site_rva)` triple
+  for a 0-based row index, returning `None` for rows `>= 4` (no cell
+  exceeds four rows, `spec/03 §2.4`). The four §1.2 "cross-row escape
+  lookahead" read-site RVAs (`0x10006e18` / `0x10006e91` /
+  `0x10006f17` / `0x10006f98`) are transcribed verbatim. 3 new unit
+  tests pin the offsets, the read-site RVAs, and the out-of-range row
+  rejection; `cargo test -p oxideav-indeo` rises to 630 (was 627).
 - Indeo 3 (IV31 / IV32) spec/06 §3.2 mode-byte jump-table per-entry
   dispatch — `indeo3::entropy` gains `JumpTableEntry` and
   `JumpTable::entry(high_nibble)`, resolving each of the two 16-entry
