@@ -8,6 +8,24 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/07 §5.5 4:1:0 → output chroma box-upsampler
+  — `indeo3::frame_output` gains `upsample_chroma_4x4`, the
+  `CHROMA_UPSAMPLE_FACTOR` (`4`) ratio constant, and the
+  `ChromaUpsampleError` validation enum. This executes §5.5's "plain
+  box-filter chroma upsampling": each chroma (V / U) sample is replicated
+  into the 4×4 block of output positions it covers (output index `/ 4`
+  picks the source, §5.5's "integer division by 4 / shift by 2"), with no
+  interpolation, no edge-aware reconstruction, and no chroma plane stride.
+  The source is one assembled chroma plane (e.g. the output of
+  `assemble_plane_if09`) carrying already-8-bit values; the upsampler
+  copies bytes verbatim (the §4.3 upshift is folded into §5.4's LUT /
+  applied once per-plane by §5.6, not re-applied here). Source / dest
+  stride padding outside the raster is honoured and left untouched. This
+  feeds the §5.4 RGB conversion loops whose LUT bodies stay deferred. 13
+  unit tests cover single-sample fill, the 2×2 quadrant box pattern,
+  source / dest stride padding isolation, the no-upshift verbatim copy,
+  zero-dimension no-ops, an end-to-end `assemble_plane_if09` →
+  `upsample_chroma_4x4` chain, and the four bounds-validation errors.
 - Indeo 3 (IV31 / IV32) spec/07 §5.3 output-format dispatch decision —
   `indeo3::frame_output` gains `select_output_conversion`, the
   `OutputConversion` enum (seven variants), `OutputDispatchError`, the

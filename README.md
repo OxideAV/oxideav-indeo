@@ -26,7 +26,8 @@ real bitstream end to end. What is implemented and unit-tested:
   row driver, VQ_NULL copy-upper / mark-edge executors, the §3.2
   mode-byte jump-table dispatch, packed-MV decode + four-way
   motion-compensation dispatch and cell-copy kernels, strip-edge fix-up,
-  the §4.3 / §5.6 / §5.7 output upshift + strip-to-frame assembly, and
+  the §4.3 / §5.5 / §5.6 / §5.7 output upshift + 4:1:0 chroma
+  box-upsampler + strip-to-frame assembly, and
   the spec/06 byte-level mode-byte entropy surface — the literal /
   RLE-escape classification, the two §3.2 high-nibble jump tables, the
   §4 escape-code dispatch with its §4.3 per-position acceptance matrix
@@ -65,7 +66,10 @@ the round-0 scaffold pending docs work.
 - `indeo3::decode_plane_tree` — binary-tree walk → `CellTree`
   (`spec/03`).
 - `indeo3::upshift_7bit_to_8bit` / `assemble_plane_if09` — output-stage
-  upshift and strip-to-frame assembly (`spec/07`).
+  upshift and strip-to-frame assembly (`spec/07` §4.3 / §5.7).
+- `indeo3::upsample_chroma_4x4` — §5.5 4:1:0 → output box-filter chroma
+  upsampler (replicate each chroma sample into a 4×4 output block;
+  `CHROMA_UPSAMPLE_FACTOR`).
 - `alt_quant_indices(byte) -> (primary, secondary)` — §3.9.
 - Header constants: `MAGIC_FRMH`, `REQUIRED_DEC_VERSION`,
   `FRAME_HEADER_LEN`, `BITSTREAM_HEADER_LEN`, `COMBINED_HEADER_LEN`,

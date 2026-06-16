@@ -55,10 +55,14 @@
 //!   not pin (spec/07 §5.4 audit note + §7.2 open question) — the
 //!   RGB paths stay deferred until the LUT-population evidence is
 //!   staged.
-//! * No chroma upsampling. §5.5's 4×4 box replication belongs to the
-//!   RGB conversion loops; the IF09 passthrough this module models
-//!   keeps the chroma planes at their 4:1:0 subsampling (§5.6
-//!   closing paragraph).
+//! * §5.5 — the 4:1:0 → output chroma box-upsampler
+//!   ([`upsample_chroma_4x4`]): replicates each chroma sample into a
+//!   4×4 block of output positions, the "plain box-filter chroma
+//!   upsampling" §5.5 documents (no interpolation, no edge-aware
+//!   reconstruction). The IF09 passthrough ([`assemble_plane_if09`])
+//!   keeps the chroma planes at their 4:1:0 subsampling (§5.6 closing
+//!   paragraph); this standalone upsampler feeds the §5.4 RGB
+//!   conversion loops whose LUT bodies stay deferred.
 //! * No frame finalisation. The §6 saved-frame-flags / frame-number
 //!   state updates and the §6.3 return code are the next chapter
 //!   slice above this one.
@@ -505,6 +509,185 @@ pub fn assemble_plane_if09(
     }
 
     Ok(written)
+}
+
+// ---- §5.5 chroma upsampling (4:1:0 → output sampling) ---------------
+
+/// Spec/07 §5.5 — the chroma → luma upsampling ratio along one axis.
+///
+/// "The V and U planes have one quarter of the picture's width *and*
+/// one quarter of its height" (the 4:1:0 subsampling), so the
+/// output-conversion stage replicates each chroma sample across a
+/// 4×4 block of luma positions.
+pub const CHROMA_UPSAMPLE_FACTOR: usize = 4;
+
+/// Spec/07 §5.5 — failure modes of the chroma box-upsampler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChromaUpsampleError {
+    /// The source row stride is narrower than the source chroma width
+    /// — one source row cannot fit.
+    SrcStrideTooNarrow {
+        /// The chroma plane width (in samples).
+        chroma_width: u32,
+        /// The supplied source row stride (in bytes).
+        src_stride: usize,
+    },
+    /// The source slice is shorter than the chroma plane requires.
+    SrcBufferTooShort {
+        /// Bytes the source walk requires.
+        required: usize,
+        /// Bytes supplied.
+        supplied: usize,
+    },
+    /// The destination row stride is narrower than the upsampled
+    /// (luma-resolution) width — one output row cannot fit.
+    DstStrideTooNarrow {
+        /// The upsampled width (`chroma_width × 4`).
+        upsampled_width: usize,
+        /// The supplied destination row stride (in bytes).
+        dst_stride: usize,
+    },
+    /// The destination slice is shorter than the upsampled plane
+    /// requires.
+    DstBufferTooShort {
+        /// Bytes the upsampled plane requires.
+        required: usize,
+        /// Bytes supplied.
+        supplied: usize,
+    },
+}
+
+impl core::fmt::Display for ChromaUpsampleError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ChromaUpsampleError::SrcStrideTooNarrow {
+                chroma_width,
+                src_stride,
+            } => write!(
+                f,
+                "spec/07 §5.5: source row stride {src_stride} is narrower than \
+                 the chroma width {chroma_width}"
+            ),
+            ChromaUpsampleError::SrcBufferTooShort { required, supplied } => write!(
+                f,
+                "spec/07 §5.5: source slice has {supplied} byte(s); \
+                 the upsample walk requires at least {required}"
+            ),
+            ChromaUpsampleError::DstStrideTooNarrow {
+                upsampled_width,
+                dst_stride,
+            } => write!(
+                f,
+                "spec/07 §5.5: output row stride {dst_stride} is narrower than \
+                 the upsampled width {upsampled_width}"
+            ),
+            ChromaUpsampleError::DstBufferTooShort { required, supplied } => write!(
+                f,
+                "spec/07 §5.5: output slice has {supplied} byte(s); \
+                 the upsampled plane requires at least {required}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ChromaUpsampleError {}
+
+/// Spec/07 §5.5 — box-filter upsample one chroma plane (V or U) from
+/// its 4:1:0 subsampled resolution to full (luma) resolution.
+///
+/// Per §5.5 the output-conversion stage upsamples chroma by
+/// "replicating each chroma sample to a 4×4 block of luma positions"
+/// — "plain box-filter chroma upsampling: there is no chroma
+/// interpolation, no edge-aware reconstruction". Each output sample at
+/// `(row, col)` reads the chroma sample at `(row / 4, col / 4)`
+/// (`§5.5`'s "integer division by 4 (or equivalently shift by 2)").
+///
+/// The source is one assembled chroma plane of `chroma_width ×
+/// chroma_height` samples (e.g. the output of [`assemble_plane_if09`]
+/// for a V / U plane, or any caller-supplied chroma raster), whose
+/// rows are `src_stride` bytes apart. Each source byte already carries
+/// the §4.3 1-bit-upshifted 8-bit value; this function copies it
+/// verbatim (it performs **no** further upshift — the source is
+/// assumed to be in the 8-bit output range already, matching the way
+/// §5.4 folds the upshift into the LUT and §5.6 applies it once
+/// per-plane).
+///
+/// The destination is the upsampled plane of `chroma_width × 4` by
+/// `chroma_height × 4` samples, whose rows are `dst_stride` bytes
+/// apart. Bytes of `dst` outside the upsampled raster (stride
+/// padding, trailing slack) are left untouched.
+///
+/// Returns the number of samples written
+/// (`chroma_width × 4 × chroma_height × 4`).
+pub fn upsample_chroma_4x4(
+    src: &[u8],
+    chroma_width: u32,
+    chroma_height: u32,
+    src_stride: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+) -> Result<usize, ChromaUpsampleError> {
+    let cw = chroma_width as usize;
+    let ch = chroma_height as usize;
+
+    if cw > src_stride {
+        return Err(ChromaUpsampleError::SrcStrideTooNarrow {
+            chroma_width,
+            src_stride,
+        });
+    }
+
+    let src_required = if ch == 0 || cw == 0 {
+        0
+    } else {
+        (ch - 1) * src_stride + cw
+    };
+    if src.len() < src_required {
+        return Err(ChromaUpsampleError::SrcBufferTooShort {
+            required: src_required,
+            supplied: src.len(),
+        });
+    }
+
+    let up_w = cw * CHROMA_UPSAMPLE_FACTOR;
+    let up_h = ch * CHROMA_UPSAMPLE_FACTOR;
+
+    if up_w > dst_stride {
+        return Err(ChromaUpsampleError::DstStrideTooNarrow {
+            upsampled_width: up_w,
+            dst_stride,
+        });
+    }
+
+    let dst_required = if up_h == 0 || up_w == 0 {
+        0
+    } else {
+        (up_h - 1) * dst_stride + up_w
+    };
+    if dst.len() < dst_required {
+        return Err(ChromaUpsampleError::DstBufferTooShort {
+            required: dst_required,
+            supplied: dst.len(),
+        });
+    }
+
+    // §5.5: for each chroma sample (cy, cx), replicate it into the
+    // 4×4 block of output positions [(cy*4 + dy), (cx*4 + dx)] for
+    // dy, dx in 0..4 — "each (V, U) pair contributes the chroma
+    // component to 16 adjacent RGB pixels".
+    for cy in 0..ch {
+        let src_row = &src[cy * src_stride..][..cw];
+        for dy in 0..CHROMA_UPSAMPLE_FACTOR {
+            let out_row_base = (cy * CHROMA_UPSAMPLE_FACTOR + dy) * dst_stride;
+            let dst_row = &mut dst[out_row_base..][..up_w];
+            for (cx, &s) in src_row.iter().enumerate() {
+                let block = &mut dst_row[cx * CHROMA_UPSAMPLE_FACTOR..][..CHROMA_UPSAMPLE_FACTOR];
+                block.fill(s);
+            }
+        }
+    }
+
+    Ok(up_w * up_h)
 }
 
 #[cfg(test)]
@@ -1043,6 +1226,219 @@ mod tests {
         ];
         for e in errs {
             assert!(e.to_string().contains("spec/07"), "{e}");
+        }
+    }
+
+    // ---- §5.5 chroma upsampling --------------------------------------
+
+    #[test]
+    fn upsample_factor_is_four() {
+        // §5.5: each chroma sample replicates to a 4×4 block.
+        assert_eq!(CHROMA_UPSAMPLE_FACTOR, 4);
+    }
+
+    #[test]
+    fn single_sample_fills_4x4_block() {
+        // §5.5: one (V, U) sample contributes to 16 adjacent pixels.
+        let src = [0x42u8];
+        let mut dst = [0u8; 16];
+        let written = upsample_chroma_4x4(&src, 1, 1, 1, &mut dst, 4).unwrap();
+        assert_eq!(written, 16);
+        assert!(dst.iter().all(|&b| b == 0x42), "{dst:?}");
+    }
+
+    #[test]
+    fn two_by_two_chroma_box_replicates_each_quadrant() {
+        // §5.5: integer-divide output indices by 4 to pick the chroma
+        // source. A 2×2 chroma plane upsamples to an 8×8 raster of
+        // four 4×4 quadrants.
+        let src = [
+            0x10, 0x20, // chroma row 0
+            0x30, 0x40, // chroma row 1
+        ];
+        let up_w = 8usize;
+        let mut dst = vec![0u8; up_w * 8];
+        let written = upsample_chroma_4x4(&src, 2, 2, 2, &mut dst, up_w).unwrap();
+        assert_eq!(written, 64);
+        for oy in 0..8 {
+            for ox in 0..8 {
+                let expected = src[(oy / 4) * 2 + (ox / 4)];
+                assert_eq!(dst[oy * up_w + ox], expected, "({oy},{ox})");
+            }
+        }
+    }
+
+    #[test]
+    fn source_stride_padding_is_skipped() {
+        // The source may carry stride padding (e.g. an assembled plane
+        // with a wider row stride than its visible width). Padding
+        // bytes past `chroma_width` must not leak into the output.
+        let cw = 2usize;
+        let src_stride = 5usize; // 3 padding bytes per row
+        let src = [
+            0x01, 0x02, 0xff, 0xff, 0xff, // row 0 (+ padding)
+            0x03, 0x04, 0xff, 0xff, 0xff, // row 1 (+ padding)
+        ];
+        let up_w = cw * 4;
+        let mut dst = vec![0u8; up_w * 8];
+        upsample_chroma_4x4(&src, cw as u32, 2, src_stride, &mut dst, up_w).unwrap();
+        // No 0xff (padding) byte may appear in the upsampled plane.
+        assert!(!dst.contains(&0xff), "padding leaked: {dst:?}");
+        // Top-left quadrant is all 0x01, top-right all 0x02.
+        assert_eq!(dst[0], 0x01);
+        assert_eq!(dst[4], 0x02);
+    }
+
+    #[test]
+    fn dst_stride_padding_left_untouched() {
+        // Output bytes outside the upsampled raster (stride slack) are
+        // not overwritten.
+        let src = [0x55u8];
+        let dst_stride = 7usize; // upsampled width is 4; 3 bytes slack
+        let mut dst = vec![0xaau8; dst_stride * 4];
+        upsample_chroma_4x4(&src, 1, 1, 1, &mut dst, dst_stride).unwrap();
+        for row in 0..4 {
+            for col in 0..dst_stride {
+                let v = dst[row * dst_stride + col];
+                if col < 4 {
+                    assert_eq!(v, 0x55, "raster ({row},{col})");
+                } else {
+                    assert_eq!(v, 0xaa, "slack ({row},{col}) overwritten");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zero_dimensions_write_nothing() {
+        let mut dst = [0xaau8; 4];
+        assert_eq!(upsample_chroma_4x4(&[], 0, 0, 0, &mut dst, 0), Ok(0));
+        assert_eq!(upsample_chroma_4x4(&[], 0, 4, 0, &mut dst, 0), Ok(0));
+        assert_eq!(upsample_chroma_4x4(&[], 4, 0, 4, &mut dst, 16), Ok(0));
+        assert!(dst.iter().all(|&b| b == 0xaa));
+    }
+
+    #[test]
+    fn copies_source_verbatim_no_upshift() {
+        // §5.5 / §5.4: the source already carries the 8-bit-range
+        // value; the box upsampler does no further upshift. An odd
+        // byte (bit 0 set) survives unchanged — proof there is no
+        // `shl byte, 1`.
+        let src = [0x7fu8];
+        let mut dst = [0u8; 16];
+        upsample_chroma_4x4(&src, 1, 1, 1, &mut dst, 4).unwrap();
+        assert!(dst.iter().all(|&b| b == 0x7f), "{dst:?}");
+    }
+
+    #[test]
+    fn feeds_assemble_plane_if09_output() {
+        // End-to-end: assemble a chroma plane via the IF09 path, then
+        // box-upsample it. The assembled (upshifted) chroma plane
+        // becomes the upsampler's source.
+        let geom = StripGeometry::for_chroma(2, 2);
+        // One strip, 2 wide, 2 tall; 7-bit internal values.
+        let mut strip = vec![0u8; FRAME_OUTPUT_SRC_ROW_STRIDE * 2];
+        strip[0] = 0x08;
+        strip[1] = 0x10;
+        strip[FRAME_OUTPUT_SRC_ROW_STRIDE] = 0x18;
+        strip[FRAME_OUTPUT_SRC_ROW_STRIDE + 1] = 0x20;
+        let mut chroma = vec![0u8; 4];
+        assemble_plane_if09(&geom, &[&strip], &mut chroma, 2).unwrap();
+        // The assembled plane is the upshifted (×2) chroma.
+        assert_eq!(chroma, vec![0x10, 0x20, 0x30, 0x40]);
+
+        let mut up = vec![0u8; 8 * 8];
+        let written = upsample_chroma_4x4(&chroma, 2, 2, 2, &mut up, 8).unwrap();
+        assert_eq!(written, 64);
+        // Top-left 4×4 quadrant carries the upshifted 0x08 → 0x10.
+        for oy in 0..4 {
+            for ox in 0..4 {
+                assert_eq!(up[oy * 8 + ox], 0x10);
+            }
+        }
+        // Bottom-right quadrant carries 0x20 → 0x40.
+        for oy in 4..8 {
+            for ox in 4..8 {
+                assert_eq!(up[oy * 8 + ox], 0x40);
+            }
+        }
+    }
+
+    #[test]
+    fn src_stride_too_narrow_rejected() {
+        let mut dst = vec![0u8; 16];
+        assert_eq!(
+            upsample_chroma_4x4(&[0u8; 4], 4, 1, 3, &mut dst, 16),
+            Err(ChromaUpsampleError::SrcStrideTooNarrow {
+                chroma_width: 4,
+                src_stride: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn src_buffer_too_short_rejected() {
+        let mut dst = vec![0u8; 4 * 16];
+        // 2×2 chroma at stride 2 needs (2-1)*2 + 2 = 4 bytes.
+        assert_eq!(
+            upsample_chroma_4x4(&[0u8; 3], 2, 2, 2, &mut dst, 8),
+            Err(ChromaUpsampleError::SrcBufferTooShort {
+                required: 4,
+                supplied: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn dst_stride_too_narrow_rejected() {
+        let mut dst = vec![0u8; 64];
+        // chroma_width 2 → upsampled width 8; a stride of 7 is too
+        // narrow.
+        assert_eq!(
+            upsample_chroma_4x4(&[0u8; 4], 2, 2, 2, &mut dst, 7),
+            Err(ChromaUpsampleError::DstStrideTooNarrow {
+                upsampled_width: 8,
+                dst_stride: 7,
+            })
+        );
+    }
+
+    #[test]
+    fn dst_buffer_too_short_rejected() {
+        // 1×1 chroma → 4×4 upsampled; with stride 4 the plane needs
+        // (4-1)*4 + 4 = 16 bytes.
+        let mut dst = vec![0u8; 15];
+        assert_eq!(
+            upsample_chroma_4x4(&[0x01u8], 1, 1, 1, &mut dst, 4),
+            Err(ChromaUpsampleError::DstBufferTooShort {
+                required: 16,
+                supplied: 15,
+            })
+        );
+    }
+
+    #[test]
+    fn chroma_upsample_error_display_cites_spec() {
+        let errs: [ChromaUpsampleError; 4] = [
+            ChromaUpsampleError::SrcStrideTooNarrow {
+                chroma_width: 4,
+                src_stride: 3,
+            },
+            ChromaUpsampleError::SrcBufferTooShort {
+                required: 4,
+                supplied: 3,
+            },
+            ChromaUpsampleError::DstStrideTooNarrow {
+                upsampled_width: 8,
+                dst_stride: 7,
+            },
+            ChromaUpsampleError::DstBufferTooShort {
+                required: 16,
+                supplied: 15,
+            },
+        ];
+        for e in errs {
+            assert!(e.to_string().contains("spec/07 §5.5"), "{e}");
         }
     }
 }

@@ -231,10 +231,13 @@
 //! §5.6 step 2 Y → V → U output plane order (the reverse of the
 //! §5.2 decode order); [`IF09_FOURCC`] / [`IF09_FOURCC_CASE_RVA`] /
 //! [`IF09_PASSTHROUGH_RVA`] pin the §5.3 / §5.6 IF09 dispatch
-//! surface; and [`assemble_plane_if09`] executes the §5.7
+//! surface; [`assemble_plane_if09`] executes the §5.7
 //! strip-to-frame assembly — walking a plane's strips left to
 //! right, upshifting each visible row out of its 0xb0-stride strip
-//! pixel buffer into the caller's full-width output raster. A later
+//! pixel buffer into the caller's full-width output raster; and
+//! [`upsample_chroma_4x4`] runs the §5.5 4:1:0 → output box-filter
+//! chroma upsampler — replicating each chroma sample into a 4×4
+//! output block ([`CHROMA_UPSAMPLE_FACTOR`]). A later
 //! round adds the spec/05 §5.1 / §5.2 / §7.2 + spec/03 §5.5
 //! buffer-mutating MC executor ([`mc_exec`]):
 //! [`boundary_fixup_dst_cell_offset`] runs the §7.2 `[esp+0x34]`
@@ -331,10 +334,11 @@ pub use frame_exit::{
     PLANE_ITERATION_ORDER,
 };
 pub use frame_output::{
-    assemble_plane_if09, select_output_conversion, strip_min_buffer_bytes, upshift_7bit_to_8bit,
-    OutputConversion, OutputDispatchError, PlaneAssembleError, BI_BITFIELDS, BI_RGB,
-    FRAME_OUTPUT_SRC_ROW_STRIDE, IF09_FOURCC, IF09_FOURCC_CASE_RVA, IF09_PASSTHROUGH_RVA,
-    OUTPUT_PLANE_ORDER, OUTPUT_UPSHIFT_BITS, RGB24_STRIDE_FIXUP_BIT_COUNT,
+    assemble_plane_if09, select_output_conversion, strip_min_buffer_bytes, upsample_chroma_4x4,
+    upshift_7bit_to_8bit, ChromaUpsampleError, OutputConversion, OutputDispatchError,
+    PlaneAssembleError, BI_BITFIELDS, BI_RGB, CHROMA_UPSAMPLE_FACTOR, FRAME_OUTPUT_SRC_ROW_STRIDE,
+    IF09_FOURCC, IF09_FOURCC_CASE_RVA, IF09_PASSTHROUGH_RVA, OUTPUT_PLANE_ORDER,
+    OUTPUT_UPSHIFT_BITS, RGB24_STRIDE_FIXUP_BIT_COUNT,
 };
 pub use header::{
     alt_quant_indices, BitstreamHeader, FrameFlags, FrameHeader, FrameHeaderPreamble, HeaderError,
