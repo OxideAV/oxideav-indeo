@@ -38,7 +38,13 @@ real bitstream end to end. What is implemented and unit-tested:
   `BI_BITFIELDS`) and output `biBitCount`, resolving to one of seven
   conversion variants with its entry RVA (the RGB variants' §5.4
   LUT-driven bodies remain deferred; only the IF09 passthrough is
-  landed).
+  landed), and the spec/07 §6 frame-finalisation state updates — the
+  saved `frame_flags` slot (`+0x434`) whose bit-9 drives the next
+  frame's reference-bank ping-pong, the saved `frame_number` slot
+  (`+0x474`) and the next-frame continuity classifier
+  (`incoming == saved + 1` → sequential, else seek), the four
+  `sub_4190` return dispositions (`0` / `-100` / `1` / per-plane
+  fault), and the §6.4 "no explicit buffer rotation" invariant.
 
 Each stage operates on caller-supplied inputs (cells, deltas, pixel
 buffers) and stops at its documented chapter boundary; they are not yet
@@ -70,6 +76,10 @@ the round-0 scaffold pending docs work.
 - `indeo3::upsample_chroma_4x4` — §5.5 4:1:0 → output box-filter chroma
   upsampler (replicate each chroma sample into a 4×4 output block;
   `CHROMA_UPSAMPLE_FACTOR`).
+- `indeo3::FrameFinalisation::finalise` — spec/07 §6 per-frame state
+  updates: `SavedFrameFlags` / `SavedFrameNumber` (the `+0x434` /
+  `+0x474` slots), `FrameContinuity::classify` (next-frame continuity),
+  and `DecodeReturn` (the four `sub_4190` return codes).
 - `alt_quant_indices(byte) -> (primary, secondary)` — §3.9.
 - Header constants: `MAGIC_FRMH`, `REQUIRED_DEC_VERSION`,
   `FRAME_HEADER_LEN`, `BITSTREAM_HEADER_LEN`, `COMBINED_HEADER_LEN`,

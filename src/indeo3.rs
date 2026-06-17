@@ -272,6 +272,7 @@ mod cell_null;
 mod cell_subarray;
 mod entropy;
 mod frame_exit;
+mod frame_finalise;
 mod frame_output;
 mod header;
 mod macroblock;
@@ -332,6 +333,13 @@ pub use frame_exit::{
     FRAME_OUTPUT_RECONSTRUCTION_RVA, PER_PLANE_DECODE_ARG_COUNT, PER_PLANE_DECODE_CALL_SITE_RVA,
     PER_PLANE_DECODE_ENTRY_RVA, PER_PLANE_DECODE_RET_CLEANUP_BYTES, PER_PLANE_DECODE_RET_RVA,
     PLANE_ITERATION_ORDER,
+};
+pub use frame_finalise::{
+    DecodeReturn, FrameContinuity, FrameFinalisation, SavedFrameFlags, SavedFrameNumber,
+    BUFFER_SELECTOR_MASK, FRAME_NUMBER_CONTINUITY_CHECK_RVA, FRAME_NUMBER_SEEK_PATH_RVA,
+    PERFORMS_BUFFER_ROTATION, RETURN_INPUT_ERROR, RETURN_REPEAT_PREVIOUS, RETURN_SUCCESS,
+    SAVED_FRAME_FLAGS_SLOT_OFFSET, SAVED_FRAME_FLAGS_STORE_RVA, SAVED_FRAME_NUMBER_SLOT_OFFSET,
+    SAVED_FRAME_NUMBER_STORE_RVA,
 };
 pub use frame_output::{
     assemble_plane_if09, select_output_conversion, strip_min_buffer_bytes, upsample_chroma_4x4,

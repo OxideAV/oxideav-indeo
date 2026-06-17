@@ -8,6 +8,29 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/07 §6 frame finalisation — `indeo3::frame_finalise`
+  lands the per-frame state-update slice `sub_4190` runs after the §5
+  output stage and before its `ret`. `SavedFrameFlags` (§6.1) models the
+  16-bit `[outer_instance + 0x434]` slot and its
+  `next_frame_read_bank` returns the `Bank` the *next* frame reads from,
+  driven by *this* frame's bit-9 `BUFFER_SELECTOR` value (the
+  encoder-driven ping-pong, reusing `Bank::from_buffer_selector`).
+  `SavedFrameNumber` (§6.2) models the `[outer_instance + 0x474]` slot
+  and `FrameContinuity::classify` reproduces the next-frame continuity
+  check (`if [eax + 0x474] != ecx`): incoming `== saved + 1` →
+  `Sequential`, else `Discontinuous` (the seek path re-validating the
+  INTRA requirement), with wrapping `u32` arithmetic. `DecodeReturn`
+  (§6.3) enumerates the four `sub_4190` return dispositions (success `0`,
+  input error `-100` / `0xffffff9c`, repeat-previous `1`, per-plane fault
+  passthrough) with `code()` yielding the exact `i32` the VfW dispatcher
+  sees. `PERFORMS_BUFFER_ROTATION` (`= false`, §6.4) records that the
+  decoder performs no explicit buffer rotation. `FrameFinalisation`
+  bundles the §6.1 / §6.2 / §6.3 outputs so a caller finalises a frame in
+  one step and carries the saved-slot pair to the next frame. 15 unit
+  tests cover the slot offsets / RVAs, the bit-9 → bank fold, the
+  sequential / gap / repeat / reverse / wrap continuity cases, the four
+  return codes, fault-return slot capture, and an end-to-end
+  finalise → next-frame continuity + bank chain.
 - Indeo 3 (IV31 / IV32) spec/07 §5.5 4:1:0 → output chroma box-upsampler
   — `indeo3::frame_output` gains `upsample_chroma_4x4`, the
   `CHROMA_UPSAMPLE_FACTOR` (`4`) ratio constant, and the
