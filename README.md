@@ -55,6 +55,12 @@ wired together into a full decode loop.
 - The VQ codebook-bank per-entry values (the `+0x000` / `+0x100` /
   `+0x200` / `+0x300` / `+0x700` banks the cell unpackers index into) —
   pending an extraction round.
+- The §5.1 **high-half**-stream cell-state dispatch tables
+  (`0x1003f44c` / `0x1003fd4c` / `0x1003fd50`) sourced from seed offset
+  `+0x100`: only the single in-bounds pair is determinable from the
+  258-byte `0x1003ed4c` extract (audit/00 §2.2), so the per-record
+  layout for `ecx > 0` needs a wider extract. The low-half tables
+  (`0x1003f24c` / `0x1003f94c` / `0x1003f950`) are now materialised.
 - The §7.3 "first bit `1`" VQ-data-without-index unpacker dispatch.
 - The §5.4 YUV→RGB output LUT contents.
 - A staged `IV31` / `IV32` bitstream fixture to drive the full pipeline.
@@ -80,6 +86,13 @@ the round-0 scaffold pending docs work.
   updates: `SavedFrameFlags` / `SavedFrameNumber` (the `+0x434` /
   `+0x474` slots), `FrameContinuity::classify` (next-frame continuity),
   and `DecodeReturn` (the four `sub_4190` return codes).
+- `indeo3::SeedDispatchTables` — spec/04 §5.1 codec-init cell-state
+  dispatch tables, rebuilt from the 258-byte `.data + 0x1003ed4c`
+  seed (the tables are zero on disk per audit/00 §3.1 and must be
+  materialised at init): `build()` + `table_f24c()` (the `0x1003f24c`
+  4-byte-stride table) + `table_f94c()` (the `0x1003f94c` / `0x1003f950`
+  8-byte-stride table) for the low-half seed stream, plus
+  `high_half_pair0()` for the single in-bounds high-half pair.
 - `alt_quant_indices(byte) -> (primary, secondary)` — §3.9.
 - Header constants: `MAGIC_FRMH`, `REQUIRED_DEC_VERSION`,
   `FRAME_HEADER_LEN`, `BITSTREAM_HEADER_LEN`, `COMBINED_HEADER_LEN`,

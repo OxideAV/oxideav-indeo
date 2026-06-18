@@ -8,6 +8,25 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) spec/04 §5.1 cell-state dispatch-table
+  materialisation — `indeo3::SeedDispatchTables` reproduces the codec-init
+  static-table init function (entered at `IR32_32.DLL!0x100060de`) that
+  builds the cell-state dispatch tables from the 258-byte seed at
+  `.data + 0x1003ed4c`. Audit/00 §3.1 confirmed the six destination tables
+  (`0x1003f24c` / `0x1003f44c` / `0x1003f950` / `0x1003f94c` / `0x1003fd50`
+  / `0x1003fd4c`) are zero on disk and must be rebuilt at init, and §4
+  established that `DllMain` runs Path 1 (`0x10006262`) — the path spec/04
+  §5.1 quotes (`eax = (al << 8) + bl`, then `eax <<= 9`). `build()`
+  materialises the three **low-half**-stream tables fully determined by the
+  vendored seed: `table_f24c()` (the `0x1003f24c` 4-byte-stride table, one
+  packed DWORD per record) and `table_f94c()` (the `0x1003f94c` / `0x1003f950`
+  8-byte-stride table, each record `[packed, packed]` since both `+0x0`/`+0x4`
+  halves receive the same DWORD). The three **high-half**-stream tables
+  source from seed offset `+0x100`; audit/00 §2.2 notes the 258-byte extract
+  covers only the single in-bounds pair, surfaced by `high_half_pair0()`,
+  with the remaining records deferred as a DOCS-GAP. `SEED_DISPATCH_RECORDS`
+  (= 128) names the per-table record count. 4 unit tests cover the f24c
+  packing, the f94c dual-half identity, and the high-half pair-0 pack.
 - Indeo 3 (IV31 / IV32) spec/07 §6 frame finalisation — `indeo3::frame_finalise`
   lands the per-frame state-update slice `sub_4190` runs after the §5
   output stage and before its `ret`. `SavedFrameFlags` (§6.1) models the

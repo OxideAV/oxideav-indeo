@@ -22,7 +22,17 @@
 //! * §5.1 — the static codebook seed table at `.data + 0x1003ed4c`
 //!   (258 B, 129 byte-pairs) and the codec-init routine at
 //!   `IR32_32.DLL!0x10006262` that packs each pair into a
-//!   512-scaled DWORD ([`seed_dispatch_entries`]).
+//!   512-scaled DWORD ([`seed_dispatch_entries`]), plus the
+//!   materialisation of the codec-init-built cell-state dispatch
+//!   tables ([`SeedDispatchTables`]) that the spec/04 §5.1 init
+//!   function writes from that seed. Audit/00 §4 established that
+//!   `DllMain` runs Path 1 (`0x10006262`), so this reproduces the
+//!   actually-executed packing for the three **low-half**-stream
+//!   tables (`0x1003f24c`, `0x1003f94c`, `0x1003f950`). The three
+//!   **high-half**-stream tables (`0x1003f44c`, `0x1003fd4c`,
+//!   `0x1003fd50`) source from seed offset `+0x100`; only the single
+//!   in-bounds pair is determinable from the 258-byte extract
+//!   (audit/00 §2.2) — the rest is a deferred DOCS-GAP.
 //! * §1.2 / §6 — the per-frame VQ arena layout
 //!   (`*(inner_instance + 0x3004) + 0x800..+0x8800`, 16 bands ×
 //!   2 KB) and the `alt_quant[]` band-selection overlay at
@@ -352,6 +362,123 @@ pub fn seed_dispatch_entries() -> Vec<SeedEntry> {
         out.push(SeedEntry { lo, hi, packed });
     }
     out
+}
+
+/// Spec/04 §5.1 — number of dispatch records the codec-init routine
+/// writes into each cell-state dispatch table (128, one per seed
+/// pair; `ecx` decrements `0x7f → 0`).
+pub const SEED_DISPATCH_RECORDS: usize = SEED_PAIR_COUNT;
+
+/// Spec/04 §5.1 — the codec-init-built cell-state dispatch tables
+/// rooted at `.data + 0x1003f24c` and its siblings.
+///
+/// Audit/00 §3.1 confirmed the six destination tables
+/// (`0x1003f24c`, `0x1003f44c`, `0x1003f950`, `0x1003f94c`,
+/// `0x1003fd50`, `0x1003fd4c`) are **zero on disk** and are built at
+/// codec-init time by the static-table init function entered at
+/// `IR32_32.DLL!0x100060de`. Audit/00 §4 further established that
+/// `DllMain` calls that function once with `arg = 1`, so the
+/// **actually-executed** population is Path 1 at
+/// `IR32_32.DLL!0x10006262` — the path spec/04 §5.1 quotes
+/// (`eax = (al << 8) + bl`, then `eax <<= 9`, the same packing
+/// [`seed_dispatch_entries`] performs).
+///
+/// A clean-room decoder cannot load these tables as static numeric
+/// blobs (they are zero on disk); it must reproduce the init
+/// function's arithmetic. This type does that for the three
+/// destination tables whose source is the **low-half** seed stream
+/// (`0x1003ed4c(,ecx,2)` / `0x1003ed4d(,ecx,2)`), which is fully
+/// determined by the vendored 258-byte seed:
+///
+/// * [`Self::table_f24c`] — `0x1003f24c`, 4-byte stride, one packed
+///   DWORD per record (spec/04 §5.1 row 1).
+/// * [`Self::table_f94c`] — `0x1003f94c` / `0x1003f950`, the 8-byte-
+///   stride table whose two halves are written by the `0x1003f94c`
+///   (`+0x0`) and `0x1003f950` (`+0x4`) stores. Both halves receive
+///   the **same** packed DWORD (spec/04 §5.1 rows 2 + 3), so each
+///   8-byte record is `[packed, packed]`.
+///
+/// The three **high-half**-stream tables (`0x1003f44c`,
+/// `0x1003fd50`, `0x1003fd4c`; spec/04 §5.1 rows 4–6) are sourced
+/// from `0x1003ee4c(,ecx,2)` = seed offset `+0x100`. Audit/00 §2.2
+/// flags that the 258-byte extract only covers offsets `0x100..0x101`
+/// (one in-bounds pair), so the high-half stream's record layout for
+/// `ecx > 0` falls outside the extracted bytes and is left deferred
+/// (see [`Self::high_half_pair0`] for the single in-bounds pair and
+/// the module / report DOCS-GAP note).
+#[derive(Clone)]
+pub struct SeedDispatchTables {
+    /// `0x1003f24c` — 128 packed DWORDs (4-byte stride).
+    f24c: Box<[i32; SEED_DISPATCH_RECORDS]>,
+    /// `0x1003f94c` / `0x1003f950` — 128 8-byte records, each
+    /// `[packed_lo, packed_hi]` where both equal the seed pair's
+    /// packed DWORD.
+    f94c: Box<[[i32; 2]; SEED_DISPATCH_RECORDS]>,
+}
+
+impl core::fmt::Debug for SeedDispatchTables {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SeedDispatchTables")
+            .field("records", &SEED_DISPATCH_RECORDS)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for SeedDispatchTables {
+    fn default() -> Self {
+        Self::build()
+    }
+}
+
+impl SeedDispatchTables {
+    /// Spec/04 §5.1 — reproduce the codec-init Path-1 population of
+    /// the low-half-stream cell-state dispatch tables from the
+    /// vendored seed.
+    pub fn build() -> Self {
+        let entries = seed_dispatch_entries();
+        let mut f24c = Box::new([0i32; SEED_DISPATCH_RECORDS]);
+        let mut f94c = Box::new([[0i32; 2]; SEED_DISPATCH_RECORDS]);
+        for (i, e) in entries.iter().enumerate() {
+            // `0x1003f24c(,ecx,4) = packed` (4-byte stride; spec row 1).
+            f24c[i] = e.packed;
+            // `0x1003f950(,ecx,8) = packed` (`+0x4` half) and
+            // `0x1003f94c(,ecx,8) = packed` (`+0x0` half) — both
+            // halves of the 8-byte record get the same DWORD (spec
+            // rows 2 + 3).
+            f94c[i] = [e.packed, e.packed];
+        }
+        SeedDispatchTables { f24c, f94c }
+    }
+
+    /// Spec/04 §5.1 row 1 — the `0x1003f24c` 4-byte-stride dispatch
+    /// table (128 packed DWORDs in `ecx` order).
+    pub fn table_f24c(&self) -> &[i32; SEED_DISPATCH_RECORDS] {
+        &self.f24c
+    }
+
+    /// Spec/04 §5.1 rows 2 + 3 — the `0x1003f94c` / `0x1003f950`
+    /// 8-byte-stride dispatch table (128 records of `[+0x0, +0x4]`,
+    /// both halves equal to the record's packed DWORD).
+    pub fn table_f94c(&self) -> &[[i32; 2]; SEED_DISPATCH_RECORDS] {
+        &self.f94c
+    }
+
+    /// Spec/04 §5.1 rows 4–6 — the single in-bounds high-half seed
+    /// pair (`0x1003ee4c` / `0x1003ee4d` = seed offset `0x100` /
+    /// `0x101`), packed by the same `((lo << 8) + hi) << 9` formula.
+    ///
+    /// Returns `None` when the vendored seed is shorter than
+    /// `0x102` bytes. The high-half stream's records for `ecx > 0`
+    /// would read past the 258-byte extract (audit/00 §2.2), so only
+    /// pair 0 is determinable; the rest is a deferred DOCS-GAP (see
+    /// the module docs).
+    pub fn high_half_pair0() -> Option<SeedEntry> {
+        let raw = parse_hex_bytes(SEED_TABLE_HEX);
+        let lo = *raw.get(0x100)? as i8;
+        let hi = *raw.get(0x101)? as i8;
+        let packed = (((lo as i32) << 8) + (hi as i32)) << 9;
+        Some(SeedEntry { lo, hi, packed })
+    }
 }
 
 /// Spec/04 §1.2 / §6 — the per-frame VQ codebook arena
@@ -721,6 +848,51 @@ mod tests {
         // Second pair: 19 81 → lo 25, hi 0x81 = -127.
         assert_eq!(entries[1].lo, 25);
         assert_eq!(entries[1].hi, -127);
+    }
+
+    #[test]
+    fn seed_dispatch_tables_f24c_mirrors_packed_entries() {
+        // Spec/04 §5.1 row 1: the 0x1003f24c 4-byte-stride table holds
+        // one packed DWORD per seed pair, in ecx order.
+        let tables = SeedDispatchTables::build();
+        let entries = seed_dispatch_entries();
+        assert_eq!(tables.table_f24c().len(), SEED_DISPATCH_RECORDS);
+        assert_eq!(SEED_DISPATCH_RECORDS, 128);
+        for (i, e) in entries.iter().enumerate() {
+            assert_eq!(tables.table_f24c()[i], e.packed);
+        }
+        // First record matches the known first pair (19 80).
+        assert_eq!(tables.table_f24c()[0], 3_211_264);
+    }
+
+    #[test]
+    fn seed_dispatch_table_f94c_both_halves_equal_packed() {
+        // Spec/04 §5.1 rows 2 + 3: the 8-byte-stride table's +0x0 and
+        // +0x4 halves both receive the same packed DWORD.
+        let tables = SeedDispatchTables::build();
+        let entries = seed_dispatch_entries();
+        assert_eq!(tables.table_f94c().len(), SEED_DISPATCH_RECORDS);
+        for (i, e) in entries.iter().enumerate() {
+            let rec = tables.table_f94c()[i];
+            assert_eq!(rec[0], e.packed, "0x1003f94c half (+0x0)");
+            assert_eq!(rec[1], e.packed, "0x1003f950 half (+0x4)");
+        }
+    }
+
+    #[test]
+    fn seed_dispatch_high_half_pair0_packs_offset_0x100() {
+        // Spec/04 §5.1 rows 4–6 / audit/00 §2.2: only the single
+        // in-bounds high-half pair (seed offset 0x100 / 0x101) is
+        // determinable. Pair 128 of the seed is (154, 52) = signed
+        // (-102, +52) per audit/00 §2.2.
+        let raw = parse_hex_bytes(SEED_TABLE_HEX);
+        assert_eq!(raw[0x100], 154);
+        assert_eq!(raw[0x101], 52);
+        let pair = SeedDispatchTables::high_half_pair0().expect("seed has 0x102 bytes");
+        assert_eq!(pair.lo, -102);
+        assert_eq!(pair.hi, 52);
+        // packed = ((-102 << 8) + 52) << 9.
+        assert_eq!(pair.packed, (((-102i32) << 8) + 52) << 9);
     }
 
     #[test]
