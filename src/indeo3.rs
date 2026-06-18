@@ -271,6 +271,7 @@ mod cell_loop;
 mod cell_null;
 mod cell_subarray;
 mod entropy;
+mod frame;
 mod frame_exit;
 mod frame_finalise;
 mod frame_output;
@@ -327,6 +328,10 @@ pub use entropy::{
     CONTINUATION_XOR, LITERAL_MODE_MAX, MAX_ROW_LOOKAHEAD_OFFSET, PRIMARY_TABLE_DISP,
     RLE_ESCAPE_MIN, SECONDARY_TABLE_DISP, VARIANT_A_ENTRY, VARIANT_B_ENTRY, VARIANT_C_ENTRY,
     VARIANT_D_ENTRY,
+};
+pub use frame::{
+    decode_frame, decode_frame_with_selector, DecodedFrame, DecodedPlane, FrameDecodeError,
+    PlaneCellStats, ReconstructionStatus, FRAME_PLANE_DECODE_ORDER,
 };
 pub use frame_exit::{
     FrameExitDisposition, FramePlaneStatusFold, FRAME_FAULT_RETURN_RVA,

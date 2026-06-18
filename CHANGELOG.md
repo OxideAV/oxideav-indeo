@@ -8,6 +8,31 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) end-to-end structural frame-decode driver —
+  `indeo3::decode_frame` / `decode_frame_with_selector` thread the
+  previously-disconnected per-stage primitives into one pass over a
+  whole codec frame: spec/01 `FrameHeader::parse` → spec/02
+  `PictureLayer::parse` → spec/02 §4/§5/§6 `plane_decode_plan` →
+  spec/03 `decode_plane_tree`, walked in spec/02 §8 decode order
+  (`FRAME_PLANE_DECODE_ORDER` = U, V, Y) with a `const _` cross-check
+  against `PLANE_IDX_*`. The result is a typed `DecodedFrame`
+  (`header` / `picture` / `planes` / `reconstruction_status`) whose
+  per-present-plane `DecodedPlane` bundles the `PlaneDecodePlan`,
+  the spec/03 `CellTree`, and a `PlaneCellStats` per-class summary
+  (top-level INTRA / INTER counts plus the nested VQ_DATA / VQ_NULL
+  sub-cell counts). NULL frames (`data_size == 0x80`,
+  `ReconstructionStatus::NullFrame`) short-circuit with no planes;
+  non-NULL frames carry every present plane to
+  `ReconstructionStatus::StructureComplete`. `FrameDecodeError`
+  wraps the per-stage header / picture-layer / per-plane-tree
+  errors with the offending `plane_idx`. The driver stops at the
+  spec/04 §3.2 cell-state-dispatch boundary: pixel synthesis is
+  gated on the codebook-bank per-entry values (`bank[+0x000]` /
+  `[+0x200]` / `[+0x300]` / `[+0x700]` LUTs), an Extractor docs-gap
+  per spec/04 §7.1 / audit/00 §3–§4. 5 unit tests cover the
+  NULL-frame short-circuit, all-skipped-planes, the U/V/Y decode
+  order, a single-INTRA-plane walk to structure-complete, and the
+  bit-9 buffer-selector read.
 - Indeo 3 (IV31 / IV32) spec/04 §5.1 cell-state dispatch-table
   materialisation — `indeo3::SeedDispatchTables` reproduces the codec-init
   static-table init function (entered at `IR32_32.DLL!0x100060de`) that
