@@ -8,6 +8,15 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) end-to-end integration tests
+  (`tests/end_to_end_structure.rs`) — drive the public
+  `decode_frame` → `allocate_strip_buffers` → `assemble_output` chain
+  on synthetic frames exactly as a downstream consumer would, covering
+  the NULL-frame no-plane path, a single INTRA luma plane threading to
+  structure-complete + zeroed-strip assembly, and a malformed-header
+  typed error. The README Status section is rewritten to describe the
+  now-wired pipeline and pin the single remaining pixel-output blocker
+  (the spec/04 §7.1 codebook-bank values).
 - Indeo 3 (IV31 / IV32) output-plane assembly driver —
   `indeo3::assemble_output` / `allocate_strip_buffers` /
   `plane_strip_buffer_lengths` wire the spec/07 §5.7 strip-to-frame

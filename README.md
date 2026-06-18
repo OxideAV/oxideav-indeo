@@ -8,8 +8,40 @@ from clean-room specification and behavioural-trace documents under
 ## Status
 
 This crate is a **clean-room scaffold in progress**, focused on Indeo 3
-(`IV31` / `IV32`). It does **not** yet produce decoded pixels from a
-real bitstream end to end. What is implemented and unit-tested:
+(`IV31` / `IV32`). The structural decode layers are now wired into a
+single end-to-end driver — `indeo3::decode_frame` threads the spec/01
+header, the spec/02 picture layer + per-plane decode plan, and the
+spec/03 binary-tree cell walk into one pass, producing a typed
+`DecodedFrame` (per-plane geometry + `CellTree` + per-class cell
+statistics) for every present plane in spec/02 §8 decode order. The
+spec/07 output stage is wired on top via `indeo3::assemble_output`,
+which runs the §5.7 strip-to-frame assembly (7-bit → 8-bit upshift,
+edge-marker clear, tight repacking) over per-plane strip pixel buffers
+into `OutputFrame` rasters.
+
+The crate does **not** yet produce decoded **pixels** from a real
+bitstream: the per-cell reconstruction that fills the strip pixel
+buffers (spec/04 §3.2 cell-state dispatch → §3.3 codebook-bank lookup)
+needs the **codebook-bank per-entry values** (`bank[+0x000]` /
+`[+0x200]` / `[+0x300]` / `[+0x700]` LUTs), which are an Extractor
+docs-gap per `spec/04 §7.1` (audit-corrected against
+`audit/00-report.md §3`/§4): those tables are zero on disk and built at
+codec-init by `IR32_32.DLL!0x100060de`, with the exact per-entry recipe
+for several of them still undetermined. The end-to-end driver therefore
+stops at that boundary, reporting `ReconstructionStatus::StructureComplete`
+once every present plane's cell tree is resolved.
+
+What is implemented and unit-tested:
+
+- **End-to-end structural driver** — `indeo3::decode_frame` /
+  `decode_frame_with_selector` (spec/01 → spec/02 → spec/03), producing
+  a `DecodedFrame` with per-present-plane `DecodedPlane` (decode plan,
+  cell tree, `PlaneCellStats`); NULL-frame short-circuit; spec/02 §8
+  (U, V, Y) decode order.
+- **Output-plane assembly** — `indeo3::assemble_output` /
+  `allocate_strip_buffers` / `plane_strip_buffer_lengths` (spec/07 §5.6
+  / §5.7), producing `OutputFrame` / `OutputPlane` rasters from
+  per-plane strip pixel buffers.
 
 - **Frame + bitstream header** (`spec/01`) — the 64-byte combined header
   parse via `indeo3::FrameHeader::parse`.
@@ -46,15 +78,23 @@ real bitstream end to end. What is implemented and unit-tested:
   `sub_4190` return dispositions (`0` / `-100` / `1` / per-plane
   fault), and the §6.4 "no explicit buffer rotation" invariant.
 
-Each stage operates on caller-supplied inputs (cells, deltas, pixel
-buffers) and stops at its documented chapter boundary; they are not yet
-wired together into a full decode loop.
+The spec/01 → spec/02 → spec/03 layers are now wired into one
+`decode_frame` pass (and the spec/07 output stage onto it via
+`assemble_output`); the spec/04 / spec/05 per-cell reconstruction
+primitives still operate on caller-supplied inputs (cells, deltas,
+pixel buffers) and stop at their documented chapter boundary, because
+the cell-state dispatch they need is gated on the codebook-bank values
+below.
 
 ### Remaining gaps to a real-bitstream decode
 
 - The VQ codebook-bank per-entry values (the `+0x000` / `+0x100` /
   `+0x200` / `+0x300` / `+0x700` banks the cell unpackers index into) —
-  pending an extraction round.
+  pending an extraction round. **This is the single blocker for
+  pixel output**: the end-to-end `decode_frame` driver resolves every
+  present plane's cell tree but cannot synthesise pixels without these
+  LUTs, and they are zero on disk (built at codec-init by
+  `IR32_32.DLL!0x100060de`).
 - The §5.1 **high-half**-stream cell-state dispatch tables
   (`0x1003f44c` / `0x1003fd4c` / `0x1003fd50`) sourced from seed offset
   `+0x100`: only the single in-bounds pair is determinable from the
@@ -71,6 +111,14 @@ the round-0 scaffold pending docs work.
 
 ## Selected public API
 
+- `indeo3::decode_frame` / `decode_frame_with_selector` — end-to-end
+  structural frame decode (spec/01 → spec/02 → spec/03) → `DecodedFrame`
+  (`planes: Vec<DecodedPlane>`, `reconstruction_status`); walks planes
+  in spec/02 §8 (U, V, Y) order, NULL-frame short-circuit.
+- `indeo3::assemble_output` / `allocate_strip_buffers` /
+  `plane_strip_buffer_lengths` — spec/07 §5.6 / §5.7 output-plane
+  assembly over per-plane strip pixel buffers → `OutputFrame` /
+  `OutputPlane`.
 - `indeo3::FrameHeader::parse` — 64-byte combined header (`spec/01`).
 - `indeo3::PictureLayer::parse` — per-plane prelude (`spec/02`).
 - `indeo3::PictureLayer::plane_byte_map` / `plane_decode_plan` — typed
