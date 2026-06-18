@@ -272,6 +272,7 @@ mod cell_null;
 mod cell_subarray;
 mod entropy;
 mod frame;
+mod frame_assemble;
 mod frame_exit;
 mod frame_finalise;
 mod frame_output;
@@ -332,6 +333,10 @@ pub use entropy::{
 pub use frame::{
     decode_frame, decode_frame_with_selector, DecodedFrame, DecodedPlane, FrameDecodeError,
     PlaneCellStats, ReconstructionStatus, FRAME_PLANE_DECODE_ORDER,
+};
+pub use frame_assemble::{
+    allocate_strip_buffers, assemble_output, plane_strip_buffer_lengths, AssembleError,
+    OutputFrame, OutputPlane, OUTPUT_ASSEMBLE_ORDER,
 };
 pub use frame_exit::{
     FrameExitDisposition, FramePlaneStatusFold, FRAME_FAULT_RETURN_RVA,

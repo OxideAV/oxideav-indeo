@@ -8,6 +8,26 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) output-plane assembly driver —
+  `indeo3::assemble_output` / `allocate_strip_buffers` /
+  `plane_strip_buffer_lengths` wire the spec/07 §5.7 strip-to-frame
+  assembly onto the `DecodedFrame` from `decode_frame`. Given the
+  per-plane strip pixel buffers (the surface per-cell reconstruction
+  fills, gated on the spec/04 §7.1 codebook-bank docs-gap),
+  `assemble_output` runs `assemble_plane_if09` for every present
+  plane in spec/07 §5.6 output order (`OUTPUT_ASSEMBLE_ORDER` =
+  Y, V, U) — upshifting each strip's 7-bit pixels to 8 bits (clearing
+  the §4.4 edge-marker bit) and packing them into a tightly-strided
+  `OutputPlane` raster, bundled as an `OutputFrame` with `plane()` /
+  `luma()` / per-`OutputPlane` `row()` accessors. `allocate_strip_buffers`
+  produces correctly-sized zeroed strip sets for a frame (one buffer
+  per strip per present plane), so the output path is exercised
+  end-to-end against the driver's real geometry; `AssembleError`
+  reports strip-count mismatch and per-plane assembly failures with
+  the offending `plane_idx`. 5 unit tests cover the strip-length
+  geometry, the Y/V/U order, an allocate-then-assemble zeroed round
+  trip, the strip-count-mismatch rejection, and a non-zero strip's
+  one-bit upshift (`0x09` → `0x12`).
 - Indeo 3 (IV31 / IV32) end-to-end structural frame-decode driver —
   `indeo3::decode_frame` / `decode_frame_with_selector` thread the
   previously-disconnected per-stage primitives into one pass over a
