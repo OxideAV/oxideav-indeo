@@ -77,6 +77,24 @@ What is implemented and unit-tested:
   (`incoming == saved + 1` → sequential, else seek), the four
   `sub_4190` return dispositions (`0` / `-100` / `1` / per-plane
   fault), and the §6.4 "no explicit buffer rotation" invariant.
+- **Static-dyad row-band-advance handler** (`spec/07` §3.1 / §3.2) —
+  `indeo3::apply_row_band_seed` / `DyadDeltaTable::row_band_delta`
+  realise the high-nibble-0 cell-unpacker handler at
+  `IR32_32.DLL!0x10006c14`, the one per-cell path that reads the
+  (fully-extracted) static dyad table at `.data + 0x1003d088` directly:
+  it resolves the §3.1 index `(high_nibble << 9) + row*4 + col`, reads
+  the signed delta byte, and writes it into the predictor slot
+  `[edi - 0xb0]` (with the `0x80` sign-bias re-applied) to seed the next
+  row's prediction.
+- **Per-frame codebook seed-area parser** (`spec/04` §5.2) —
+  `indeo3::CodebookSeedArea` vendors the static seed table at
+  `.data + 0x1004d26a` and walks its §5.2 variable-length block
+  structure (count `N` + `N` signed byte-pairs, `0`-count terminator),
+  surfacing each `SeedBlock` and the §5.2 step-3a `(b<<8)|a`-with-`0x80`-
+  bias `<<16` packing (`SeedPair::primary_dword`). This is the producer
+  side of the §6 `alt_quant[]` overlay; the final materialised seed
+  window it would feed is blocked on the §5.2 / audit/00 §2.3 block-format
+  contradiction (see gaps below).
 
 The spec/01 → spec/02 → spec/03 layers are now wired into one
 `decode_frame` pass (and the spec/07 output stage onto it via
@@ -95,6 +113,20 @@ below.
   present plane's cell tree but cannot synthesise pixels without these
   LUTs, and they are zero on disk (built at codec-init by
   `IR32_32.DLL!0x100060de`).
+- The **per-frame VQ arena values** — the §6 `alt_quant[]` overlay is
+  implemented (`VqArena::apply_alt_quant`) and its raw seed source is
+  now parsed (`CodebookSeedArea`, §5.2), but the §5.2 codec-init walk
+  that materialises the overlay's `static_seed` window is blocked by a
+  **spec-vs-audit contradiction** on the `.data + 0x1004d26a` block
+  format: `spec/04 §5.2` reads it as count-prefixed blocks (leading
+  `0xc3` ⇒ a 391-byte first block), while `audit/00 §2.3 / §6.5` walks
+  the same bytes as zero-gap-delimited records (record 1 = 92 B at
+  offset 3) and states the leading `0xc3` is **not** a length prefix.
+  The two readings are mutually incompatible, so the per-band →
+  arena-offset assignment is undetermined. Resolving this needs a
+  Specifier/Auditor pass reconciling §5.2 with the audit's empirical
+  record structure (and ideally a wider extract past the 4 KB window,
+  audit/00 §6.2).
 - The §5.1 **high-half**-stream cell-state dispatch tables
   (`0x1003f44c` / `0x1003fd4c` / `0x1003fd50`) sourced from seed offset
   `+0x100`: only the single in-bounds pair is determinable from the
