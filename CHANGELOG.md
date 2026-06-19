@@ -8,6 +8,17 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) static-dyad-table row-band-advance handler
+  (`indeo3::apply_row_band_seed` / `DyadDeltaTable::row_band_delta` /
+  `row_band_column`, spec/07 §3.1 / §3.2) — the high-nibble-0 handler
+  at `IR32_32.DLL!0x10006c14`, the one cell-unpacker path that reads
+  the (fully-extracted) static dyad table at `.data + 0x1003d088`
+  rather than the per-frame arena. Resolves the spec/07 §3.1 index
+  `(high_nibble << 9) + row_position*4 + column_offset` and writes the
+  signed delta byte (with the `0x80` sign-bias re-applied for the
+  7-bit-per-byte range) into the predictor slot `[edi - 0xb0]` to seed
+  the next row's prediction. 4 new unit tests. This is real pixel-path
+  progress that is NOT gated on the per-frame-arena DOCS-GAP.
 - Indeo 3 (IV31 / IV32) per-frame codebook seed-area parser
   (`indeo3::CodebookSeedArea`, spec/04 §5.2) — the producer side of
   the spec/04 §6 `alt_quant[]` overlay's `static_seed` input. Vendors

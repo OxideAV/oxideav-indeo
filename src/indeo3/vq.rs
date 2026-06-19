@@ -223,7 +223,108 @@ impl DyadDeltaTable {
         }
         Some((high_nibble as usize) * DYAD_BANK_STRIDE)
     }
+
+    /// Spec/07 §3.1 — the static-table index for the high-nibble-0
+    /// row-band-advance handler (`IR32_32.DLL!0x10006c14`):
+    /// `table_index = (high_nibble << 9) + row_position * 4 +
+    /// column_offset`.
+    ///
+    /// Each high nibble selects a 512-byte sub-table; within it the row
+    /// position × 4 plus the column offset selects one delta byte. The
+    /// within-bank column is therefore `row_position * 4 +
+    /// column_offset`; [`Self::delta`] applies the bank-15 row
+    /// restriction. Returns `None` when the within-bank column would
+    /// exceed the 512-byte bank stride.
+    pub fn row_band_column(row_position: usize, column_offset: usize) -> Option<usize> {
+        let col = row_position.checked_mul(4)?.checked_add(column_offset)?;
+        if col >= DYAD_BANK_STRIDE {
+            return None;
+        }
+        Some(col)
+    }
+
+    /// Spec/07 §3.1 / §3.2 — look up the signed delta byte for the
+    /// high-nibble-0 row-band-advance handler.
+    ///
+    /// `high_nibble` selects the 512-byte sub-table; `row_position` and
+    /// `column_offset` form the within-bank column per
+    /// [`Self::row_band_column`]. The returned byte is a **signed
+    /// delta** (spec/07 §3.2 — the codec-init `xor ah, -0x80` bias
+    /// applies). Returns `None` when the index is out of range (or in
+    /// bank 15's unpopulated rows, per [`Self::delta`]).
+    pub fn row_band_delta(
+        &self,
+        high_nibble: u8,
+        row_position: usize,
+        column_offset: usize,
+    ) -> Option<i8> {
+        let col = Self::row_band_column(row_position, column_offset)?;
+        self.delta(high_nibble, col).map(|b| b as i8)
+    }
 }
+
+/// Spec/07 §3.2 — the result of the high-nibble-0 row-band-advance
+/// handler (`IR32_32.DLL!0x10006c14..0x10006c34`).
+///
+/// Unlike a normal cell-data write, this handler writes a single signed
+/// delta byte into the **predictor slot** at `[edi - 0xb0]` (the
+/// row-above byte that seeds the next row's prediction), rather than
+/// emitting a 2-pixel dyad at the current write position. The byte is
+/// the static-table delta read from `.data + 0x1003d088`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowBandSeed {
+    /// The signed delta byte read from the static dyad table.
+    pub delta: i8,
+    /// The byte index of the predictor slot the handler writes
+    /// (`write_index - 0xb0`).
+    pub predictor_slot: usize,
+}
+
+/// Spec/07 §3.1 / §3.2 — apply the high-nibble-0 row-band-advance
+/// handler to a strip pixel buffer.
+///
+/// The handler reads a signed delta byte from the static dyad table at
+/// `(high_nibble << 9) + row_position*4 + column_offset` (spec/07 §3.1)
+/// and writes it into the predictor slot one row above the current
+/// write position (`[edi - 0xb0]`, spec/07 §3.2), seeding the next
+/// row's prediction. The stored byte is the delta with its `0x80`
+/// sign-bias re-applied for the 7-bit-per-byte pixel range (the value
+/// the buffer holds is the `xor`-biased unsigned form; spec/07 §3.2 /
+/// §4).
+///
+/// Returns the [`RowBandSeed`] (delta + slot) on success, or `None`
+/// when the table index is out of range or the predictor slot falls
+/// above the strip (write within the first `0xb0`-byte row — there is
+/// no row above to seed; spec/07 §1.3).
+pub fn apply_row_band_seed(
+    table: &DyadDeltaTable,
+    strip: &mut [u8],
+    write_index: usize,
+    high_nibble: u8,
+    row_position: usize,
+    column_offset: usize,
+) -> Option<RowBandSeed> {
+    let delta = table.row_band_delta(high_nibble, row_position, column_offset)?;
+    // `[edi - 0xb0]` — the predictor slot one row above (spec/07 §3.2).
+    // The first row of a strip has no row above (spec/07 §1.3).
+    let predictor_slot = write_index.checked_sub(super::PREDICTOR_ROW_STRIDE)?;
+    if predictor_slot >= strip.len() {
+        return None;
+    }
+    // The buffer stores the `0x80`-biased unsigned form (spec/07 §3.2 /
+    // §4 — bit 7 of every pixel byte is the edge marker; the signed
+    // delta is biased onto the unsigned storage range).
+    strip[predictor_slot] = (delta as u8) ^ SEED_SIGN_BIAS_BYTE;
+    Some(RowBandSeed {
+        delta,
+        predictor_slot,
+    })
+}
+
+/// Spec/07 §3.2 / §4 — the `0x80` sign-bias re-applied when a signed
+/// dyad delta is stored into the 7-bit-per-byte strip buffer (`xor ah,
+/// -0x80` at `IR32_32.DLL!0x10006345`).
+const SEED_SIGN_BIAS_BYTE: u8 = 0x80;
 
 /// Spec/04 §2.1 — one of the four cell-unpacker variants selected by
 /// the packed codebook DWORD's two mode bits.
@@ -1052,5 +1153,59 @@ mod tests {
         assert_eq!(nibble_split(0xab), (0xa, 0xb));
         assert_eq!(nibble_split(0xf0), (0xf, 0));
         assert_eq!(nibble_split(0x0f), (0, 0xf));
+    }
+
+    #[test]
+    fn row_band_column_packs_row_times_4_plus_col() {
+        // Spec/07 §3.1: within-bank column = row_position*4 + column.
+        assert_eq!(DyadDeltaTable::row_band_column(0, 0), Some(0));
+        assert_eq!(DyadDeltaTable::row_band_column(0, 3), Some(3));
+        assert_eq!(DyadDeltaTable::row_band_column(1, 0), Some(4));
+        assert_eq!(DyadDeltaTable::row_band_column(2, 1), Some(9));
+        // Last in-bank column (row 127, col 3 = 511).
+        assert_eq!(DyadDeltaTable::row_band_column(127, 3), Some(511));
+        // One past the bank stride is rejected.
+        assert_eq!(DyadDeltaTable::row_band_column(128, 0), None);
+    }
+
+    #[test]
+    fn row_band_delta_reads_signed_static_table_byte() {
+        let t = DyadDeltaTable::load();
+        // Bank 0 row 0 col 0 = first table byte (0x00) as signed.
+        assert_eq!(t.row_band_delta(0, 0, 0), Some(0));
+        // Bank 0 row 0 col 1 = table[1] = 0x02.
+        assert_eq!(t.row_band_delta(0, 0, 1), Some(2));
+        // Bank 1 row 0 col 0 = table[512].
+        assert_eq!(t.row_band_delta(1, 0, 0), Some(t.as_bytes()[512] as i8));
+        // Out-of-bank high nibble rejected.
+        assert_eq!(t.row_band_delta(16, 0, 0), None);
+        // Bank 15 beyond the populated rows rejected (row 65+).
+        assert_eq!(t.row_band_delta(15, DYAD_BANK15_VALID_ROWS, 0), None);
+    }
+
+    #[test]
+    fn apply_row_band_seed_writes_biased_byte_into_predictor_slot() {
+        let t = DyadDeltaTable::load();
+        // Strip large enough for a write index two rows in.
+        let mut strip = vec![0u8; 4 * super::super::PREDICTOR_ROW_STRIDE];
+        let write_index = 2 * super::super::PREDICTOR_ROW_STRIDE + 5;
+        // Bank 0 row 0 col 1 → delta 0x02 (signed +2).
+        let seed = apply_row_band_seed(&t, &mut strip, write_index, 0, 0, 1).unwrap();
+        assert_eq!(seed.delta, 2);
+        assert_eq!(
+            seed.predictor_slot,
+            write_index - super::super::PREDICTOR_ROW_STRIDE
+        );
+        // The stored byte is the 0x80-biased form (spec/07 §3.2 / §4):
+        // (2 as u8) ^ 0x80 = 0x82.
+        assert_eq!(strip[seed.predictor_slot], 0x82);
+    }
+
+    #[test]
+    fn apply_row_band_seed_rejects_top_of_strip_write() {
+        let t = DyadDeltaTable::load();
+        let mut strip = vec![0u8; 4 * super::super::PREDICTOR_ROW_STRIDE];
+        // Write within the first row has no row above → None (§1.3).
+        assert!(apply_row_band_seed(&t, &mut strip, 5, 0, 0, 0).is_none());
     }
 }

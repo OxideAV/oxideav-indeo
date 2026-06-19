@@ -451,9 +451,9 @@ pub use strip_edge::{
     STRIP_EDGE_ROW_STRIDE,
 };
 pub use vq::{
-    seed_dispatch_entries, CellVariant, CodebookEntry, DyadDeltaTable, SeedDispatchTables,
-    SeedEntry, VqArena, VqError, VqNullRuntime, ARENA_BANDS_OFFSET, ARENA_BAND_COUNT,
-    ARENA_BAND_LEN, ARENA_HALF_LEN, ARENA_LEN, DYAD_BANK15_VALID_ROWS, DYAD_BANK_COUNT,
-    DYAD_BANK_STRIDE, DYAD_TABLE_LEN, PRIMARY_STRIDE, SECONDARY_STRIDE, SEED_DISPATCH_RECORDS,
-    SEED_PAIR_COUNT, SEED_TABLE_LEN,
+    apply_row_band_seed, seed_dispatch_entries, CellVariant, CodebookEntry, DyadDeltaTable,
+    RowBandSeed, SeedDispatchTables, SeedEntry, VqArena, VqError, VqNullRuntime,
+    ARENA_BANDS_OFFSET, ARENA_BAND_COUNT, ARENA_BAND_LEN, ARENA_HALF_LEN, ARENA_LEN,
+    DYAD_BANK15_VALID_ROWS, DYAD_BANK_COUNT, DYAD_BANK_STRIDE, DYAD_TABLE_LEN, PRIMARY_STRIDE,
+    SECONDARY_STRIDE, SEED_DISPATCH_RECORDS, SEED_PAIR_COUNT, SEED_TABLE_LEN,
 };
