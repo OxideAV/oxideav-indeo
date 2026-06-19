@@ -270,6 +270,7 @@ mod cell_geometry;
 mod cell_loop;
 mod cell_null;
 mod cell_subarray;
+mod codebook_seed;
 mod entropy;
 mod frame;
 mod frame_assemble;
@@ -321,6 +322,10 @@ pub use cell_subarray::{
     CELL_STACK_BEGIN_OFFSET, CELL_STACK_ENTRY_SIZE, CELL_STACK_MAX_ENTRIES,
     PER_CELL_EDGE_HEIGHT_STEP, PER_CELL_EDGE_PREV_BR_NEXT_OFFSET, PER_CELL_EDGE_PREV_BR_OFFSET,
     PER_CELL_EDGE_ROW_STRIDE,
+};
+pub use codebook_seed::{
+    CodebookSeedArea, SeedBlock, SeedPair, BLOCK_DEST_ADVANCE, BLOCK_TERMINATOR, SEED_AREA_VMA,
+    SEED_SIGN_BIAS,
 };
 pub use entropy::{
     apply_continuation_xor, continuation_needed, fb_category, fb_category_table, variant_entry_rva,

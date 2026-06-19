@@ -8,6 +8,21 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) per-frame codebook seed-area parser
+  (`indeo3::CodebookSeedArea`, spec/04 §5.2) — the producer side of
+  the spec/04 §6 `alt_quant[]` overlay's `static_seed` input. Vendors
+  the static seed table at `.data + 0x1004d26a`
+  (`tables/region_1004d26a.hex`, 4 KB window) into the crate and walks
+  its spec/04 §5.2 variable-length block structure (1-byte count `N` +
+  `N` signed byte-pairs, `0`-count terminator), surfacing each
+  `SeedBlock` and the spec/04 §5.2 step-3a packing formula
+  (`SeedPair::primary_dword`: `(b<<8)|a` with the `0x80` high-bit bias
+  and `<<16` word scale). The final materialised seed window the §6
+  overlay copies from is **not** produced: spec/04 §5.2 and audit/00
+  §2.3/§6.5 give mutually incompatible readings of the raw block format
+  (count-prefixed blocks vs zero-gap-delimited records), so the
+  per-band → arena-offset assignment is a reported DOCS-GAP. 8 new
+  unit tests.
 - Indeo 3 (IV31 / IV32) end-to-end integration tests
   (`tests/end_to_end_structure.rs`) — drive the public
   `decode_frame` → `allocate_strip_buffers` → `assemble_output` chain
