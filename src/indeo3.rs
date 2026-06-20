@@ -277,6 +277,7 @@ mod frame_assemble;
 mod frame_exit;
 mod frame_finalise;
 mod frame_output;
+mod frame_yuv;
 mod header;
 mod macroblock;
 mod mc_address;
@@ -363,6 +364,7 @@ pub use frame_output::{
     IF09_FOURCC, IF09_FOURCC_CASE_RVA, IF09_PASSTHROUGH_RVA, OUTPUT_PLANE_ORDER,
     OUTPUT_UPSHIFT_BITS, RGB24_STRIDE_FIXUP_BIT_COUNT,
 };
+pub use frame_yuv::{assemble_yuv, upsample_frame, YuvError, YuvFrame, YuvPlane};
 pub use header::{
     alt_quant_indices, BitstreamHeader, FrameFlags, FrameHeader, FrameHeaderPreamble, HeaderError,
     BITSTREAM_HEADER_LEN, COMBINED_HEADER_LEN, FLAG_YVU9_8BIT, FRAME_HEADER_LEN, MAGIC_FRMH,
