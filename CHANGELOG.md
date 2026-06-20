@@ -8,6 +8,22 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) full-resolution YUV frame producer
+  (`indeo3::assemble_yuv` / `upsample_frame` → `YuvFrame` / `YuvPlane`,
+  spec/07 §5.5 over §5.7). Wires the §5.5 box-filter chroma upsampler
+  onto the §5.7 strip-to-frame assembly: the Y plane is carried through
+  at full luma resolution and each present 4:1:0 V / U plane is
+  box-upsampled 4×4 (every chroma sample replicated into a 4×4 output
+  block, per §5.5's "plain box-filter … no interpolation") onto the
+  full luma resolution. The result is the exact three-plane,
+  luma-resolution surface the §5.4 YUV→RGB matrix consumes per pixel —
+  the §5.4-RGB-independent half of the output-conversion stage,
+  producible without the `0x1004cxxx` YUV→RGB LUTs (audit/00 §3.3:
+  zero-on-disk / runtime-built at an undetermined RVA — a docs-gap).
+  5 new unit tests + a new `tests/yuv_pipeline.rs` integration suite
+  (3 tests) driving `decode_frame` → `assemble_yuv` over caller-supplied
+  strip buffers and asserting the §4.3 upshift + §5.5 chroma
+  upsample-to-luma-resolution end-to-end.
 - Indeo 3 (IV31 / IV32) static-dyad-table row-band-advance handler
   (`indeo3::apply_row_band_seed` / `DyadDeltaTable::row_band_delta` /
   `row_band_column`, spec/07 §3.1 / §3.2) — the high-nibble-0 handler

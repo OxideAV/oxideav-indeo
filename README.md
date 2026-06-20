@@ -42,6 +42,15 @@ What is implemented and unit-tested:
   `allocate_strip_buffers` / `plane_strip_buffer_lengths` (spec/07 §5.6
   / §5.7), producing `OutputFrame` / `OutputPlane` rasters from
   per-plane strip pixel buffers.
+- **Full-resolution YUV frame** — `indeo3::assemble_yuv` /
+  `upsample_frame` (spec/07 §5.5 over §5.7), producing a `YuvFrame` /
+  `YuvPlane` whose three planes (Y, V, U) are all at full luma
+  resolution: the §5.5 box-filter upsamples each 4:1:0 chroma plane
+  4×4 onto the §5.7-assembled output. This is the §5.4-RGB-independent
+  half of the output-conversion stage — the exact luma-resolution
+  three-plane surface the §5.4 YUV→RGB matrix consumes per pixel,
+  producible without the (zero-on-disk / docs-gapped) `0x1004cxxx`
+  YUV→RGB LUTs.
 
 - **Frame + bitstream header** (`spec/01`) — the 64-byte combined header
   parse via `indeo3::FrameHeader::parse`.
@@ -151,6 +160,10 @@ the round-0 scaffold pending docs work.
   `plane_strip_buffer_lengths` — spec/07 §5.6 / §5.7 output-plane
   assembly over per-plane strip pixel buffers → `OutputFrame` /
   `OutputPlane`.
+- `indeo3::assemble_yuv` / `upsample_frame` — spec/07 §5.5 over §5.7:
+  full-resolution `YuvFrame` / `YuvPlane` (Y carried through, V / U
+  box-upsampled 4×4 to luma resolution). The §5.4-RGB-independent half
+  of the output-conversion stage.
 - `indeo3::FrameHeader::parse` — 64-byte combined header (`spec/01`).
 - `indeo3::PictureLayer::parse` — per-plane prelude (`spec/02`).
 - `indeo3::PictureLayer::plane_byte_map` / `plane_decode_plan` — typed
