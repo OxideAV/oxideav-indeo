@@ -8,6 +8,23 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) plane-level reconstruction-readiness classifier
+  (`indeo3::classify_cell_tree` / `classify_plane` → `PlaneReconstructPlan`
+  with `CellDisposition` / `CellPlanEntry` / `DispositionCounts`;
+  `drive_vq_null_copies` → `VqNullDriveStats` / `PlaneReconstructError`,
+  spec/03 §3 / §4 + spec/04 §3 / §4 + spec/05). Walks a `DecodedPlane`'s
+  cell tree and maps every reconstruction unit (each INTER leaf, each VQ
+  sub-cell of an INTRA leaf) to its disposition: VQ_NULL copy / skip
+  (table-free, reconstructable now), VQ_DATA (the spec/04 §7.1
+  codebook-bank docs-gap), or INTER (motion compensation, needs a
+  reference frame). The aggregate `DispositionCounts` reports per plane
+  how many units the unblocked subset covers (`unblocked()`) versus how
+  many wait on a docs-gap / reference frame (`deferred()`) — turning the
+  structural decode into a measured reconstruction roadmap. The
+  genuinely-unblocked half is also *executed*: `drive_vq_null_copies`
+  drives every VQ_NULL copy unit through `copy_upper_cell` over a strip
+  pixel buffer (spec/07 §1.4, literal upper-row copy, no table input),
+  producing real strip pixels. 5 new unit tests.
 - Indeo 3 (IV31 / IV32) static-table-only per-cell reconstruction
   executor (`indeo3::reconstruct_cell_static` → `CellOutcome` /
   `PositionEffect` / `CellReconstructGeometry` / `CellReconstructError`,

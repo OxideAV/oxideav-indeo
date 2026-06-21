@@ -74,6 +74,21 @@ What is implemented and unit-tested:
   that genuinely *produces strip-buffer pixels from a mode-byte stream*
   (for the static-table-only subset), as opposed to operating on
   caller-supplied deltas.
+- **Plane-level reconstruction-readiness classifier** —
+  `indeo3::classify_cell_tree` / `classify_plane` (`spec/03` §3 / §4 +
+  `spec/04` §3 / §4 + `spec/05`) walks a `DecodedPlane`'s cell tree and
+  maps every reconstruction unit (each INTER leaf, each VQ sub-cell of an
+  INTRA leaf) to a `CellDisposition`: VQ_NULL copy / skip (table-free,
+  reconstructable now), VQ_DATA (the `spec/04` §7.1 codebook-bank
+  docs-gap), or INTER (motion compensation, needs a reference frame). The
+  aggregate `DispositionCounts` reports per plane how many units the
+  unblocked subset covers (`unblocked()`) versus how many wait on a
+  docs-gap / reference frame (`deferred()`) — a measured reconstruction
+  roadmap over the structural decode. `drive_vq_null_copies` then
+  *executes* the genuinely-unblocked half: every VQ_NULL copy unit is
+  driven through `copy_upper_cell` over a strip pixel buffer (`spec/07`
+  §1.4 literal upper-row copy, no table input), producing real strip
+  pixels.
 - **Frame + bitstream header** (`spec/01`) — the 64-byte combined header
   parse via `indeo3::FrameHeader::parse`.
 - **Picture layer** (`spec/02`) — per-plane prelude parsing, plane
@@ -178,6 +193,11 @@ the round-0 scaffold pending docs work.
   structural frame decode (spec/01 → spec/02 → spec/03) → `DecodedFrame`
   (`planes: Vec<DecodedPlane>`, `reconstruction_status`); walks planes
   in spec/02 §8 (U, V, Y) order, NULL-frame short-circuit.
+- `indeo3::classify_cell_tree` / `classify_plane` — plane-level
+  reconstruction-readiness classifier (`spec/03` + `spec/04` §3 / §4) →
+  `PlaneReconstructPlan` (`entries: Vec<CellPlanEntry>` + `DispositionCounts`);
+  `drive_vq_null_copies` executes the VQ_NULL-copy subset over a strip
+  buffer → `VqNullDriveStats` / `PlaneReconstructError`.
 - `indeo3::reconstruct_cell_static` — static-table-only per-cell
   mode-byte executor (`spec/06` §3 / §4 + `spec/07` §1 / §3) → `CellOutcome`
   (`Complete` / `DeferredArena` / `Terminated`) over a strip pixel
