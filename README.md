@@ -52,6 +52,28 @@ What is implemented and unit-tested:
   producible without the (zero-on-disk / docs-gapped) `0x1004cxxx`
   YUV→RGB LUTs.
 
+- **Static-table-only per-cell reconstruction executor** —
+  `indeo3::reconstruct_cell_static` (`spec/06` §3 / §4 + `spec/07` §1 /
+  §3) is the crate's first **mode-byte stream consumer**: given a cell's
+  geometry and the byte slice the per-cell unpacker reads from `[ebp]`,
+  it walks the cell row by row, classifies each mode byte
+  (`ModeByte::classify`), and drives a strip pixel buffer through the
+  handlers that need **only on-disk tables** — the high-nibble-0
+  row-band-advance handler (`apply_row_band_seed` over the vendored
+  `.data + 0x1003d088` dyad table; `spec/07` §3.2), the RLE skip escapes
+  `0xFD` / `0xFE` / `0xFF` (`spec/06` §4.2), the `0xFB` counter-byte
+  terminator (§4.4), and the start-of-cell edge-mark family `0xF8` /
+  `0xF9` / `0xFA` / `0xFC`, with the §4.3 per-position acceptance matrix
+  enforced (mis-positioned escapes return `EscapeFault`, the binary's
+  error-code-1 return). A literal mode byte whose **high nibble is
+  non-zero** addresses the per-frame VQ codebook arena (the `spec/04`
+  §7.1 codebook-bank docs-gap): rather than guess, the walk stops and
+  returns `CellOutcome::DeferredArena` with the exact mode byte +
+  (row, dword) position — the cleanest boundary report for the next
+  Extractor round. This is the first piece of the reconstruction path
+  that genuinely *produces strip-buffer pixels from a mode-byte stream*
+  (for the static-table-only subset), as opposed to operating on
+  caller-supplied deltas.
 - **Frame + bitstream header** (`spec/01`) — the 64-byte combined header
   parse via `indeo3::FrameHeader::parse`.
 - **Picture layer** (`spec/02`) — per-plane prelude parsing, plane
@@ -156,6 +178,11 @@ the round-0 scaffold pending docs work.
   structural frame decode (spec/01 → spec/02 → spec/03) → `DecodedFrame`
   (`planes: Vec<DecodedPlane>`, `reconstruction_status`); walks planes
   in spec/02 §8 (U, V, Y) order, NULL-frame short-circuit.
+- `indeo3::reconstruct_cell_static` — static-table-only per-cell
+  mode-byte executor (`spec/06` §3 / §4 + `spec/07` §1 / §3) → `CellOutcome`
+  (`Complete` / `DeferredArena` / `Terminated`) over a strip pixel
+  buffer; `CellReconstructGeometry` / `PositionEffect` /
+  `CellReconstructError` complete the surface.
 - `indeo3::assemble_output` / `allocate_strip_buffers` /
   `plane_strip_buffer_lengths` — spec/07 §5.6 / §5.7 output-plane
   assembly over per-plane strip pixel buffers → `OutputFrame` /

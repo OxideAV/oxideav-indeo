@@ -269,6 +269,7 @@ mod cell_emit;
 mod cell_geometry;
 mod cell_loop;
 mod cell_null;
+mod cell_reconstruct;
 mod cell_subarray;
 mod codebook_seed;
 mod entropy;
@@ -317,6 +318,10 @@ pub use cell_null::{
     copy_upper_cell, mark_edge_cell, CopyUpperError, CopyUpperGeometry, CopyUpperStats,
     MarkEdgeError, MarkEdgeGeometry, MarkEdgeStats, VqNullSubCode, COPY_UPPER_COLUMN_GROUP_BYTES,
     COPY_UPPER_RAW_ROW_OFFSETS, COPY_UPPER_ROW_COUNT,
+};
+pub use cell_reconstruct::{
+    reconstruct_cell_static, CellOutcome, CellReconstructError, CellReconstructGeometry,
+    PositionEffect,
 };
 pub use cell_subarray::{
     cell_stack_array_offset, cell_stack_slot_offset, CellStackReadSite, CellStackTopDispatch,

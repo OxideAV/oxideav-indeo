@@ -8,6 +8,27 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) static-table-only per-cell reconstruction
+  executor (`indeo3::reconstruct_cell_static` → `CellOutcome` /
+  `PositionEffect` / `CellReconstructGeometry` / `CellReconstructError`,
+  spec/06 §3 / §4 + spec/07 §1 / §3). The first end-to-end *mode-byte
+  stream consumer*: given a cell's geometry and the byte slice the
+  per-cell unpacker reads from `[ebp]`, it walks the cell row by row,
+  classifies each mode byte (`ModeByte::classify`), and drives the strip
+  pixel buffer through the handlers that need only on-disk tables — the
+  high-nibble-0 row-band-advance handler (`apply_row_band_seed` over the
+  vendored `.data + 0x1003d088` dyad table; spec/07 §3.2), the RLE skip
+  escapes `0xFD` / `0xFE` / `0xFF` (row advances; spec/06 §4.2), `0xFB`
+  (counter-byte terminator; §4.4), and the start-of-cell edge-mark family
+  `0xF8` / `0xF9` / `0xFA` / `0xFC`. The §4.3 per-position acceptance
+  matrix is enforced (`RleEscape::accepted_at` → `CellReconstructError::
+  EscapeFault` = the binary's error-code-1 return). A literal mode byte
+  whose high nibble is non-zero addresses the per-frame VQ codebook arena
+  (the spec/04 §7.1 codebook-bank docs-gap — zero on disk, blocked on the
+  §5.2 / audit/00 §2.3 `0x1004d26a` block-format contradiction): rather
+  than guess, the walk stops and returns `CellOutcome::DeferredArena`
+  with the exact mode byte + (row, dword) position, the cleanest boundary
+  report for the next Extractor round. 10 new unit tests.
 - Indeo 3 (IV31 / IV32) full-resolution YUV frame producer
   (`indeo3::assemble_yuv` / `upsample_frame` → `YuvFrame` / `YuvPlane`,
   spec/07 §5.5 over §5.7). Wires the §5.5 box-filter chroma upsampler
