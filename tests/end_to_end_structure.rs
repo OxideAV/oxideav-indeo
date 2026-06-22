@@ -4,10 +4,13 @@
 //!
 //! These tests build minimal synthetic codec frames (header + picture
 //! layer + plane payload) and drive them through the public API. They
-//! deliberately stop at the structural boundary — pixel reconstruction
-//! is gated on the spec/04 §7.1 codebook-bank docs-gap — and confirm
-//! the driver threads cleanly, classifies plane presence correctly,
-//! and assembles output planes from caller-supplied strip buffers.
+//! confirm the driver threads cleanly, classifies plane presence
+//! correctly, and assembles output planes from caller-supplied strip
+//! buffers. One test also drives the unblocked reconstruction pipeline
+//! end-to-end (`decode_frame` → `reconstruct_frame` → `to_output_frame`),
+//! which materialises the VQ_NULL subset into real strip pixels and
+//! leaves the deferred VQ_DATA / INTER regions black (those wait on the
+//! spec/04 §7.1 codebook-bank docs-gap).
 
 use oxideav_indeo::indeo3;
 
@@ -116,6 +119,60 @@ fn single_luma_plane_threads_and_assembles() {
         assert_eq!(oy.width, y.plan.geometry.plane_width);
         assert_eq!(oy.height, y.plan.geometry.plane_height);
         assert!(oy.pixels.iter().all(|&b| b == 0));
+    }
+}
+
+#[test]
+fn reconstruct_frame_threads_through_to_output() {
+    // Drive the full unblocked reconstruction pipeline through the
+    // public API: decode_frame -> reconstruct_frame -> to_output_frame.
+    // A NULL frame reconstructs and assembles to nothing.
+    let null = build_frame(64, 64, NULL_FRAME_DATA_SIZE_BITS, 0, 0, 0, 0, &[]);
+    let null_frame = indeo3::decode_frame(&null).expect("null decodes");
+    let null_recon = indeo3::reconstruct_frame(&null_frame).expect("reconstruct");
+    assert!(null_recon.is_empty());
+    assert_eq!(null_recon.stats.total(), 0);
+    let null_out = null_recon.to_output_frame();
+    assert!(null_out.planes.is_empty());
+
+    // A single-luma-plane frame: whatever the synthetic payload decodes
+    // to, the reconstruction pass must thread cleanly and produce a
+    // correctly-shaped output frame. Reconstructed (VQ_NULL) regions
+    // carry their pixels; deferred (VQ_DATA / INTER) regions stay black.
+    let mut payload = vec![0u8; 4 + 48];
+    for (i, byte) in payload.iter_mut().enumerate().skip(4) {
+        *byte = (i % 5) as u8;
+    }
+    let y_off = (COMBINED_HEADER_LEN - FRAME_HEADER_LEN) as u32;
+    let buf = build_frame(
+        16,
+        16,
+        (payload.len() as u32) * 8,
+        0,
+        y_off,
+        0x8000_0000,
+        0x8000_0000,
+        &payload,
+    );
+    let frame = match indeo3::decode_frame(&buf) {
+        Ok(f) => f,
+        Err(indeo3::FrameDecodeError::PlaneTree { .. }) => return,
+        Err(e) => panic!("unexpected error: {e}"),
+    };
+    let recon = indeo3::reconstruct_frame(&frame).expect("reconstruct does not fail");
+    // Coverage is internally consistent.
+    assert_eq!(
+        recon.stats.reconstructed() + recon.stats.deferred(),
+        recon.stats.total()
+    );
+    let out = recon.to_output_frame();
+    // Every reconstructed plane has a matching, correctly-shaped output
+    // plane.
+    for plane in &recon.planes {
+        let op = out.plane(plane.plane_idx).expect("output plane");
+        assert_eq!(op.width, plane.plane_width);
+        assert_eq!(op.height, plane.plane_height);
+        assert_eq!(op.pixels.len(), (op.width * op.height) as usize);
     }
 }
 
