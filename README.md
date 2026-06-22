@@ -19,17 +19,25 @@ which runs the §5.7 strip-to-frame assembly (7-bit → 8-bit upshift,
 edge-marker clear, tight repacking) over per-plane strip pixel buffers
 into `OutputFrame` rasters.
 
-The crate does **not** yet produce decoded **pixels** from a real
-bitstream: the per-cell reconstruction that fills the strip pixel
-buffers (spec/04 §3.2 cell-state dispatch → §3.3 codebook-bank lookup)
-needs the **codebook-bank per-entry values** (`bank[+0x000]` /
-`[+0x200]` / `[+0x300]` / `[+0x700]` LUTs), which are an Extractor
+The **genuinely-unblocked subset** of reconstruction now runs whole-frame:
+`indeo3::reconstruct_frame` walks a `DecodedFrame`'s present planes,
+materialises every VQ_NULL unit (copy-upper + mark-edge, spec/07 §1.4 /
+§4.4) into a real strip pixel buffer, and surfaces the precise
+`(x, y, disposition)` frontier where the path first hits a gated unit;
+`ReconstructedFrame::to_output_frame` upshifts those strips into an
+`OutputFrame`. What that pass **cannot** yet synthesise is the **VQ_DATA**
+cells: their per-cell reconstruction (spec/04 §3.2 cell-state dispatch →
+§3.3 codebook-bank lookup) needs the **codebook-bank per-entry values**
+(`bank[+0x000]` / `[+0x200]` / `[+0x300]` / `[+0x700]` LUTs), an Extractor
 docs-gap per `spec/04 §7.1` (audit-corrected against
 `audit/00-report.md §3`/§4): those tables are zero on disk and built at
 codec-init by `IR32_32.DLL!0x100060de`, with the exact per-entry recipe
-for several of them still undetermined. The end-to-end driver therefore
-stops at that boundary, reporting `ReconstructionStatus::StructureComplete`
-once every present plane's cell tree is resolved.
+for several of them still undetermined. INTER cells additionally need a
+prior decoded reference frame. So for a real frame the output carries the
+VQ_NULL regions' pixels with the VQ_DATA / INTER regions left black until
+those gates clear; the structural driver still reports
+`ReconstructionStatus::StructureComplete` once every present plane's cell
+tree is resolved.
 
 What is implemented and unit-tested:
 
