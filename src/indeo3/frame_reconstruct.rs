@@ -46,7 +46,9 @@
 //! until the codebook-bank values land.
 
 use super::frame::DecodedFrame;
-use super::plane_execute::{exec_plane_plan, PlaneExecError, ReconstructedPlane};
+use super::frame_assemble::{OutputFrame, OutputPlane};
+use super::frame_output::upshift_7bit_to_8bit;
+use super::plane_execute::{exec_plane_plan, PlaneExecError, ReconstructedPlane, STRIP_ROW_STRIDE};
 use super::plane_reconstruct::classify_cell_tree;
 
 /// Frame-wide reconstruction coverage, folding every present plane's
@@ -116,6 +118,56 @@ impl ReconstructedFrame {
     /// whose planes were all skipped / absent).
     pub fn is_empty(&self) -> bool {
         self.planes.is_empty()
+    }
+
+    /// Spec/07 §4.3 / §5.6 — assemble this reconstructed frame's
+    /// plane-spanning strip buffers into an [`OutputFrame`] of
+    /// tightly-packed 8-bit output planes.
+    ///
+    /// Each [`ReconstructedPlane`]'s `0xb0`-stride strip buffer is walked
+    /// row by row; the `plane_width` visible bytes of each row are
+    /// upshifted ([`upshift_7bit_to_8bit`]: `(b & 0x7f) << 1`, clearing
+    /// the §4.4 edge-marker sentinel) into the output raster. Regions
+    /// that stayed zero (the deferred VQ_DATA / INTER units) upshift to
+    /// `0` — black — so the output frame is correctly shaped with the
+    /// unblocked subset's pixels in place and the deferred regions left
+    /// black until the codebook-bank values land.
+    ///
+    /// The output planes are in [`Self::planes`] order (U, V, Y as
+    /// decoded); callers wanting the §5.6 Y, V, U *output* order use
+    /// [`OutputFrame::plane`] by index.
+    pub fn to_output_frame(&self) -> OutputFrame {
+        let planes = self.planes.iter().map(upshift_plane).collect();
+        OutputFrame { planes }
+    }
+}
+
+/// Spec/07 §4.3 / §5.7 — upshift one reconstructed plane's strip buffer
+/// into a tightly-packed 8-bit [`OutputPlane`].
+///
+/// Walks `plane_height` rows of the `0xb0`-stride strip buffer, copying
+/// the `plane_width` visible bytes of each row through
+/// [`upshift_7bit_to_8bit`] into a `width × height` raster (stride ==
+/// width). A row whose visible span runs past the strip buffer (a
+/// degenerate / truncated buffer) is zero-padded rather than panicking.
+fn upshift_plane(plane: &ReconstructedPlane) -> OutputPlane {
+    let w = plane.plane_width as usize;
+    let h = plane.plane_height as usize;
+    let mut pixels = vec![0u8; w * h];
+    for y in 0..h {
+        let src_start = y * STRIP_ROW_STRIDE;
+        let dst_start = y * w;
+        for x in 0..w {
+            if let Some(&b) = plane.strip.get(src_start + x) {
+                pixels[dst_start + x] = upshift_7bit_to_8bit(b);
+            }
+        }
+    }
+    OutputPlane {
+        plane_idx: plane.plane_idx,
+        width: plane.plane_width,
+        height: plane.plane_height,
+        pixels,
     }
 }
 
@@ -304,6 +356,55 @@ mod tests {
                 assert_eq!(plane.frontier.is_some(), plane_deferred);
             }
         }
+    }
+
+    #[test]
+    fn to_output_frame_upshifts_strip_pixels() {
+        use crate::indeo3::plane_execute::{plane_strip_len, PlaneExecStats};
+        use crate::indeo3::reconstruct::EDGE_MARKER_BIT;
+        use crate::indeo3::ReconstructedPlane;
+        use crate::indeo3::PLANE_IDX_Y;
+
+        // Build a reconstructed plane by hand with a known strip pattern:
+        // row 0 holds 0x01, 0x02 with the edge marker set on the first
+        // (so the upshift must clear bit 7 → (0x81 & 0x7f) << 1 = 0x02,
+        // and 0x02 << 1 = 0x04).
+        let mut strip = vec![0u8; plane_strip_len(2)];
+        strip[0] = 0x01 | EDGE_MARKER_BIT;
+        strip[1] = 0x02;
+        // Row 1 (offset 0xb0) holds 0x10, 0x20.
+        strip[STRIP_ROW_STRIDE] = 0x10;
+        strip[STRIP_ROW_STRIDE + 1] = 0x20;
+        let plane = ReconstructedPlane {
+            plane_idx: PLANE_IDX_Y,
+            plane_width: 2,
+            plane_height: 2,
+            strip,
+            stats: PlaneExecStats::default(),
+            frontier: None,
+        };
+        let frame = ReconstructedFrame {
+            planes: vec![plane],
+            stats: FrameReconstructStats::default(),
+        };
+        let output = frame.to_output_frame();
+        let op = output.plane(PLANE_IDX_Y).expect("plane");
+        assert_eq!(op.width, 2);
+        assert_eq!(op.height, 2);
+        // Row 0: edge marker cleared then <<1: 0x02, 0x04.
+        assert_eq!(op.row(0), Some(&[0x02u8, 0x04][..]));
+        // Row 1: 0x10<<1=0x20, 0x20<<1=0x40.
+        assert_eq!(op.row(1), Some(&[0x20u8, 0x40][..]));
+    }
+
+    #[test]
+    fn to_output_frame_of_empty_is_empty() {
+        let frame = ReconstructedFrame {
+            planes: vec![],
+            stats: FrameReconstructStats::default(),
+        };
+        let output = frame.to_output_frame();
+        assert!(output.planes.is_empty());
     }
 
     #[test]

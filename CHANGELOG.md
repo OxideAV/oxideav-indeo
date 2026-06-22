@@ -22,7 +22,12 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   planes reconstruct in isolation. A NULL / fully-skipped frame
   reconstructs to an empty result. This turns the per-plane executor into
   a single whole-frame entry point drivable straight off `decode_frame`'s
-  output. 4 new unit tests.
+  output. `ReconstructedFrame::to_output_frame` then bridges the
+  reconstructed strips into an `OutputFrame` of tightly-packed 8-bit
+  planes via the spec/07 §4.3 upshift (`(b & 0x7f) << 1`, clearing the
+  §4.4 edge-marker sentinel) — closing the reconstruct → assemble loop
+  over the *actually-reconstructed* pixels (deferred regions stay black).
+  6 new unit tests.
 - Indeo 3 (IV31 / IV32) plane-level reconstruction executor
   (`indeo3::exec_plane_plan` → `ReconstructedPlane` with `PlaneExecStats`
   / `DeferredFrontier` / `PlaneExecError`; `plane_strip_len`,

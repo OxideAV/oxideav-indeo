@@ -113,7 +113,11 @@ What is implemented and unit-tested:
   `ReconstructedPlane` per present plane (its strip + frontier) — a
   single whole-frame entry point drivable straight off `decode_frame`'s
   output, with the codebook-bank / motion-compensation frontier surfaced
-  per plane.
+  per plane. `ReconstructedFrame::to_output_frame` bridges the
+  reconstructed strips into an `OutputFrame` of tightly-packed 8-bit
+  planes via the §4.3 upshift (`(b & 0x7f) << 1`), closing the
+  reconstruct → assemble loop over the actually-reconstructed pixels
+  (deferred VQ_DATA / INTER regions upshift to black).
 - **Frame + bitstream header** (`spec/01`) — the 64-byte combined header
   parse via `indeo3::FrameHeader::parse`.
 - **Picture layer** (`spec/02`) — per-plane prelude parsing, plane
