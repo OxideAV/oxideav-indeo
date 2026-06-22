@@ -8,6 +8,21 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) frame-level reconstruction pass
+  (`indeo3::reconstruct_frame` → `ReconstructedFrame` with
+  `FrameReconstructStats` / `FrameReconstructError`, spec/07 §1.5 / §5.2).
+  Threads the whole-plane executor (`exec_plane_plan`) across a
+  `DecodedFrame`'s present planes in decode order: classifies each
+  plane's cell tree, reconstructs its unblocked (VQ_NULL) subset into a
+  strip pixel buffer, and folds every plane's coverage into one
+  frame-wide `FrameReconstructStats` (`reconstructed()` / `deferred()` /
+  `bytes_written` / `is_fully_reconstructed()`). The result carries one
+  `ReconstructedPlane` per present plane (each with its mutated strip +
+  per-plane frontier), exploiting spec/07 §1.5 per-plane independence so
+  planes reconstruct in isolation. A NULL / fully-skipped frame
+  reconstructs to an empty result. This turns the per-plane executor into
+  a single whole-frame entry point drivable straight off `decode_frame`'s
+  output. 4 new unit tests.
 - Indeo 3 (IV31 / IV32) plane-level reconstruction executor
   (`indeo3::exec_plane_plan` → `ReconstructedPlane` with `PlaneExecStats`
   / `DeferredFrontier` / `PlaneExecError`; `plane_strip_len`,

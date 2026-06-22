@@ -278,6 +278,7 @@ mod frame_assemble;
 mod frame_exit;
 mod frame_finalise;
 mod frame_output;
+mod frame_reconstruct;
 mod frame_yuv;
 mod header;
 mod macroblock;
@@ -370,6 +371,9 @@ pub use frame_output::{
     PlaneAssembleError, BI_BITFIELDS, BI_RGB, CHROMA_UPSAMPLE_FACTOR, FRAME_OUTPUT_SRC_ROW_STRIDE,
     IF09_FOURCC, IF09_FOURCC_CASE_RVA, IF09_PASSTHROUGH_RVA, OUTPUT_PLANE_ORDER,
     OUTPUT_UPSHIFT_BITS, RGB24_STRIDE_FIXUP_BIT_COUNT,
+};
+pub use frame_reconstruct::{
+    reconstruct_frame, FrameReconstructError, FrameReconstructStats, ReconstructedFrame,
 };
 pub use frame_yuv::{assemble_yuv, upsample_frame, YuvError, YuvFrame, YuvPlane};
 pub use header::{

@@ -104,6 +104,16 @@ What is implemented and unit-tested:
   (`reconstructed()` / `deferred()` / `bytes_written` /
   `is_fully_reconstructed()`), turning the per-cell primitives into one
   whole-plane pixel-synthesis pass over the unblocked subset.
+- **Frame-level reconstruction pass** — `indeo3::reconstruct_frame`
+  (`spec/07` §1.5 / §5.2) threads `exec_plane_plan` across a
+  `DecodedFrame`'s present planes (in U, V, Y decode order, exploiting
+  the §1.5 per-plane independence), reconstructing each plane's unblocked
+  subset and folding every plane's coverage into one frame-wide
+  `FrameReconstructStats`. The returned `ReconstructedFrame` carries one
+  `ReconstructedPlane` per present plane (its strip + frontier) — a
+  single whole-frame entry point drivable straight off `decode_frame`'s
+  output, with the codebook-bank / motion-compensation frontier surfaced
+  per plane.
 - **Frame + bitstream header** (`spec/01`) — the 64-byte combined header
   parse via `indeo3::FrameHeader::parse`.
 - **Picture layer** (`spec/02`) — per-plane prelude parsing, plane
@@ -219,6 +229,11 @@ the round-0 scaffold pending docs work.
   `plane_strip_len` (`STRIP_ROW_STRIDE` = `0xb0`), drives both VQ_NULL
   arms (copy + skip) and surfaces the first VQ_DATA / INTER frontier.
   `PlaneExecError` completes the surface.
+- `indeo3::reconstruct_frame` — frame-level reconstruction pass
+  (`spec/07` §1.5 / §5.2) over a `DecodedFrame` → `ReconstructedFrame`
+  (`planes: Vec<ReconstructedPlane>` + `FrameReconstructStats`); runs
+  `exec_plane_plan` on every present plane and folds frame-wide coverage.
+  `FrameReconstructError` tags the failing plane.
 - `indeo3::reconstruct_cell_static` — static-table-only per-cell
   mode-byte executor (`spec/06` §3 / §4 + `spec/07` §1 / §3) → `CellOutcome`
   (`Complete` / `DeferredArena` / `Terminated`) over a strip pixel
