@@ -8,6 +8,26 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) plane-level reconstruction executor
+  (`indeo3::exec_plane_plan` → `ReconstructedPlane` with `PlaneExecStats`
+  / `DeferredFrontier` / `PlaneExecError`; `plane_strip_len`,
+  `STRIP_ROW_STRIDE`, spec/07 §1.4 / §4.4 / §5.1). Sizes a
+  plane-spanning strip pixel buffer (`plane_height` rows of `0xb0`
+  bytes, the spec/07 §1.3 zero-fill seed) from a `PlaneReconstructPlan`,
+  walks every reconstruction unit in plan order, and dispatches each to
+  its disposition's executor: VQ_NULL copy → `copy_upper_cell` (literal
+  upper-row copy, one four-row band at a time so an 8-row cell drives two
+  bands), VQ_NULL skip → `mark_edge_cell` (the §4.4 bit-7 edge-marker
+  write). VQ_DATA and INTER units are counted and the first one is
+  recorded as the `DeferredFrontier` (`(x, y, disposition, entry_index)`)
+  — the exact `(x, y)` where the unblocked path first stops on the
+  spec/04 §7.1 codebook-bank docs-gap / a missing reference frame. The
+  result carries the mutated strip plus a `PlaneExecStats` coverage
+  report (`reconstructed()` / `deferred()` / `bytes_written` /
+  `is_fully_reconstructed()`). This is the whole-plane successor to
+  `drive_vq_null_copies`: it now also drives the mark-edge skip cells,
+  owns the strip-buffer sizing, and surfaces the precise reconstruction
+  frontier instead of leaving it to the caller. 9 new unit tests.
 - Indeo 3 (IV31 / IV32) plane-level reconstruction-readiness classifier
   (`indeo3::classify_cell_tree` / `classify_plane` → `PlaneReconstructPlan`
   with `CellDisposition` / `CellPlanEntry` / `DispositionCounts`;

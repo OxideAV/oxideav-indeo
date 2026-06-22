@@ -292,6 +292,7 @@ mod mc_residual_boundary;
 mod mc_source_plumbing;
 mod mc_table;
 mod picture_layer;
+mod plane_execute;
 mod plane_reconstruct;
 mod reconstruct;
 mod strip_context;
@@ -435,6 +436,10 @@ pub use picture_layer::{
     MotionVector, PictureLayer, PictureLayerError, PlaneByteMap, PlaneDecodePlan, PlanePrelude,
     PlanePresence, MC_VECTOR_ENTRY_LEN, MIN_PRELUDE_LEN, NUM_VECTORS_FIELD_LEN, PLANE_COUNT,
     PLANE_IDX_U, PLANE_IDX_V, PLANE_IDX_Y,
+};
+pub use plane_execute::{
+    exec_plane_plan, plane_strip_len, DeferredFrontier, PlaneExecError, PlaneExecStats,
+    ReconstructedPlane, STRIP_ROW_STRIDE,
 };
 pub use plane_reconstruct::{
     classify_cell_tree, classify_plane, drive_vq_null_copies, CellDisposition, CellPlanEntry,

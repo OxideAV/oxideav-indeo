@@ -89,6 +89,21 @@ What is implemented and unit-tested:
   driven through `copy_upper_cell` over a strip pixel buffer (`spec/07`
   §1.4 literal upper-row copy, no table input), producing real strip
   pixels.
+- **Whole-plane reconstruction executor** — `indeo3::exec_plane_plan`
+  (`spec/07` §1.4 / §4.4 / §5.1) is the plane-spanning successor to
+  `drive_vq_null_copies`. It sizes a `plane_height × 0xb0` strip pixel
+  buffer (the §1.3 zero-fill seed) from a `PlaneReconstructPlan`, walks
+  every reconstruction unit in plan order, and drives both VQ_NULL arms:
+  copy → `copy_upper_cell`, skip → `mark_edge_cell` (the §4.4 bit-7
+  edge marker), each one four-row band at a time so an 8-row cell drives
+  two bands. VQ_DATA / INTER units are counted and the first one is
+  recorded as a `DeferredFrontier` — the exact `(x, y, disposition,
+  entry_index)` where the unblocked path first stops on the codebook-bank
+  docs-gap / a missing reference frame. The returned `ReconstructedPlane`
+  carries the mutated strip plus a `PlaneExecStats` coverage report
+  (`reconstructed()` / `deferred()` / `bytes_written` /
+  `is_fully_reconstructed()`), turning the per-cell primitives into one
+  whole-plane pixel-synthesis pass over the unblocked subset.
 - **Frame + bitstream header** (`spec/01`) — the 64-byte combined header
   parse via `indeo3::FrameHeader::parse`.
 - **Picture layer** (`spec/02`) — per-plane prelude parsing, plane
@@ -198,6 +213,12 @@ the round-0 scaffold pending docs work.
   `PlaneReconstructPlan` (`entries: Vec<CellPlanEntry>` + `DispositionCounts`);
   `drive_vq_null_copies` executes the VQ_NULL-copy subset over a strip
   buffer → `VqNullDriveStats` / `PlaneReconstructError`.
+- `indeo3::exec_plane_plan` — whole-plane reconstruction executor
+  (`spec/07` §1.4 / §4.4 / §5.1) → `ReconstructedPlane` (mutated strip +
+  `PlaneExecStats` coverage + `DeferredFrontier`); sizes the strip via
+  `plane_strip_len` (`STRIP_ROW_STRIDE` = `0xb0`), drives both VQ_NULL
+  arms (copy + skip) and surfaces the first VQ_DATA / INTER frontier.
+  `PlaneExecError` completes the surface.
 - `indeo3::reconstruct_cell_static` — static-table-only per-cell
   mode-byte executor (`spec/06` §3 / §4 + `spec/07` §1 / §3) → `CellOutcome`
   (`Complete` / `DeferredArena` / `Terminated`) over a strip pixel
