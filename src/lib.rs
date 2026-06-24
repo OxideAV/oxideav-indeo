@@ -1,36 +1,50 @@
 //! Pure-Rust Indeo (IV2/IV3/IV4/IV5) video codec.
 //!
-//! **Round 3 — Indeo 3 (IV31 / IV32) macroblock-layer binary tree.**
+//! **Indeo 3 (IV31 / IV32) — structural decode + unblocked
+//! reconstruction + multi-frame sequencing.**
 //!
-//! Round 1 landed the 64-byte combined header
-//! ([`indeo3::FrameHeader::parse`], `spec/01`). Round 2 added
-//! [`indeo3::PictureLayer::parse`], the per-plane prelude parser
-//! (`spec/02`). Round 3 adds [`indeo3::decode_plane_tree`], the
-//! binary-tree walk over a plane's bitstream payload (the bytes
-//! that begin at the `bitstream_offset` round 2 computed), per
-//! `docs/video/indeo/indeo3/spec/03-macroblock-layer.md`. It
-//! produces a typed [`indeo3::CellTree`] of INTRA / INTER leaf
-//! cells; INTRA cells carry their VQ sub-tree leaves inline.
+//! The crate threads the spec/01 → spec/03 structural layers into one
+//! [`indeo3::decode_frame`] pass (the 64-byte combined header, the
+//! per-plane picture-layer prelude + decode plan, and the binary-tree
+//! cell walk that produces a typed [`indeo3::CellTree`] of INTRA / INTER
+//! leaf cells). On top of that, [`indeo3::reconstruct_frame`]
+//! materialises the genuinely-unblocked (VQ_NULL) pixel subset of every
+//! present plane into strip pixel buffers, and
+//! [`indeo3::Indeo3Decoder`] drives a whole IV31 / IV32 frame sequence:
+//! it owns the spec/07 §6 inter-frame state ([`indeo3::DecodeSession`])
+//! and the previous [`indeo3::ReconstructedFrame`], enforcing the
+//! first-frame / seek INTRA gate (spec/01 §3.2 / §4), the NULL-frame
+//! repeat-previous output (spec/07 §6.3), and the reference-bank
+//! ping-pong (spec/07 §6.1 / spec/05 §4.2).
 //!
-//! `decode_plane_tree` stops at the per-leaf index-byte fetch (the
-//! spec/03 §7 chapter boundary): it records the raw MV-index byte
-//! for INTER leaves and the raw codebook-index byte for VQ_DATA
-//! leaves, but does not materialise the VQ codebooks
-//! (`spec/04-vq-codebooks.md`), perform motion compensation
-//! (`spec/05`), or reconstruct pixels (`spec/07`).
+//! ## What remains gated
 //!
-//! Spec coverage in `docs/` at the time of this round:
+//! Per-cell **VQ_DATA** pixel synthesis (the dyad codebook lookup) needs
+//! the codebook-bank per-entry values built at codec-init by
+//! `IR32_32.DLL!0x100060de` — these are all-zero on disk and the exact
+//! per-entry recipe for several of them is an Extractor docs-gap
+//! (`spec/04 §7.1`, audit-corrected). **INTER** cells additionally need
+//! a prior decoded reference frame's pixels. So a real frame currently
+//! reconstructs its VQ_NULL regions and leaves the VQ_DATA / INTER
+//! regions black; the multi-frame decoder still sequences, holds, and
+//! re-emits frames correctly. See `crates/oxideav-indeo/README.md` for
+//! the precise remaining-gap list.
 //!
-//! * `docs/video/indeo/indeo3/spec/00-scope.md` — bit/byte
-//!   conventions + binary identity.
-//! * `docs/video/indeo/indeo3/spec/01-file-header.md` — frame +
-//!   bitstream header (round 1).
-//! * `docs/video/indeo/indeo3/spec/02-picture-layer.md` — plane
-//!   iteration order, plane prelude, half-pel scaling, packed-MV
-//!   formula (round 2).
-//! * `docs/video/indeo/indeo3/spec/03-macroblock-layer.md` —
-//!   MSB-first bit reader, 2-bit node codes, MC_TREE / VQ_TREE
-//!   walk, INTRA→VQ transition, leaf index-byte fetch (this round).
+//! Spec coverage in `docs/video/indeo/indeo3/spec/`:
+//!
+//! * `00-scope.md` — bit/byte conventions + binary identity.
+//! * `01-file-header.md` — frame + bitstream header, NULL-frame
+//!   sentinel, continuity check.
+//! * `02-picture-layer.md` — plane iteration order, plane prelude,
+//!   half-pel scaling, packed-MV formula, per-plane decode plan.
+//! * `03-macroblock-layer.md` — MSB-first bit reader, 2-bit node
+//!   codes, MC_TREE / VQ_TREE walk, leaf index-byte fetch.
+//! * `04-vq-codebooks.md` — the VQ codebook structure + codec-init
+//!   table materialisation (the codebook-bank values are §7.1 gated).
+//! * `05-motion-compensation.md` — packed-MV decode + the MC fetcher.
+//! * `06-entropy.md` — the per-cell mode-byte stream alphabet.
+//! * `07-output-reconstruction.md` — the predictor chain, strip-to-frame
+//!   assembly, chroma upsample, and §6 frame finalisation.
 //!
 //! Indeo 2 / 4 / 5 have only a multimedia.cx wiki snapshot under
 //! `docs/video/indeo/indeoN/wiki/`, no `spec/`, so they remain at
