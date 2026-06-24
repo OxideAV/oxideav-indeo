@@ -246,6 +246,17 @@ the round-0 scaffold pending docs work.
   (`planes: Vec<ReconstructedPlane>` + `FrameReconstructStats`); runs
   `exec_plane_plan` on every present plane and folds frame-wide coverage.
   `FrameReconstructError` tags the failing plane.
+- `indeo3::DecodeSession` — multi-frame decode session / inter-frame
+  state machine (`spec/01` §3.2 / §3.3 / §3.6 / §4 + `spec/07` §6).
+  `admit(input) -> Result<AdmittedFrame, SessionError>` threads the
+  spec/07 §6.1 / §6.2 saved `frame_flags` / `frame_number` slots across
+  a frame sequence and classifies each incoming frame into a
+  `FrameAdmission` (`FirstFrame` / `Sequential` / `NullRepeat` / `Seek`),
+  enforcing the first-frame + seek INTRA requirement, the NULL-frame
+  repeat-previous path, and the previous-frame-bit-9 reference-bank
+  ping-pong (`AdmittedFrame::read_bank` / `return_value` / `continuity`).
+  Table-free — not gated on the codebook-bank docs-gap. `next_read_bank`
+  / `saved_frame_number` expose the carried state.
 - `indeo3::reconstruct_cell_static` — static-table-only per-cell
   mode-byte executor (`spec/06` §3 / §4 + `spec/07` §1 / §3) → `CellOutcome`
   (`Complete` / `DeferredArena` / `Terminated`) over a strip pixel

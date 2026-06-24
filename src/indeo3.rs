@@ -279,6 +279,7 @@ mod frame_exit;
 mod frame_finalise;
 mod frame_output;
 mod frame_reconstruct;
+mod frame_session;
 mod frame_yuv;
 mod header;
 mod macroblock;
@@ -375,6 +376,7 @@ pub use frame_output::{
 pub use frame_reconstruct::{
     reconstruct_frame, FrameReconstructError, FrameReconstructStats, ReconstructedFrame,
 };
+pub use frame_session::{AdmittedFrame, DecodeSession, FrameAdmission, SessionError};
 pub use frame_yuv::{assemble_yuv, upsample_frame, YuvError, YuvFrame, YuvPlane};
 pub use header::{
     alt_quant_indices, BitstreamHeader, FrameFlags, FrameHeader, FrameHeaderPreamble, HeaderError,

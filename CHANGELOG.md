@@ -8,6 +8,43 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) multi-frame decode session
+  (`indeo3::DecodeSession` → `AdmittedFrame` with `FrameAdmission` /
+  `SessionError`, spec/01 §3.2 / §3.3 / §3.6 / §4 + spec/07 §6). The
+  first inter-frame state machine: threads one frame's
+  `FrameFinalisation` (the spec/07 §6.1 / §6.2 saved `frame_flags`
+  `[instance+0x434]` and `frame_number` `[instance+0x474]` slots)
+  forward into the next frame's continuity + reference-bank decision,
+  so a whole IV31 / IV32 frame sequence can be sequenced without
+  re-deriving the inter-frame rules per frame. `DecodeSession::admit`
+  parses the spec/01 header and classifies each frame against the saved
+  state: the **first frame** must be INTRA (an INTER / NULL first frame
+  is the spec/01 §3.2 `-100` input error → `SessionError::FirstFrameNotIntra`);
+  a **NULL frame** (`data_size == 0x80`, §3.3) repeats the previous
+  output (spec/07 §6.3 return `1` → `FrameAdmission::NullRepeat`); a
+  **sequential** frame (`frame_number == saved + 1`, §6.2) admits as
+  `Sequential`; a **discontinuous** (seek / gap, §3.6) frame admits as
+  `Seek` only when it is INTRA, else `SessionError::SeekNotIntra` (the
+  §4 seek path re-validates the INTRA requirement). Each `AdmittedFrame`
+  carries the `Bank` the frame reads its previous-frame reference from
+  (spec/07 §6.1 / spec/05 §4.2: driven by the *saved* frame's bit-9),
+  the spec/07 §6.3 `DecodeReturn`, and the spec/07 §6.2
+  `FrameContinuity` classification; `carries_picture()` /
+  `is_resync_point()` surface whether the caller should run the
+  structural decode + reconstruction and whether the frame begins a
+  fresh INTRA reference chain. The §6.4 invariant holds (no decoder-side
+  buffer rotation — the bank ping-pong is encoder-driven via bit-9), and
+  a rejected frame leaves the continuity baseline un-advanced. This is
+  genuinely-unblocked decode progress: the entire frame-sequencing
+  contract is table-free (no codebook-bank docs-gap), turning the
+  isolated per-frame finalisation primitives into a working multi-frame
+  decoder skeleton. 14 new unit tests cover the first-frame INTRA gate
+  (INTER / NULL rejection), sequential INTER admission, the NULL-repeat
+  + baseline-advance (in-sequence and out-of-sequence), the seek-to-INTRA
+  admit vs seek-to-INTER reject, the previous-frame-bit-9 read-bank
+  ping-pong, the periodic-intra-vs-INTRA gate distinction, a malformed
+  header, and a full INTRA → INTER → NULL → INTER → seek-INTRA sequence;
+  `cargo test -p oxideav-indeo` lib count rises to 740 (was 726).
 - Indeo 3 (IV31 / IV32) frame-level reconstruction pass
   (`indeo3::reconstruct_frame` → `ReconstructedFrame` with
   `FrameReconstructStats` / `FrameReconstructError`, spec/07 §1.5 / §5.2).
