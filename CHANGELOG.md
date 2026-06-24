@@ -8,6 +8,36 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Indeo 3 (IV31 / IV32) stateful multi-frame decoder
+  (`indeo3::Indeo3Decoder` → `DecodedOutput` with `DecoderError`,
+  spec/01 §3 + spec/07 §1.5 / §5.2 / §6). Joins the `DecodeSession`
+  sequencer to the structural decode + reconstruction so a sequence of
+  codec frames becomes a sequence of reconstructed `OutputFrame`s. The
+  decoder owns the `DecodeSession` *and* the previous
+  `ReconstructedFrame`, implementing the spec/07 §6.3 repeat-previous
+  semantics: `Indeo3Decoder::decode(input)` admits the frame, and for a
+  **picture-carrying** frame (first / sequential / seek) structurally
+  decodes (`decode_frame`) + reconstructs (`reconstruct_frame`) it —
+  storing the result as the new previous frame — while for a
+  **NULL-repeat** frame it re-emits the held previous frame's
+  reconstruction byte-for-byte (the session guarantees a NULL frame is
+  never first, so a held frame always exists). `DecodedOutput` bundles
+  the `AdmittedFrame` classification, a `repeated_previous` flag, and a
+  borrow of the reconstructed frame (pullable as an `OutputFrame` via
+  `to_output_frame`); `read_bank()` / `is_resync_point()` surface the
+  reference bank and INTRA-resync status. A rejected frame leaves the
+  decoder state (session baseline + held frame) unchanged. Like
+  `reconstruct_frame` it reconstructs only the unblocked (VQ_NULL)
+  subset of each picture frame — the inter-frame *sequencing* +
+  repeat-previous output is the table-free contribution, not gated on
+  the codebook-bank docs-gap. 7 new unit tests + a new
+  `tests/decode_session.rs` integration suite (6 tests) drive
+  `DecodeSession` / `Indeo3Decoder` over multi-frame sequences as a
+  downstream consumer would (full INTRA → INTER → NULL → seek sequence,
+  NULL repeat-previous byte-equality, the bit-9 read-bank ping-pong, the
+  seek-to-INTER reject keeping the held frame, and per-frame
+  `to_output_frame` assembly). `cargo test -p oxideav-indeo` lib count
+  rises to 748 (was 740).
 - Indeo 3 (IV31 / IV32) multi-frame decode session
   (`indeo3::DecodeSession` → `AdmittedFrame` with `FrameAdmission` /
   `SessionError`, spec/01 §3.2 / §3.3 / §3.6 / §4 + spec/07 §6). The

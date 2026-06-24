@@ -257,6 +257,16 @@ the round-0 scaffold pending docs work.
   ping-pong (`AdmittedFrame::read_bank` / `return_value` / `continuity`).
   Table-free — not gated on the codebook-bank docs-gap. `next_read_bank`
   / `saved_frame_number` expose the carried state.
+- `indeo3::Indeo3Decoder` — stateful multi-frame decoder
+  (`spec/01` §3 + `spec/07` §1.5 / §5.2 / §6). `decode(input) ->
+  Result<DecodedOutput, DecoderError>` joins the `DecodeSession`
+  sequencer to `decode_frame` + `reconstruct_frame`, holding the
+  previous `ReconstructedFrame` so a **NULL-repeat** frame re-emits the
+  prior output (spec/07 §6.3) while a picture-carrying frame is freshly
+  reconstructed. `DecodedOutput` carries the `AdmittedFrame`, a
+  `repeated_previous` flag, and a borrow of the reconstructed frame
+  (pull an `OutputFrame` via `to_output_frame`). Reconstructs the
+  unblocked (VQ_NULL) subset; inter-frame sequencing is table-free.
 - `indeo3::reconstruct_cell_static` — static-table-only per-cell
   mode-byte executor (`spec/06` §3 / §4 + `spec/07` §1 / §3) → `CellOutcome`
   (`Complete` / `DeferredArena` / `Terminated`) over a strip pixel

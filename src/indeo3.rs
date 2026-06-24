@@ -272,6 +272,7 @@ mod cell_null;
 mod cell_reconstruct;
 mod cell_subarray;
 mod codebook_seed;
+mod decoder;
 mod entropy;
 mod frame;
 mod frame_assemble;
@@ -337,6 +338,7 @@ pub use codebook_seed::{
     CodebookSeedArea, SeedBlock, SeedPair, BLOCK_DEST_ADVANCE, BLOCK_TERMINATOR, SEED_AREA_VMA,
     SEED_SIGN_BIAS,
 };
+pub use decoder::{DecodedOutput, DecoderError, Indeo3Decoder};
 pub use entropy::{
     apply_continuation_xor, continuation_needed, fb_category, fb_category_table, variant_entry_rva,
     DyadAddress, FbCategory, FbCounter, HighNibbleAction, JumpTable, JumpTableEntry, LiteralMode,
