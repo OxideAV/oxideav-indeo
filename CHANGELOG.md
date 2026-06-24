@@ -23,9 +23,11 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reconstruction byte-for-byte (the session guarantees a NULL frame is
   never first, so a held frame always exists). `DecodedOutput` bundles
   the `AdmittedFrame` classification, a `repeated_previous` flag, and a
-  borrow of the reconstructed frame (pullable as an `OutputFrame` via
-  `to_output_frame`); `read_bank()` / `is_resync_point()` surface the
-  reference bank and INTRA-resync status. A rejected frame leaves the
+  borrow of the reconstructed frame; `to_output_frame()` (spec/07 §4.3 /
+  §5.6) and `to_yuv_frame()` (spec/07 §5.5 / §5.6 full-luma-resolution
+  three-plane YUV) give a one-call path from a decoded frame to a
+  displayable surface, and `read_bank()` / `is_resync_point()` surface
+  the reference bank and INTRA-resync status. A rejected frame leaves the
   decoder state (session baseline + held frame) unchanged. Like
   `reconstruct_frame` it reconstructs only the unblocked (VQ_NULL)
   subset of each picture frame — the inter-frame *sequencing* +
@@ -36,8 +38,9 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   downstream consumer would (full INTRA → INTER → NULL → seek sequence,
   NULL repeat-previous byte-equality, the bit-9 read-bank ping-pong, the
   seek-to-INTER reject keeping the held frame, and per-frame
-  `to_output_frame` assembly). `cargo test -p oxideav-indeo` lib count
-  rises to 748 (was 740).
+  `to_output_frame` assembly), plus a `to_output_frame` / `to_yuv_frame`
+  convenience-passthrough test. `cargo test -p oxideav-indeo` lib count
+  rises to 749 (was 740).
 - Indeo 3 (IV31 / IV32) multi-frame decode session
   (`indeo3::DecodeSession` → `AdmittedFrame` with `FrameAdmission` /
   `SessionError`, spec/01 §3.2 / §3.3 / §3.6 / §4 + spec/07 §6). The

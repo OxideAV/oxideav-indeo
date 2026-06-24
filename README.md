@@ -264,8 +264,9 @@ the round-0 scaffold pending docs work.
   previous `ReconstructedFrame` so a **NULL-repeat** frame re-emits the
   prior output (spec/07 §6.3) while a picture-carrying frame is freshly
   reconstructed. `DecodedOutput` carries the `AdmittedFrame`, a
-  `repeated_previous` flag, and a borrow of the reconstructed frame
-  (pull an `OutputFrame` via `to_output_frame`). Reconstructs the
+  `repeated_previous` flag, and a borrow of the reconstructed frame, with
+  `to_output_frame()` / `to_yuv_frame()` one-call paths to a displayable
+  `OutputFrame` / full-luma-resolution `YuvFrame`. Reconstructs the
   unblocked (VQ_NULL) subset; inter-frame sequencing is table-free.
 - `indeo3::reconstruct_cell_static` — static-table-only per-cell
   mode-byte executor (`spec/06` §3 / §4 + `spec/07` §1 / §3) → `CellOutcome`

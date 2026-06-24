@@ -53,8 +53,10 @@
 //! (spec/07 §5.4 LUT docs-gap).
 
 use super::frame::{decode_frame, FrameDecodeError};
+use super::frame_assemble::OutputFrame;
 use super::frame_reconstruct::{reconstruct_frame, FrameReconstructError, ReconstructedFrame};
 use super::frame_session::{AdmittedFrame, DecodeSession, FrameAdmission, SessionError};
+use super::frame_yuv::{upsample_frame, YuvError, YuvFrame};
 use super::Bank;
 
 /// Errors raised while decoding one frame through an [`Indeo3Decoder`].
@@ -126,6 +128,23 @@ impl DecodedOutput<'_> {
     /// frame or seek).
     pub fn is_resync_point(&self) -> bool {
         self.admission.admission.is_resync_point()
+    }
+
+    /// Spec/07 §4.3 / §5.6 — assemble this frame's reconstructed strip
+    /// buffers into an [`OutputFrame`] of tightly-packed 8-bit planes
+    /// (the unblocked subset's pixels in place, deferred regions black).
+    /// Convenience passthrough to [`ReconstructedFrame::to_output_frame`].
+    pub fn to_output_frame(&self) -> OutputFrame {
+        self.frame.to_output_frame()
+    }
+
+    /// Spec/07 §5.5 / §5.6 — produce a full-luma-resolution
+    /// [`YuvFrame`] from this frame: the §5.7 strip-to-frame assembly
+    /// followed by the §5.5 4:1:0 chroma box-upsample. The one-call
+    /// path from a decoded frame to a displayable three-plane YUV
+    /// surface (the §5.4-RGB-independent half of output conversion).
+    pub fn to_yuv_frame(&self) -> Result<YuvFrame, YuvError> {
+        upsample_frame(&self.frame.to_output_frame())
     }
 }
 
@@ -346,6 +365,19 @@ mod tests {
         ));
         // The held previous frame is unchanged.
         assert_eq!(d.previous_frame().cloned(), held);
+    }
+
+    #[test]
+    fn output_and_yuv_convenience_passthroughs() {
+        let mut d = Indeo3Decoder::new();
+        let out = d.decode(&skipped_frame(0, INTRA, DATA)).expect("first");
+        // Skipped planes → empty output / yuv, but both calls succeed
+        // and agree with the underlying ReconstructedFrame.
+        let output = out.to_output_frame();
+        assert_eq!(output, out.frame.to_output_frame());
+        assert!(output.planes.is_empty());
+        let yuv = out.to_yuv_frame().expect("yuv assembles");
+        assert!(yuv.planes.is_empty());
     }
 
     #[test]
