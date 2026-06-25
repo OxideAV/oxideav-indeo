@@ -298,6 +298,7 @@ mod picture_layer;
 mod plane_execute;
 mod plane_reconstruct;
 mod reconstruct;
+mod registry;
 mod strip_context;
 mod strip_edge;
 mod vq;
@@ -458,6 +459,10 @@ pub use reconstruct::{
     predictor_offset, unpack_pixels, DyadOutcome, RowEmission, SoftSimdSum, VariantEmission,
     CLAMP_7BIT_MASK, EDGE_MARKER_BIT, HALF_SENTINEL_MASK, HALVE_CARRY_MASK, PIXEL_VALUE_MAX,
     PREDICTOR_ROW_STRIDE, TOP_OF_STRIP_PREDICTOR,
+};
+pub use registry::{
+    codec_id_for_fourcc, make_decoder, register, register_codecs, Indeo3RegistryDecoder,
+    CODEC_ID_STR, INDEO3_FOURCCS,
 };
 pub use strip_context::{
     chroma_plane_height, chroma_plane_width, chroma_strip_slot_count, luma_strip_slot_count,

@@ -8,6 +8,35 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`oxideav-core` codec-registry integration** for Indeo 3
+  (`indeo3::registry`, re-exported at the `indeo3` and crate roots).
+  Bridges the in-crate stateful `Indeo3Decoder` to the framework's
+  published codec surface so a pipeline that resolves codecs through an
+  `oxideav_core::CodecRegistry` — the way the container crates do — can
+  construct and drive an Indeo 3 decoder without naming this crate's
+  concrete types. New surface:
+  - `codec_id_for_fourcc(&[u8; 4]) -> Option<CodecId>` maps an on-wire
+    FourCC (`IV31` / `IV32`, case-insensitive; the two in-scope FourCCs
+    per `spec/00-scope.md`) to the `"indeo3"` codec id, so a demuxer's
+    `CodecResolver` routes a video track here. `INDEO3_FOURCCS` /
+    `CODEC_ID_STR` expose the tag set + id.
+  - `Indeo3RegistryDecoder` implements `oxideav_core::Decoder`: owns an
+    `Indeo3Decoder`, feeds each `Packet`'s bytes through it, and maps the
+    resulting full-luma-resolution `YuvFrame` (spec/07 §5.5 box-upsampled
+    chroma) into an `oxideav_core::VideoFrame` in `PixelFormat::Yuv444P`
+    plane order (Y, U, V). `flush` → EOF, `reset` restarts the
+    inter-frame INTRA gate after a container seek. NULL / repeat frames
+    re-emit the previous output (spec/07 §6.3) via the underlying decoder.
+  - `make_decoder` (the `DecoderFactory`), `register_codecs(&mut
+    CodecRegistry)` / `register(&mut RuntimeContext)` install the codec
+    (id + capabilities + factory + the `IV31` / `IV32` FourCC tags); the
+    crate-root `oxideav_core::register!("indeo", register)` wires
+    zero-config fleet registration through `oxideav-meta`. Decoder-only
+    (no encoder) — this is a clean-room decode rebuild. The bridge adds
+    no new decode behaviour: it reconstructs exactly the
+    genuinely-unblocked VQ_NULL subset the decoder already produces
+    (VQ_DATA / INTER regions stay black pending the `spec/04 §7.1`
+    codebook-bank docs-gap) and merely re-shapes the output.
 - Indeo 3 (IV31 / IV32) stateful multi-frame decoder
   (`indeo3::Indeo3Decoder` → `DecodedOutput` with `DecoderError`,
   spec/01 §3 + spec/07 §1.5 / §5.2 / §6). Joins the `DecodeSession`
