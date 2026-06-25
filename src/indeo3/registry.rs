@@ -61,11 +61,13 @@
 
 use oxideav_core::{
     CodecCapabilities, CodecId, CodecInfo, CodecParameters, CodecRegistry, CodecTag, Decoder,
-    Error, Frame, Packet, PixelFormat, Result, RuntimeContext, VideoFrame, VideoPlane,
+    Error, Frame, Packet, PixelFormat, ProbeContext, Result, RuntimeContext, VideoFrame,
+    VideoPlane,
 };
 
 use super::decoder::{DecoderError, Indeo3Decoder};
 use super::frame_yuv::YuvFrame;
+use super::header::{FRAME_HEADER_LEN, MAGIC_FRMH};
 use super::{PLANE_IDX_U, PLANE_IDX_V, PLANE_IDX_Y};
 
 /// The public codec id this crate registers (`"indeo3"`).
@@ -222,13 +224,75 @@ impl Decoder for Indeo3RegistryDecoder {
     }
 }
 
-/// Register the Indeo 3 decoder (id + capabilities + factory + the two
-/// FourCC tags) into a [`CodecRegistry`].
+/// Confidence the [`probe`] returns when a first-packet's combined
+/// header validates as a genuine Indeo 3 frame (the `spec/01 §2.1`
+/// `check_sum` matches). Above the framework's `0.0` "not me" floor and
+/// the implicit `1.0` an unprobed-but-tagged claim would get, this lets
+/// a real Indeo 3 payload out-rank an unprobed claimant on the same
+/// FourCC when one exists.
+pub const PROBE_CONFIDENCE_HEADER_OK: f32 = 1.0;
+
+/// Confidence the [`probe`] returns when no first-packet bytes are
+/// available to validate (the common case: tags are resolved at
+/// stream-discovery time before any packet is read). The FourCC match
+/// alone is decent evidence, so this is a solid-but-not-certain score.
+pub const PROBE_CONFIDENCE_TAG_ONLY: f32 = 0.6;
+
+/// Spec/01 §2.1 — the [`oxideav_core::ProbeFn`] for Indeo 3 tag
+/// disambiguation.
 ///
-/// The capabilities advertise the lossy, intra-and-inter video codec
-/// emitting [`PixelFormat::Yuv444P`] (the full-luma-resolution surface
-/// the registry decoder produces). The `IV31` / `IV32` tags let the
-/// container's `CodecResolver` route either FourCC here.
+/// When the demuxer has peeked a first packet ([`ProbeContext::packet`]
+/// is `Some`), validate the Indeo 3 combined-header `check_sum`
+/// (`frame_number ^ unknown1 ^ frame_size ^ 'FRMH'`, the
+/// [`super::FrameHeader::parse`] §2.1 check) and the §2.2
+/// `frame_size > 16` constraint:
+///
+/// * a structurally-valid combined header → [`PROBE_CONFIDENCE_HEADER_OK`];
+/// * a packet present but whose header fails the `check_sum` / size
+///   checks → `0.0` ("not me" — this lets a colliding FourCC claimant
+///   win on genuinely non-Indeo-3 bytes);
+/// * no packet available → [`PROBE_CONFIDENCE_TAG_ONLY`] (the FourCC
+///   match alone is decent evidence).
+///
+/// The probe is intentionally cheap — it reads only the fixed 16-byte
+/// frame header words, not the full bitstream — so it never needs the
+/// (docs-gapped) codebook-bank values.
+pub fn probe(ctx: &ProbeContext) -> f32 {
+    let Some(bytes) = ctx.packet else {
+        return PROBE_CONFIDENCE_TAG_ONLY;
+    };
+    // Need the 16-byte frame header to validate the §2.1 check_sum.
+    if bytes.len() < FRAME_HEADER_LEN {
+        return 0.0;
+    }
+    let rd = |off: usize| -> u32 {
+        u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]])
+    };
+    let frame_number = rd(0x00);
+    let unknown1 = rd(0x04);
+    let check_sum = rd(0x08);
+    let frame_size = rd(0x0c);
+    let expected = frame_number ^ unknown1 ^ frame_size ^ MAGIC_FRMH;
+    if check_sum != expected {
+        return 0.0;
+    }
+    // §2.2 — frame_size must exceed the 16-byte frame header.
+    if (frame_size as usize) <= FRAME_HEADER_LEN {
+        return 0.0;
+    }
+    PROBE_CONFIDENCE_HEADER_OK
+}
+
+/// Register the Indeo 3 decoder (id + capabilities + factory + probe +
+/// the two FourCC tags) into a [`CodecRegistry`].
+///
+/// The capabilities advertise the lossy video codec emitting
+/// [`PixelFormat::Yuv444P`] (the full-luma-resolution surface the
+/// registry decoder produces). The `IV31` / `IV32` tags let the
+/// container's `CodecResolver` route either FourCC here, and the
+/// [`probe`] validates a first packet's combined-header `check_sum`
+/// (`spec/01 §2.1`) to out-rank a colliding claimant on genuine Indeo 3
+/// bytes.
 ///
 /// No encoder is registered — this crate is a decoder-only clean-room
 /// rebuild.
@@ -240,6 +304,7 @@ pub fn register_codecs(reg: &mut CodecRegistry) {
         CodecInfo::new(CodecId::new(CODEC_ID_STR))
             .capabilities(caps)
             .decoder(make_decoder)
+            .probe(probe)
             .tags([CodecTag::fourcc(b"IV31"), CodecTag::fourcc(b"IV32")]),
     );
 }
@@ -257,7 +322,7 @@ pub fn register(ctx: &mut RuntimeContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oxideav_core::stream::{CodecResolver, ProbeContext};
+    use oxideav_core::stream::CodecResolver;
     use oxideav_core::TimeBase;
 
     fn packet(data: Vec<u8>) -> Packet {
@@ -359,6 +424,84 @@ mod tests {
             let id = reg.resolve_tag(&ctx).expect("resolve_tag");
             assert_eq!(id, CodecId::new(CODEC_ID_STR), "fourcc {fc:?}");
         }
+    }
+
+    #[test]
+    fn probe_no_packet_returns_tag_only_confidence() {
+        let tag = CodecTag::fourcc(b"IV32");
+        let ctx = ProbeContext::new(&tag);
+        assert_eq!(probe(&ctx), PROBE_CONFIDENCE_TAG_ONLY);
+    }
+
+    #[test]
+    fn probe_valid_header_returns_high_confidence() {
+        let frame = skipped_intra_frame(0);
+        let tag = CodecTag::fourcc(b"IV32");
+        let ctx = ProbeContext::new(&tag).packet(&frame);
+        assert_eq!(probe(&ctx), PROBE_CONFIDENCE_HEADER_OK);
+    }
+
+    #[test]
+    fn probe_bad_checksum_returns_zero() {
+        let mut frame = skipped_intra_frame(0);
+        // Corrupt the check_sum word (offset 0x08) so §2.1 fails.
+        frame[0x08] ^= 0xff;
+        let tag = CodecTag::fourcc(b"IV32");
+        let ctx = ProbeContext::new(&tag).packet(&frame);
+        assert_eq!(probe(&ctx), 0.0);
+    }
+
+    #[test]
+    fn probe_short_packet_returns_zero() {
+        // Fewer than the 16-byte frame header → cannot validate.
+        let short = vec![0u8; 8];
+        let tag = CodecTag::fourcc(b"IV31");
+        let ctx = ProbeContext::new(&tag).packet(&short);
+        assert_eq!(probe(&ctx), 0.0);
+    }
+
+    #[test]
+    fn probe_frame_size_too_small_returns_zero() {
+        // A header whose check_sum is internally consistent but whose
+        // frame_size is <= 16 fails the §2.2 size floor.
+        let mut frame = vec![0u8; FRAME_HEADER_LEN];
+        let frame_number = 0u32;
+        let unknown1 = 0u32;
+        let frame_size = 8u32; // <= 16
+        let check_sum = frame_number ^ unknown1 ^ frame_size ^ MAGIC_FRMH;
+        frame[0x00..0x04].copy_from_slice(&frame_number.to_le_bytes());
+        frame[0x04..0x08].copy_from_slice(&unknown1.to_le_bytes());
+        frame[0x08..0x0c].copy_from_slice(&check_sum.to_le_bytes());
+        frame[0x0c..0x10].copy_from_slice(&frame_size.to_le_bytes());
+        let tag = CodecTag::fourcc(b"IV32");
+        let ctx = ProbeContext::new(&tag).packet(&frame);
+        assert_eq!(probe(&ctx), 0.0);
+    }
+
+    #[test]
+    fn registered_probe_validates_packet_through_resolver() {
+        // The registered probe must drive resolve_tag: a valid first
+        // packet resolves to indeo3; a corrupt one is rejected (no other
+        // claimant on IV32 → resolve_tag returns None).
+        let mut reg = CodecRegistry::new();
+        register_codecs(&mut reg);
+        let frame = skipped_intra_frame(0);
+        let tag = CodecTag::fourcc(b"IV32");
+        let ok_ctx = ProbeContext::new(&tag).packet(&frame);
+        assert_eq!(
+            reg.resolve_tag(&ok_ctx),
+            Some(CodecId::new(CODEC_ID_STR)),
+            "valid packet resolves"
+        );
+
+        let mut bad = frame.clone();
+        bad[0x08] ^= 0xff;
+        let bad_ctx = ProbeContext::new(&tag).packet(&bad);
+        assert_eq!(
+            reg.resolve_tag(&bad_ctx),
+            None,
+            "corrupt packet is rejected (probe returns 0.0, no other claimant)"
+        );
     }
 
     #[test]

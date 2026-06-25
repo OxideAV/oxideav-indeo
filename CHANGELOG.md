@@ -8,6 +8,20 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 3 tag-disambiguation probe** (`indeo3::probe`,
+  `oxideav_core::ProbeFn`) attached to the codec registration. When the
+  demuxer has peeked a first packet, the probe validates the Indeo 3
+  combined-header `check_sum` (`frame_number ^ unknown1 ^ frame_size ^
+  'FRMH'`, the `spec/01 §2.1` check) plus the §2.2 `frame_size > 16`
+  floor — reading only the fixed 16-byte frame header, never the
+  docs-gapped codebook-bank values. A valid header returns
+  `PROBE_CONFIDENCE_HEADER_OK` (so a genuine Indeo 3 payload out-ranks a
+  colliding FourCC claimant), a present-but-invalid packet returns `0.0`
+  (lets a colliding claimant win on non-Indeo-3 bytes), and no-packet
+  returns `PROBE_CONFIDENCE_TAG_ONLY` (the FourCC match alone is decent
+  evidence). Wired into `register_codecs` via `CodecInfo::probe`, so the
+  registry's `resolve_tag` path now validates `IV31` / `IV32` claims
+  against actual frame bytes.
 - **`oxideav-core` codec-registry integration** for Indeo 3
   (`indeo3::registry`, re-exported at the `indeo3` and crate roots).
   Bridges the in-crate stateful `Indeo3Decoder` to the framework's
