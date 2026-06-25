@@ -461,8 +461,9 @@ pub use reconstruct::{
     PREDICTOR_ROW_STRIDE, TOP_OF_STRIP_PREDICTOR,
 };
 pub use registry::{
-    codec_id_for_fourcc, make_decoder, probe, register, register_codecs, Indeo3RegistryDecoder,
-    CODEC_ID_STR, INDEO3_FOURCCS, PROBE_CONFIDENCE_HEADER_OK, PROBE_CONFIDENCE_TAG_ONLY,
+    codec_id_for_fourcc, decode_video_frame, make_decoder, probe, register, register_codecs,
+    Indeo3RegistryDecoder, CODEC_ID_STR, INDEO3_FOURCCS, PROBE_CONFIDENCE_HEADER_OK,
+    PROBE_CONFIDENCE_TAG_ONLY,
 };
 pub use strip_context::{
     chroma_plane_height, chroma_plane_width, chroma_strip_slot_count, luma_strip_slot_count,

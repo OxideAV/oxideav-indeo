@@ -177,6 +177,31 @@ fn yuv_to_video_frame(yuv: &YuvFrame, pts: Option<i64>) -> VideoFrame {
     VideoFrame { pts, planes }
 }
 
+/// One-shot direct decode: decode a single Indeo 3 codec frame's bytes
+/// into an [`oxideav_core`] [`VideoFrame`] in [`PixelFormat::Yuv444P`]
+/// (Y, U, V) without managing a [`Decoder`] state machine.
+///
+/// This is the direct-API counterpart to the registry path, mirroring
+/// the convention sibling codec crates follow (a free `decode_*`
+/// function alongside the registry factory). It builds a fresh
+/// [`Indeo3Decoder`], decodes `data` as the **first** frame, and shapes
+/// the output. Because the decoder starts empty, `data` must be an INTRA
+/// frame (the `spec/01 §3.2` first-frame gate) — a non-INTRA first frame
+/// returns [`Error::invalid`]. Callers decoding a *sequence* (where
+/// inter-frame state, NULL-repeat, and the reference-bank ping-pong
+/// matter) want the stateful [`Indeo3RegistryDecoder`] / [`Indeo3Decoder`]
+/// instead; this convenience is for single-frame / first-frame decode.
+///
+/// `pts` is carried straight onto the returned frame.
+pub fn decode_video_frame(data: &[u8], pts: Option<i64>) -> Result<VideoFrame> {
+    let mut decoder = Indeo3Decoder::new();
+    let out = decoder.decode(data).map_err(map_decoder_error)?;
+    let yuv = out
+        .to_yuv_frame()
+        .map_err(|e| Error::invalid(format!("indeo3: yuv assembly: {e}")))?;
+    Ok(yuv_to_video_frame(&yuv, pts))
+}
+
 impl Decoder for Indeo3RegistryDecoder {
     fn codec_id(&self) -> &CodecId {
         &self.codec_id
@@ -578,6 +603,28 @@ mod tests {
         dec.send_packet(&packet(skipped_intra_frame(0)))
             .expect("send post-reset");
         assert!(dec.receive_frame().is_ok());
+    }
+
+    #[test]
+    fn decode_video_frame_one_shot_intra() {
+        // An all-planes-skipped INTRA frame decodes through the one-shot
+        // path to an empty-plane Yuv444P VideoFrame with the supplied pts.
+        let vf = decode_video_frame(&skipped_intra_frame(0), Some(42)).expect("one-shot decode");
+        assert!(vf.planes.is_empty());
+        assert_eq!(vf.pts, Some(42));
+    }
+
+    #[test]
+    fn decode_video_frame_rejects_inter_first() {
+        // A non-INTRA first frame fails the spec/01 §3.2 first-frame gate.
+        let mut data = skipped_intra_frame(0);
+        use super::super::header::FRAME_HEADER_LEN;
+        let b = FRAME_HEADER_LEN;
+        data[b + 2..b + 4].copy_from_slice(&0u16.to_le_bytes());
+        assert!(matches!(
+            decode_video_frame(&data, None),
+            Err(Error::InvalidData(_))
+        ));
     }
 
     #[test]

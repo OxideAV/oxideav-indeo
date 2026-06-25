@@ -41,6 +41,25 @@ tree is resolved.
 
 What is implemented and unit-tested:
 
+- **`oxideav-core` framework integration** (`indeo3::registry`) — the
+  Indeo 3 decoder is wired into the framework's published codec surface
+  so a pipeline resolving codecs through an `oxideav_core::CodecRegistry`
+  (the way the container crates do) can construct and drive it without
+  naming this crate's concrete types. `Indeo3RegistryDecoder` implements
+  `oxideav_core::Decoder` over the stateful `Indeo3Decoder`, mapping each
+  decoded frame's full-luma-resolution YUV (spec/07 §5.5 box-upsampled
+  chroma) into a `Yuv444P` (Y, U, V) `VideoFrame`; `make_decoder` +
+  `register_codecs` / `register` install the codec (id + caps + factory +
+  probe + the `IV31` / `IV32` FourCC tags) and the crate-root
+  `oxideav_core::register!` wires zero-config fleet registration.
+  `codec_id_for_fourcc` + `probe` give the FourCC routing surface a
+  demuxer's `CodecResolver` needs — the probe validating a first packet's
+  `spec/01 §2.1` combined-header `check_sum` (never touching the
+  docs-gapped codebook-bank values). `decode_video_frame(data, pts)` is
+  the one-shot direct-API counterpart. Decoder-only (no encoder). The
+  bridge re-shapes exactly the genuinely-unblocked VQ_NULL subset the
+  decoder already produces; VQ_DATA / INTER regions stay black pending
+  the codebook-bank docs-gap.
 - **End-to-end structural driver** — `indeo3::decode_frame` /
   `decode_frame_with_selector` (spec/01 → spec/02 → spec/03), producing
   a `DecodedFrame` with per-present-plane `DecodedPlane` (decode plan,

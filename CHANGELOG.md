@@ -8,6 +8,16 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **One-shot direct decode** (`indeo3::decode_video_frame(data, pts) ->
+  Result<VideoFrame>`) — the direct-API counterpart to the registry
+  path, mirroring the `decode_*` free-function convention sibling codec
+  crates follow. Builds a fresh `Indeo3Decoder`, decodes `data` as the
+  first (INTRA) frame, and shapes the output into a `Yuv444P` (Y, U, V)
+  `oxideav_core::VideoFrame`. A non-INTRA first frame fails the
+  `spec/01 §3.2` first-frame gate with `Error::invalid`; callers
+  decoding a sequence (where inter-frame state / NULL-repeat / the
+  reference-bank ping-pong matter) use the stateful
+  `Indeo3RegistryDecoder` / `Indeo3Decoder` instead.
 - **Indeo 3 tag-disambiguation probe** (`indeo3::probe`,
   `oxideav_core::ProbeFn`) attached to the codec registration. When the
   demuxer has peeked a first packet, the probe validates the Indeo 3
