@@ -24,12 +24,14 @@
 //! headers and the per-tile coefficient stream) is parsed by the
 //! later modules as they land.
 
+mod band;
 mod bitreader;
 mod frame;
 mod gop;
 mod header;
 pub mod pic_size;
 
+pub use band::{BandError, BandFlags, BandHeader, DEFAULT_RV_TAB_SEL, MAX_RV_CORR};
 pub use bitreader::{BitReader, BitReaderError, MAX_READ_BITS};
 pub use frame::{FrameError, FrameFlags, FrameHeader, GopTrailer, HuffDesc};
 pub use gop::{

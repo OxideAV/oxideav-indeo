@@ -150,9 +150,11 @@ pub enum HuffDesc {
 }
 
 impl HuffDesc {
-    /// Parse a Huffman descriptor (`spec/02 §2.6` / §3.6). Reads the
-    /// 3-bit id; for id == 7 reads the custom row-length table.
-    fn parse(r: &mut BitReader<'_>) -> Result<Self, FrameError> {
+    /// Parse a Huffman descriptor (`spec/02 §2.6` / §3.6) from a bit
+    /// reader. Reads the 3-bit id; for id == 7 reads the custom
+    /// row-length table. Shared by the frame-header `mb_huff_desc` and
+    /// the band-header `blk_huff_desc`.
+    pub fn parse_bits(r: &mut BitReader<'_>) -> Result<Self, BitReaderError> {
         let id = r.read(3)?;
         if id == 7 {
             let num_rows = r.read(4)?;
@@ -237,7 +239,7 @@ impl FrameHeader {
 
         // §2.6 mb_huff_desc (conditional).
         let mb_huff_desc = if flags.mb_huff_present() {
-            Some(HuffDesc::parse(r)?)
+            Some(HuffDesc::parse_bits(r)?)
         } else {
             None
         };
