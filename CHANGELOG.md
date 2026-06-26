@@ -8,6 +8,49 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) decode bootstrap** (`indeo5` module) — the
+  wavelet-based Indeo 5 codec begins its clean-room decode stack from
+  the staged spec under `docs/video/indeo/indeo5/spec/`, built bottom
+  up. Indeo 5 is structurally distinct from the VQ-based Indeo 3, so it
+  gets its own module. Landed:
+  - `indeo5::BitReader` — the LSB-first 32-bit-accumulator bit reader
+    (`spec/00 §3`, `spec/01 §3.1`): whole-DWORD prefetch seed, low-end
+    extraction, one-byte top-end refill, `align(8)`, and the
+    bits-consumed bookkeeping the downstream "bytes consumed"
+    out-parameter needs.
+  - `indeo5::FormatDescriptor` — the `spec/01 §2` format-descriptor
+    preamble validator (dual-magic acceptance + in-place normalisation,
+    height-before-width dimensions, `>= 4` + multiple-of-4 constraints).
+  - `indeo5::PictureStart` — the `spec/01 §3` picture-start triplet
+    (5-bit PSC + 3-bit frame_type + 8-bit frame_number) with the §3.4
+    duplicate-`frame_number` soft-correction to NULL and the §3.3
+    illegal frame_type rejection.
+  - `indeo5::pic_size` — the `spec/02 §1.6` standard picture-size
+    tables (numeric values from `tables/region_10088c90_u32.csv` /
+    `region_10088cd0_u32.csv`, including the audit-confirmed index-3 =
+    704×480 correction).
+  - `indeo5::GopHeader` — the `spec/02 §1` GOP header: `gop_flags`,
+    `slice_size_id`, `decomp_levels` (with the `{0,1,2,6}` gate +
+    band-count derivation), `pic_size_id` (preset lookup or custom
+    13+13-bit dimensions), subsampling-driven chroma dimensions, the
+    per-band `band_info` array (with `mb_size`/`blk_size` tables +
+    `ext_trans` transform selector), and the transparency block.
+  - `indeo5::FrameHeader` — the `spec/02 §1.9 + §2` frame header: the
+    GOP trailer + `gop_ext` loop (INTRA), `frame_flags`, conditional
+    `pic_hdr_size` / `frm_checksum` / `frm_hdr_ext` / `mb_huff_desc`
+    (`HuffDesc` preset vs custom), `value5`, and the alignment exit.
+  - `indeo5::BandHeader` — the `spec/02 §3` per-band header:
+    `band_flags`, empty-band fast path, frame-gated `band_data_size`,
+    the rv-table correction array (`<= 61` bound), `rv_tab_sel`,
+    `blk_huff_desc`, `band_checksum`, `band_glob_quant`, and the
+    `band_hdr_ext` loop.
+  - `indeo5::PictureHeader::parse` — the front door threading the whole
+    header stack and dispatching by frame type (`spec/01 §3.5`).
+
+  Decoder-only, no pixel reconstruction yet: the per-tile coefficient
+  stream, the inverse Slant transform, and wavelet recomposition
+  (`spec/05`-`spec/08`) are the next milestones.
+
 - **One-shot direct decode** (`indeo3::decode_video_frame(data, pts) ->
   Result<VideoFrame>`) — the direct-API counterpart to the registry
   path, mirroring the `decode_*` free-function convention sibling codec

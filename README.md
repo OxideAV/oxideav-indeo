@@ -7,8 +7,42 @@ from clean-room specification and behavioural-trace documents under
 
 ## Status
 
-This crate is a **clean-room scaffold in progress**, focused on Indeo 3
-(`IV31` / `IV32`). The structural decode layers are now wired into a
+This crate is a **clean-room scaffold in progress**, covering Indeo 3
+(`IV31` / `IV32`, the most developed) and now bootstrapping Indeo 5
+(`IV50`). All truth is drawn from the staged spec / trace docs under
+`docs/video/indeo/` only — no external codec source is consulted.
+
+### Indeo 5 (`IV50`)
+
+Indeo 5 is a wavelet-subband codec, structurally distinct from the
+VQ-based Indeo 3, and lives in its own `indeo5` module built bottom-up
+from the staged spec (`docs/video/indeo/indeo5/spec/`). The header
+stack now parses end-to-end:
+
+- `indeo5::BitReader` — the LSB-first 32-bit-accumulator bit reader
+  (spec/00 §3, spec/01 §3.1).
+- `indeo5::FormatDescriptor` — the spec/01 §2 format-descriptor
+  preamble (magic + dimension validation).
+- `indeo5::PictureStart` — the spec/01 §3 picture-start triplet (PSC +
+  frame_type + frame_number + the §3.4 NULL soft-correction).
+- `indeo5::GopHeader` / `FrameHeader` / `BandHeader` — the spec/02
+  GOP / frame / band headers (flags, decomposition levels + band
+  counts, preset/custom picture dimensions, the `band_info` array,
+  Huffman-codebook descriptors, the rv-table correction array, the
+  global quantiser, and the opaque-extension loops).
+- `indeo5::PictureHeader::parse` — the front door threading the whole
+  stack and dispatching by frame type (spec/01 §3.5).
+- `indeo5::pic_size` — the spec/02 §1.6 standard picture-size tables.
+
+What is **not** yet implemented for Indeo 5: the per-tile coefficient
+stream, the inverse Slant transform, and the wavelet recomposition
+that turn parsed headers into pixels (spec/05–spec/08 — the next
+milestones). Indeo 5 is decode-only and not yet registered into the
+codec registry (no frames are produced yet).
+
+### Indeo 3 (`IV31` / `IV32`)
+
+The structural decode layers are now wired into a
 single end-to-end driver — `indeo3::decode_frame` threads the spec/01
 header, the spec/02 picture layer + per-plane decode plan, and the
 spec/03 binary-tree cell walk into one pass, producing a typed
