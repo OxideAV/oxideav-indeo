@@ -30,6 +30,7 @@ mod frame;
 mod gop;
 mod header;
 pub mod pic_size;
+mod picture;
 
 pub use band::{BandError, BandFlags, BandHeader, DEFAULT_RV_TAB_SEL, MAX_RV_CORR};
 pub use bitreader::{BitReader, BitReaderError, MAX_READ_BITS};
@@ -42,3 +43,4 @@ pub use header::{
     FormatDescriptor, FrameType, HeaderError, PictureStart, MAGIC_ALTERNATE, MAGIC_CANONICAL,
     MIN_HEIGHT, MIN_WIDTH, PICTURE_START_CODE,
 };
+pub use picture::{PictureError, PictureHeader};
