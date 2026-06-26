@@ -25,11 +25,13 @@
 //! later modules as they land.
 
 mod bitreader;
+mod frame;
 mod gop;
 mod header;
 pub mod pic_size;
 
 pub use bitreader::{BitReader, BitReaderError, MAX_READ_BITS};
+pub use frame::{FrameError, FrameFlags, FrameHeader, GopTrailer, HuffDesc};
 pub use gop::{
     BandInfo, DecompLevels, GopError, GopFlags, GopHeader, Subsampling, TransformId, Transparency,
     BLK_SIZE_TABLE, MB_SIZE_TABLE,
