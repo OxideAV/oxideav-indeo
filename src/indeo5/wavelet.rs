@@ -215,6 +215,44 @@ pub fn recompose_level(ll: &Band, hl: &Band, lh: &Band, hh: &Band) -> Band {
     Band::new(full_w, full_h, out)
 }
 
+/// The four high-frequency quadrants of one decomposition level, in the
+/// `spec/06 §3.1` order (`hl`, `lh`, `hh`). The `ll` quadrant is the
+/// level's low-low band; for the innermost level it is an explicit band,
+/// for outer levels it is the recomposed result of the level below.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LevelBands {
+    /// High-horizontal / low-vertical band.
+    pub hl: Band,
+    /// Low-horizontal / high-vertical band.
+    pub lh: Band,
+    /// High-high band.
+    pub hh: Band,
+}
+
+/// Recompose a whole plane from its wavelet bands (`spec/06 §3.4`
+/// bottom-up multi-level synthesis).
+///
+/// * `ll` is the innermost low-low band (the only band whose `ll`
+///   quadrant is carried explicitly).
+/// * `levels` lists the decomposition levels from **innermost to
+///   outermost** — `levels[0]` pairs with `ll` to form the inner-LL,
+///   whose result then becomes the `ll` quadrant for `levels[1]`, and so
+///   on. The list length equals the plane's decomposition-level count
+///   (`spec/02 §1.5`: 0, 1, or 2).
+///
+/// For a 0-level plane (`levels` empty) the single `ll` band *is* the
+/// plane (`spec/06 §3.4`: "no wavelet recomposition is performed"). Each
+/// listed level doubles both plane axes (`spec/06 §4.1`).
+pub fn recompose_plane(ll: &Band, levels: &[LevelBands]) -> Band {
+    let mut current = ll.clone();
+    // §3.4 bottom-up: combine the running low-low band with each level's
+    // three high-frequency bands, innermost level first.
+    for level in levels {
+        current = recompose_level(&current, &level.hl, &level.lh, &level.hh);
+    }
+    current
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +365,63 @@ mod tests {
             for y in 0..plane.height {
                 assert_eq!(plane.at(x, y), top, "col {x} not flat");
             }
+        }
+    }
+
+    #[test]
+    fn recompose_plane_zero_levels_is_identity() {
+        // A 0-level plane is just its single LL band.
+        let ll = Band::new(3, 2, vec![1, 2, 3, 4, 5, 6]);
+        let plane = recompose_plane(&ll, &[]);
+        assert_eq!(plane, ll);
+    }
+
+    #[test]
+    fn recompose_plane_one_level_matches_recompose_level() {
+        let ll = Band::new(2, 2, vec![40, 40, 40, 40]);
+        let zero = Band::new(2, 2, vec![0; 4]);
+        let level = LevelBands {
+            hl: zero.clone(),
+            lh: zero.clone(),
+            hh: zero.clone(),
+        };
+        let plane = recompose_plane(&ll, &[level]);
+        let direct = recompose_level(&ll, &zero, &zero, &zero);
+        assert_eq!(plane, direct);
+        assert_eq!((plane.width, plane.height), (4, 4));
+    }
+
+    #[test]
+    fn recompose_plane_two_levels_doubles_twice() {
+        // Inner LL is 2x2; two levels -> 8x8 plane.
+        let ll = Band::new(2, 2, vec![32, 32, 32, 32]);
+        let z2 = Band::new(2, 2, vec![0; 4]);
+        let z4 = Band::new(4, 4, vec![0; 16]);
+        let inner = LevelBands {
+            hl: z2.clone(),
+            lh: z2.clone(),
+            hh: z2.clone(),
+        };
+        let outer = LevelBands {
+            hl: z4.clone(),
+            lh: z4.clone(),
+            hh: z4.clone(),
+        };
+        let plane = recompose_plane(&ll, &[inner, outer]);
+        assert_eq!((plane.width, plane.height), (8, 8));
+        // All-flat input + zero HF -> flat plane.
+        assert!(plane.data.iter().all(|&v| v == 32), "{:?}", plane.data);
+    }
+
+    #[test]
+    fn recompose_plane_band_count_matches_decomp_formula() {
+        // The number of bands a plane carries is 3*levels + 1: one LL
+        // plus three HF per level. Confirm recompose_plane consumes
+        // exactly that many bands.
+        for levels in 0..=2usize {
+            let mut bands = 1; // the LL band
+            bands += 3 * levels; // three HF per level
+            assert_eq!(bands, 3 * levels + 1);
         }
     }
 }

@@ -21,6 +21,16 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   derivation from a real bitstream rides the gated coefficient path, but
   the table-build given a known `clip_input` is exact; no docs gap in
   the builder. 6 new unit tests (lib count 862 → 868).
+- **Indeo 5 (`IV50`) multi-level plane recomposition** (`indeo5::wavelet::
+  recompose_plane` + `LevelBands`, `spec/06 §3.4`/`§4.1`) — the bottom-up
+  multi-level orchestration over `recompose_level`: given the innermost
+  LL band plus the per-level `(hl, lh, hh)` high-frequency triples
+  ordered innermost-to-outermost, it folds each level's three HF bands
+  into the running low-low band (innermost first), doubling both plane
+  axes per level. A 0-level plane returns its single LL band verbatim
+  (`spec/06 §3.4`), a 1-level plane doubles once, a 2-level plane doubles
+  twice — matching the `spec/02 §1.5` `3·levels + 1` band count. 4 new
+  unit tests.
 - **Indeo 5 (`IV50`) CDF 5/3 wavelet recomposition** (`indeo5::wavelet`,
   `spec/06 §3`/`§4`) — the LeGall 5/3 synthesis filter that recomposes a
   plane's `1 + 3·levels` wavelet bands back into the plane-resolution

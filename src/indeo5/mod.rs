@@ -57,4 +57,4 @@ pub use header::{
 };
 pub use level_table::{build_level_table, level_value, LEVEL_TABLE_LEN};
 pub use picture::{PictureError, PictureHeader};
-pub use wavelet::{recompose_level, synth_1d, Band};
+pub use wavelet::{recompose_level, recompose_plane, synth_1d, Band, LevelBands};
