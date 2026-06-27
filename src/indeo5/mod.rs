@@ -26,6 +26,7 @@
 
 mod band;
 mod bitreader;
+mod codebook;
 mod frame;
 mod gop;
 mod header;
@@ -34,6 +35,10 @@ mod picture;
 
 pub use band::{BandError, BandFlags, BandHeader, DEFAULT_RV_TAB_SEL, MAX_RV_CORR};
 pub use bitreader::{BitReader, BitReaderError, MAX_READ_BITS};
+pub use codebook::{
+    Codebook, CodebookError, Codeword, HuffContext, BLOCK_HUFF_PRESETS, DEFAULT_PRESET_ID,
+    MAX_ROWS, MB_HUFF_PRESETS,
+};
 pub use frame::{FrameError, FrameFlags, FrameHeader, GopTrailer, HuffDesc};
 pub use gop::{
     BandInfo, DecompLevels, GopError, GopFlags, GopHeader, Subsampling, TransformId, Transparency,

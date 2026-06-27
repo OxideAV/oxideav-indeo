@@ -8,6 +8,34 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) canonical-Huffman codebooks** (`indeo5::codebook`,
+  `spec/04 §1`/`§3.2`/`§4.3`) — the shared entropy primitive the
+  per-MB header VLCs (`spec/03 §4`) and the per-block coefficient stream
+  (`spec/05`) both invoke. `Codebook::build` performs the standard
+  left-to-right canonical-Huffman assignment from a per-row bit-length
+  descriptor (a `0` length is a skipped symbol hole, `spec/04 §3.2`),
+  producing the ascending `(length, code)` codeword set; `Codebook::decode`
+  walks an LSB-first `BitReader` one bit at a time, matching the running
+  codeword against the assigned set (a prefix-free guarantee makes the
+  first match unique). `from_preset` / `from_huff_desc` route a
+  `HuffDesc` (preset id / inline custom / implicit default 7) to a
+  codebook, and `HuffContext` carries the mb-vs-block context.
+  `MB_HUFF_PRESETS` (Table A, `spec/04 §1.5`) and `BLOCK_HUFF_PRESETS`
+  (Table B, `spec/04 §1.4`) vendor the eight preset row-length records
+  per context as documented numeric data. **Reported docs gap:** the
+  preset records as listed in §1.4/§1.5 are not Kraft-valid per-row
+  bit-length codebooks (scaled Kraft sums ≠ `2^max` for most records),
+  and the §3.2 builder — itself documented as deduced from `mov`
+  patterns, with a 4-byte table entry carrying up to three symbols per
+  10-bit prefix — uses a non-plain-prefix-free assignment whose exact
+  code-space rule needs a dump of the populated 4 KB table (`spec/04 §6`
+  item 8, an Extractor-round subject). `build` therefore implements the
+  standard rule (correct for the encoder's inline custom descriptors)
+  and reports `Oversubscribed` for a non-Kraft-valid descriptor rather
+  than inventing the multi-symbol semantics; `raw_preset` / `kraft_scaled`
+  expose the records + the validity diagnostic for the cross-check. 14
+  new unit tests (`cargo test -p oxideav-indeo` lib count rises to 846,
+  was 832).
 - **Indeo 5 (`IV50`) decode bootstrap** (`indeo5` module) — the
   wavelet-based Indeo 5 codec begins its clean-room decode stack from
   the staged spec under `docs/video/indeo/indeo5/spec/`, built bottom
