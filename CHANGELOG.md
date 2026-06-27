@@ -8,6 +8,19 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) per-cell saturation clipping table**
+  (`indeo5::clip_table`, `spec/06 §5.3`, audit-corrected per `audit/00
+  §3.3`) — the 48-byte per-MB clipping lookup built at the per-block
+  prologue (`IR50_32.DLL!0x1001f421..0x1001f452`) that saturates a
+  reconstructed coefficient into the displayable pixel band.
+  `build_clip_table(clip_input)` materialises the §5.3 loop
+  (`clamp(clip_input + eax + 0x18, 0, 0x17)`, un-bias, centre on `0x80`)
+  over the counter `eax ∈ [-0x30, 0)`; `clip_lookup` does the masked
+  lookup. The `clip_input` (per-MB combined shift
+  `band_glob_quant + mb_qdelta`, `spec/06 §5.2`) is a parameter — its
+  derivation from a real bitstream rides the gated coefficient path, but
+  the table-build given a known `clip_input` is exact; no docs gap in
+  the builder. 6 new unit tests (lib count 862 → 868).
 - **Indeo 5 (`IV50`) CDF 5/3 wavelet recomposition** (`indeo5::wavelet`,
   `spec/06 §3`/`§4`) — the LeGall 5/3 synthesis filter that recomposes a
   plane's `1 + 3·levels` wavelet bands back into the plane-resolution

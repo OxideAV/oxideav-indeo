@@ -26,6 +26,7 @@
 
 mod band;
 mod bitreader;
+mod clip_table;
 mod codebook;
 mod frame;
 mod gop;
@@ -37,6 +38,10 @@ mod wavelet;
 
 pub use band::{BandError, BandFlags, BandHeader, DEFAULT_RV_TAB_SEL, MAX_RV_CORR};
 pub use bitreader::{BitReader, BitReaderError, MAX_READ_BITS};
+pub use clip_table::{
+    build_clip_table, clip_lookup, CLIP_BIAS, CLIP_LOWER, CLIP_PIXEL_CENTRE, CLIP_TABLE_LEN,
+    CLIP_UPPER,
+};
 pub use codebook::{
     Codebook, CodebookError, Codeword, HuffContext, BLOCK_HUFF_PRESETS, DEFAULT_PRESET_ID,
     MAX_ROWS, MB_HUFF_PRESETS,
