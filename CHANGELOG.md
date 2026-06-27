@@ -8,6 +8,18 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) per-band tile geometry** (`indeo5::tile`, `spec/02
+  §4.1`/`§4.2`) — the structural tile grid each band is partitioned into
+  before per-tile coefficient decode. `tile_count(picture_dim,
+  slice_dim)` derives the per-axis count `ceil(picture / slice)`
+  (`spec/02 §4.1`: 352×288 / 64 → 6×5); `TileGrid::build(band_w, band_h,
+  count_x, count_y)` lays out the per-tile `(col, row, x, y, width,
+  height)` rectangles in `spec/02 §4.4` raster order, with the `spec/02
+  §4.2` last-column / bottom-row remainder so the tiles cover the band
+  exactly; `TileGrid::tile(col, row)` does the grid lookup. The per-tile
+  coefficient data-size header (`spec/02 §4.3`) + the coefficient stream
+  are the gated `spec/03+`/`spec/05+` scope and are not parsed here. 10
+  new unit tests (lib count 872 → 882).
 - **Indeo 5 (`IV50`) per-cell saturation clipping table**
   (`indeo5::clip_table`, `spec/06 §5.3`, audit-corrected per `audit/00
   §3.3`) — the 48-byte per-MB clipping lookup built at the per-block
