@@ -34,11 +34,60 @@ stack now parses end-to-end:
   stack and dispatching by frame type (spec/01 §3.5).
 - `indeo5::pic_size` — the spec/02 §1.6 standard picture-size tables.
 
-What is **not** yet implemented for Indeo 5: the per-tile coefficient
-stream, the inverse Slant transform, and the wavelet recomposition
-that turn parsed headers into pixels (spec/05–spec/08 — the next
-milestones). Indeo 5 is decode-only and not yet registered into the
-codec registry (no frames are produced yet).
+On top of the header stack, the **entropy + transform primitives** the
+per-tile coefficient path will consume now land as self-contained,
+spec-backed units:
+
+- `indeo5::Codebook` — the shared canonical-Huffman codebook (spec/04
+  §1/§3.2/§4.3) the per-MB header VLCs and the per-block coefficient
+  stream both invoke: `build` runs the standard left-to-right canonical
+  assignment from a per-row bit-length descriptor, `decode` walks the
+  LSB-first reader. `MB_HUFF_PRESETS` / `BLOCK_HUFF_PRESETS` vendor the
+  eight preset records per context as documented numeric data. **The
+  preset records are not Kraft-valid under the standard rule** (a
+  reported docs-gap — see below); `build` is correct for the encoder's
+  inline custom descriptors and the Kraft-valid case.
+- `indeo5::build_level_table` — the spec/04 §3.4 256-byte level
+  zig-zag-folded signed-byte lookup the per-block decoder maps codeword
+  indices through.
+- `indeo5::synth_1d` / `recompose_level` / `recompose_plane` — the
+  spec/06 §3/§4 CDF 5/3 (LeGall) wavelet synthesis: the §3.3 lifting
+  form with §4.2 mirror-reflection boundaries, the §4.1 separable 2D
+  recompose over four band quadrants, and the §3.4 bottom-up multi-level
+  plane recompose (0/1/2-level decomposition → full plane).
+- `indeo5::build_clip_table` — the spec/06 §5.3 48-byte per-cell
+  saturation clipping table (audit-corrected storage per audit/00 §3.3).
+- `indeo5::TileGrid` — the spec/02 §4.1/§4.2 per-band tile grid (the
+  per-axis `ceil(picture / slice)` count + the per-tile rectangle layout
+  with the last-column / bottom-row remainder).
+
+What is **not** yet implemented for Indeo 5: the entropy-fused per-block
+inverse Slant transform itself (spec/06 §2 — gated, see docs-gaps), the
+per-tile coefficient stream that drives it (spec/05), and the
+inter-frame motion-compensation predictor (spec/07). The synthesis +
+table primitives above operate on caller-supplied band / coefficient
+buffers and stop at their documented chapter boundary. Indeo 5 is
+decode-only and not yet registered into the codec registry (no frames
+are produced end-to-end yet).
+
+### Indeo 5 reported docs-gaps
+
+- **Preset Huffman-descriptor Kraft anomaly** (spec/04 §1.4/§1.5 vs
+  §3.2). The eight preset row-length records per context, as listed in
+  the spec, are not Kraft-valid per-row bit-length codebooks under the
+  §3.2 "standard canonical-Huffman" rule (scaled Kraft sums ≠ `2^max`
+  for most records). The §3.2 builder is itself documented as deduced
+  from `mov` patterns, with a 4-byte table entry carrying up to three
+  symbols per 10-bit prefix — a non-plain-prefix-free decode whose exact
+  code-space rule needs a dump of the populated 4 KB lookup table
+  (spec/04 §6 item 8, an Extractor-round subject). `Codebook::build`
+  implements the standard rule and rejects non-Kraft-valid descriptors
+  rather than inventing the multi-symbol semantics.
+- **Entropy-fused per-block inverse Slant** (spec/06 §2). The 192-handler
+  dispatch table, the per-codebook dequantiser scale table at `.data
+  0x10097eb8`, and the page-1 handler-to-slot mapping are partial /
+  Extractor-deferred (spec/06 §6 items 1/2/3/7); the per-block transform
+  cannot be reproduced end-to-end until those tables are dumped.
 
 ### Indeo 3 (`IV31` / `IV32`)
 
