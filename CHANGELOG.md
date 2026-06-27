@@ -8,6 +8,22 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) CDF 5/3 wavelet recomposition** (`indeo5::wavelet`,
+  `spec/06 §3`/`§4`) — the LeGall 5/3 synthesis filter that recomposes a
+  plane's `1 + 3·levels` wavelet bands back into the plane-resolution
+  buffer. `synth_1d(low, high)` runs the `spec/06 §3.3` lifting form
+  (even update `e[i] -= (h[i-1] + h[i] + 2) >> 2`, odd update
+  `o[i] += (e[i] + e[i+1]) >> 1`) with `spec/06 §4.2` mirror-reflection
+  whole-sample boundary extension, doubling the sample count;
+  `recompose_level(ll, hl, lh, hh)` runs the `spec/06 §4.1` separable 2D
+  synthesis (row-pass then column-pass) over four band quadrants into a
+  full-resolution `Band`. This covers the §3/§4 synthesis, which is
+  fully specified independently of the gated, entropy-fused per-block
+  inverse Slant (`spec/06 §2`, whose per-codebook scale tables +
+  handler enumeration are an Extractor docs-gap, `spec/06 §6` items
+  1/2/3/7): it consumes already-inverse-transformed band buffers, the
+  exact contract the §3.5 out-of-place synthesis routine implements. 10
+  new unit tests (lib count 852 → 862).
 - **Indeo 5 (`IV50`) level zig-zag table** (`indeo5::level_table`,
   `spec/04 §3.4`, audit-corrected per `audit/00 §3.2`) — the shared
   256-byte level-magnitude lookup the per-block coefficient decoder

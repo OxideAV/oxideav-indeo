@@ -33,6 +33,7 @@ mod header;
 mod level_table;
 pub mod pic_size;
 mod picture;
+mod wavelet;
 
 pub use band::{BandError, BandFlags, BandHeader, DEFAULT_RV_TAB_SEL, MAX_RV_CORR};
 pub use bitreader::{BitReader, BitReaderError, MAX_READ_BITS};
@@ -51,3 +52,4 @@ pub use header::{
 };
 pub use level_table::{build_level_table, level_value, LEVEL_TABLE_LEN};
 pub use picture::{PictureError, PictureHeader};
+pub use wavelet::{recompose_level, synth_1d, Band};
