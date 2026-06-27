@@ -8,6 +8,16 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) level zig-zag table** (`indeo5::level_table`,
+  `spec/04 §3.4`, audit-corrected per `audit/00 §3.2`) — the shared
+  256-byte level-magnitude lookup the per-block coefficient decoder
+  consumes (`spec/04 §4.3`). `build_level_table()` materialises it from
+  the §3.4 recurrence (odd `i` → `-0x80 - i/2`, even `i` → `i/2 - 0x80`,
+  truncated to a signed byte so the over-`-128` odd values fold into the
+  positive range — the "zig-zag fold"); `level_value` does the masked
+  lookup. The on-disk bytes are zero (PE-loader zero-fill) so the table
+  is built at runtime from the fully-specified algorithm — no docs gap.
+  6 new unit tests (lib count 846 → 852).
 - **Indeo 5 (`IV50`) canonical-Huffman codebooks** (`indeo5::codebook`,
   `spec/04 §1`/`§3.2`/`§4.3`) — the shared entropy primitive the
   per-MB header VLCs (`spec/03 §4`) and the per-block coefficient stream

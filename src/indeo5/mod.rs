@@ -30,6 +30,7 @@ mod codebook;
 mod frame;
 mod gop;
 mod header;
+mod level_table;
 pub mod pic_size;
 mod picture;
 
@@ -48,4 +49,5 @@ pub use header::{
     FormatDescriptor, FrameType, HeaderError, PictureStart, MAGIC_ALTERNATE, MAGIC_CANONICAL,
     MIN_HEIGHT, MIN_WIDTH, PICTURE_START_CODE,
 };
+pub use level_table::{build_level_table, level_value, LEVEL_TABLE_LEN};
 pub use picture::{PictureError, PictureHeader};
