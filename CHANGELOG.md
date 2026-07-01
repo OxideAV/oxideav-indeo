@@ -8,6 +8,17 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) output-stage plane record set + iteration order**
+  (`indeo5::planes`, `spec/08 §1.1`/`§1.3`) — the three-plane output
+  bookkeeping. `PlaneRole` (`Luma`/`ChromaV`/`ChromaU`) with
+  `record_index()` maps the `spec/08 §1.1` `Y, V, U` record layout
+  (`[ebx+0x17c]`/`[ebx+0x1b0]`/`[ebx+0x1e4]`); `PLANE_RECORD_ORDER` and
+  `OUTPUT_ITERATION_ORDER` vendor the layout order and the `spec/08 §1.3`
+  reverse `U → V → Y` writer walk. `num_bands(levels)` gives the per-plane
+  band count `3·levels + 1` (`spec/02 §1.5`: 1/4/7) that selects the
+  `spec/08 §3.1` writer path. `FramePlanes` holds the three
+  `OutputPlane`s and `iter_output_order()` yields them in the `U → V → Y`
+  order the host writer consumes. 6 new unit tests (lib count 898 → 904).
 - **Indeo 5 (`IV50`) output-stage chroma subsampling + upsampling**
   (`indeo5::chroma`, `spec/08 §3.5`/`§5.1`/`§5.2`) — the chroma output
   path. `ChromaSubsampling` models the two ratios the GOP `gop_flags`

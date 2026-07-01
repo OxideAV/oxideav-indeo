@@ -36,6 +36,7 @@ mod level_table;
 mod output;
 pub mod pic_size;
 mod picture;
+mod planes;
 mod tile;
 mod wavelet;
 
@@ -65,5 +66,6 @@ pub use output::{
     OUTPUT_SHIFT, PLANE_STRIDE_ALIGN,
 };
 pub use picture::{PictureError, PictureHeader};
+pub use planes::{num_bands, FramePlanes, PlaneRole, OUTPUT_ITERATION_ORDER, PLANE_RECORD_ORDER};
 pub use tile::{tile_count, Tile, TileGrid};
 pub use wavelet::{recompose_level, recompose_plane, synth_1d, Band, LevelBands};
