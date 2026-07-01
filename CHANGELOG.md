@@ -8,6 +8,18 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) output-stage chroma subsampling + upsampling**
+  (`indeo5::chroma`, `spec/08 §3.5`/`§5.1`/`§5.2`) — the chroma output
+  path. `ChromaSubsampling` models the two ratios the GOP `gop_flags`
+  bit 1 selects (`Yvu9` 4:1:0, the dominant `chroma_levels = 0` mode;
+  `Yv12` 4:2:0); `chroma_dims(luma_w, luma_h)` derives the subsampled
+  plane size `ceil(luma / scale)` (`spec/08 §5.1`, the `+3`/`+1`
+  rounding bias). `upsample_chroma` box-filter-replicates a subsampled
+  chroma `OutputPlane` up to luma resolution: every luma position
+  `(x, y)` reads chroma `(x >> shift, y >> shift)` with no interpolation
+  (`spec/08 §5.2` top-left-cosited box filter, sharp step at the
+  subsample boundary), rejecting a mis-sized chroma plane. 8 new unit
+  tests (lib count 890 → 898).
 - **Indeo 5 (`IV50`) output-stage per-plane bias-and-clamp**
   (`indeo5::output`, `spec/08 §1.1`/`§3.3`) — the first landed piece of
   the `spec/08` output-reconstruction chapter (previously code-less).

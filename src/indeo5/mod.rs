@@ -26,6 +26,7 @@
 
 mod band;
 mod bitreader;
+mod chroma;
 mod clip_table;
 mod codebook;
 mod frame;
@@ -40,6 +41,7 @@ mod wavelet;
 
 pub use band::{BandError, BandFlags, BandHeader, DEFAULT_RV_TAB_SEL, MAX_RV_CORR};
 pub use bitreader::{BitReader, BitReaderError, MAX_READ_BITS};
+pub use chroma::{upsample_chroma, ChromaSubsampling};
 pub use clip_table::{
     build_clip_table, clip_lookup, CLIP_BIAS, CLIP_LOWER, CLIP_PIXEL_CENTRE, CLIP_TABLE_LEN,
     CLIP_UPPER,
