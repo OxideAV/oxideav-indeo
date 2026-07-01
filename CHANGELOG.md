@@ -8,6 +8,21 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) output-format dispatch** (`indeo5::format`,
+  `spec/08 §2.2`/`§2.3`/`§5.3`) — the host-output-format routing.
+  `OutputFormat` (`Yvu9`/`Yuy2`/`Yv12`/`I420`/`Rgb`) with
+  `from_fourcc(biCompression)` routes the five FOURCCs the
+  `ICDecompressBegin` dispatch accepts (`IF09`/`YVU9` → `Yvu9`, `YUY2`,
+  `YV12`, `I420`/`IYUV`, `BI_RGB` → `Rgb`); the FOURCC constants
+  (`FOURCC_IF09` `0x39304649` … `FOURCC_YUY2` `0x32595559`) are vendored
+  and ASCII-verified. `selector()`/`from_selector()` map the codec-
+  instance `[ebx+0x70]` value (1..5, `spec/08 §2.2`); `chroma_layout()`
+  gives the `spec/08 §5.3` host layout (4:1:0/4:2:0 planar, 4:2:2 packed,
+  RGB); `subsampling()` the decode-internal ratio; `plane_order()` the
+  `spec/08 §5.3` planar order with the I420 U/V swap vs YV12. The RGB
+  pixel conversion stays gated on the docs-gapped YUV→RGB LUT
+  (`spec/08 §9.1`) — this module routes to `Rgb` but does not convert.
+  9 new unit tests (lib count 904 → 913).
 - **Indeo 5 (`IV50`) output-stage plane record set + iteration order**
   (`indeo5::planes`, `spec/08 §1.1`/`§1.3`) — the three-plane output
   bookkeeping. `PlaneRole` (`Luma`/`ChromaV`/`ChromaU`) with

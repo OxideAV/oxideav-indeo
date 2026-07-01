@@ -29,6 +29,7 @@ mod bitreader;
 mod chroma;
 mod clip_table;
 mod codebook;
+mod format;
 mod frame;
 mod gop;
 mod header;
@@ -50,6 +51,10 @@ pub use clip_table::{
 pub use codebook::{
     Codebook, CodebookError, Codeword, HuffContext, BLOCK_HUFF_PRESETS, DEFAULT_PRESET_ID,
     MAX_ROWS, MB_HUFF_PRESETS,
+};
+pub use format::{
+    ChromaLayout, OutputFormat, BI_RGB, FOURCC_I420, FOURCC_IF09, FOURCC_IYUV, FOURCC_YUY2,
+    FOURCC_YV12, FOURCC_YVU9,
 };
 pub use frame::{FrameError, FrameFlags, FrameHeader, GopTrailer, HuffDesc};
 pub use gop::{
