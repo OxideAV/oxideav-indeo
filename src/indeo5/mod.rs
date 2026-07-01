@@ -35,6 +35,7 @@ mod gop;
 mod header;
 mod level_table;
 mod output;
+mod pack;
 pub mod pic_size;
 mod picture;
 mod planes;
@@ -70,6 +71,7 @@ pub use output::{
     bias_and_clamp, plane_stride, OutputError, OutputPlane, ReconstructionPlane, OUTPUT_BIAS,
     OUTPUT_SHIFT, PLANE_STRIDE_ALIGN,
 };
+pub use pack::{pack_planar, HostBuffer, PlanePlacement};
 pub use picture::{PictureError, PictureHeader};
 pub use planes::{num_bands, FramePlanes, PlaneRole, OUTPUT_ITERATION_ORDER, PLANE_RECORD_ORDER};
 pub use tile::{tile_count, Tile, TileGrid};

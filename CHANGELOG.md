@@ -8,6 +8,17 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) planar host-buffer packing** (`indeo5::pack`,
+  `spec/08 §5.3`/`§6.2`) — the per-plane writers' planar concatenation.
+  `pack_planar(planes, format)` lays the three reconstructed planes into
+  a `HostBuffer` in the format's `spec/08 §5.3` plane order — `Y, V, U`
+  for `Yvu9`/`Yv12`, `Y, U, V` for `I420` (the U/V swap) — each at its
+  native resolution, and records the per-plane byte-offset triple
+  (`spec/08 §3.6` `[ebx+0x10..0x18]`) as `PlanePlacement`s;
+  `HostBuffer::plane_bytes(role)` locates any plane. The packed `Yuy2`
+  (`Y0 U Y1 V` sampling deferred, `spec/08 §9.4`) and RGB (LUT-gated,
+  `spec/08 §9.1`) formats return `None`. 6 new unit tests (lib count
+  913 → 919).
 - **Indeo 5 (`IV50`) output-format dispatch** (`indeo5::format`,
   `spec/08 §2.2`/`§2.3`/`§5.3`) — the host-output-format routing.
   `OutputFormat` (`Yvu9`/`Yuy2`/`Yv12`/`I420`/`Rgb`) with
