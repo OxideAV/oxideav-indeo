@@ -32,6 +32,7 @@ mod frame;
 mod gop;
 mod header;
 mod level_table;
+mod output;
 pub mod pic_size;
 mod picture;
 mod tile;
@@ -57,6 +58,10 @@ pub use header::{
     MIN_HEIGHT, MIN_WIDTH, PICTURE_START_CODE,
 };
 pub use level_table::{build_level_table, level_value, LEVEL_TABLE_LEN};
+pub use output::{
+    bias_and_clamp, plane_stride, OutputError, OutputPlane, ReconstructionPlane, OUTPUT_BIAS,
+    OUTPUT_SHIFT, PLANE_STRIDE_ALIGN,
+};
 pub use picture::{PictureError, PictureHeader};
 pub use tile::{tile_count, Tile, TileGrid};
 pub use wavelet::{recompose_level, recompose_plane, synth_1d, Band, LevelBands};

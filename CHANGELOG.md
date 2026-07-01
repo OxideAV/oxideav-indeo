@@ -8,6 +8,23 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) output-stage per-plane bias-and-clamp**
+  (`indeo5::output`, `spec/08 §1.1`/`§3.3`) — the first landed piece of
+  the `spec/08` output-reconstruction chapter (previously code-less).
+  After wavelet recomposition (`spec/06 §3`) each plane is a signed
+  16-bit per-pixel reconstruction buffer; the eight per-plane writer
+  kernels share the `spec/08 §3.3` conversion
+  `output_byte = ((coeff + 0x200) >> 2) & 0xff` (the `+512` signed→
+  unsigned recentre + 10-bit→8-bit downshift, no explicit saturation).
+  `bias_and_clamp(coeff)` is the per-pixel kernel; `plane_stride(width)`
+  is the `spec/08 §1.1` 32-byte-padded reconstruction stride
+  `(width + 0x1f) & ~0x1f`; `ReconstructionPlane` carries the padded
+  signed buffer and `to_output_plane()` applies the conversion to every
+  visible sample while dropping the right-edge stride padding, yielding
+  a tightly-packed `OutputPlane`. Operates on caller-supplied
+  reconstruction buffers (the wavelet-synthesis contract), independent
+  of the gated coefficient-decode path. 8 new unit tests (lib count
+  882 → 890).
 - **Indeo 5 (`IV50`) per-band tile geometry** (`indeo5::tile`, `spec/02
   §4.1`/`§4.2`) — the structural tile grid each band is partitioned into
   before per-tile coefficient decode. `tile_count(picture_dim,
