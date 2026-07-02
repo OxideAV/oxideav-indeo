@@ -8,6 +8,18 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) frame / band checksum parse-and-store**
+  (`indeo5::checksum`, `spec/08 §7`) — the wiki-documented
+  `frm_checksum` / `band_checksum` fields, which the shipping decoder
+  reads and stores but **never verifies** ("debugging purposes only",
+  `spec/08 §7.3`). `frame_checksum_present(frame_flags)` gates on
+  `frame_flags` bit 4 (`FRAME_CHECKSUM_FLAG` `0x10`);
+  `parse_frame_checksum` reads the gated 16-bit LSB-first value (no bits
+  consumed when absent); `parse_band_checksum` reads the per-band 1-bit
+  `checksum_flag` then the optional 16-bit value. `ChecksumField::in_range`
+  models the `spec/08 §7.1` `cmp .., 0xffff; ja error` range guard and
+  `enforced()` is always `false` (store-only, `spec/08 §7.4`). No
+  checksum arithmetic. 6 new unit tests (lib count 919 → 925).
 - **Indeo 5 (`IV50`) planar host-buffer packing** (`indeo5::pack`,
   `spec/08 §5.3`/`§6.2`) — the per-plane writers' planar concatenation.
   `pack_planar(planes, format)` lays the three reconstructed planes into

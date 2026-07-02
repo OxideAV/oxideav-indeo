@@ -26,6 +26,7 @@
 
 mod band;
 mod bitreader;
+mod checksum;
 mod chroma;
 mod clip_table;
 mod codebook;
@@ -44,6 +45,10 @@ mod wavelet;
 
 pub use band::{BandError, BandFlags, BandHeader, DEFAULT_RV_TAB_SEL, MAX_RV_CORR};
 pub use bitreader::{BitReader, BitReaderError, MAX_READ_BITS};
+pub use checksum::{
+    frame_checksum_present, parse_band_checksum, parse_frame_checksum, ChecksumField,
+    FRAME_CHECKSUM_FLAG,
+};
 pub use chroma::{upsample_chroma, ChromaSubsampling};
 pub use clip_table::{
     build_clip_table, clip_lookup, CLIP_BIAS, CLIP_LOWER, CLIP_PIXEL_CENTRE, CLIP_TABLE_LEN,
