@@ -8,6 +8,20 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) decoder finalisation** (`indeo5::finalise`,
+  `spec/08 §6.3`/`§8.1`/`§8.2`/`§8.5`) — the post-host-write cleanup
+  decisions. `DecodeReturn` models the three `ICDecompress` return codes
+  (`Ok`=0, `BadFormat`=2, `FrameSkipped`=5, `spec/08 §8.5`);
+  `reference_rotation(frame_type)` maps the `spec/08 §8.1` 4-entry jump
+  table (`Promote` for INTRA/INTER, `PromoteWithChromaSwap` for
+  DROPPABLE_INTER_SCAL, `NoPromote` for DROPPABLE_INTER / NULL);
+  `frame_produces_output` gates the NULL no-output path (`spec/08 §6.4`);
+  `OUTPUT_WRITTEN_FLAG`/`mark_output_written`/`is_output_written` model
+  the `spec/08 §8.2` `[ebx+0x128]` bit-26 fast-skip guard; and
+  `output_row_order(format)` gives the `spec/08 §6.3` row order
+  (top-down for YUV, bottom-up for RGB per the BMP `biHeight`
+  convention). Table-free; reuses the `spec/01` `FrameType`. 5 new unit
+  tests (lib count 925 → 930).
 - **Indeo 5 (`IV50`) frame / band checksum parse-and-store**
   (`indeo5::checksum`, `spec/08 §7`) — the wiki-documented
   `frm_checksum` / `band_checksum` fields, which the shipping decoder

@@ -30,6 +30,7 @@ mod checksum;
 mod chroma;
 mod clip_table;
 mod codebook;
+mod finalise;
 mod format;
 mod frame;
 mod gop;
@@ -57,6 +58,10 @@ pub use clip_table::{
 pub use codebook::{
     Codebook, CodebookError, Codeword, HuffContext, BLOCK_HUFF_PRESETS, DEFAULT_PRESET_ID,
     MAX_ROWS, MB_HUFF_PRESETS,
+};
+pub use finalise::{
+    frame_produces_output, is_output_written, mark_output_written, output_row_order,
+    reference_rotation, DecodeReturn, ReferenceRotation, RowOrder, OUTPUT_WRITTEN_FLAG,
 };
 pub use format::{
     ChromaLayout, OutputFormat, BI_RGB, FOURCC_I420, FOURCC_IF09, FOURCC_IYUV, FOURCC_YUY2,
