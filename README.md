@@ -61,14 +61,53 @@ spec-backed units:
   per-axis `ceil(picture / slice)` count + the per-tile rectangle layout
   with the last-column / bottom-row remainder).
 
+On top of the synthesis primitives, the **spec/08 output-reconstruction
+stage** now lands as a self-contained subsystem — the path from a
+recomposed signed-16-bit plane to a host YUV buffer, all table-free and
+independent of the gated coefficient path:
+
+- `indeo5::ReconstructionPlane` / `bias_and_clamp` / `plane_stride`
+  (spec/08 §1.1/§3.3) — the per-pixel signed→unsigned conversion the
+  eight per-plane writer kernels share
+  (`((coeff + 0x200) >> 2) & 0xff`), over the 32-byte-padded
+  reconstruction stride, producing a tightly-packed `OutputPlane`.
+- `indeo5::ChromaSubsampling` / `upsample_chroma` (spec/08 §3.5/§5) —
+  the 4:1:0 / 4:2:0 chroma dimensions and the top-left-cosited 4×4 / 2×2
+  box-filter upsample to luma resolution.
+- `indeo5::PlaneRole` / `FramePlanes` (spec/08 §1.1/§1.3) — the `Y, V, U`
+  record layout and the `U → V → Y` output-writer iteration order.
+- `indeo5::OutputFormat` (spec/08 §2.2/§2.3/§5.3) — the five-way
+  host-format FOURCC routing (`IF09`/`YVU9`, `YUY2`, `YV12`, `I420`,
+  RGB), the `[ebx+0x70]` selector, and the per-format chroma layout /
+  planar plane order (incl. the I420 U/V swap).
+- `indeo5::pack_planar` (spec/08 §5.3/§6.2) — the planar host-buffer
+  concatenation with the per-plane byte-offset triple.
+- `indeo5::assemble_frame` (spec/08 §1/§3.3/§5/§6.2) — the whole-frame
+  top-level thread: three signed reconstruction planes → chroma-geometry
+  validation (§5.1) → per-plane bias-and-clamp in `U → V → Y` order →
+  packed planar `HostBuffer`.
+- `indeo5::parse_frame_checksum` / `parse_band_checksum` (spec/08 §7) —
+  the `frm_checksum` / `band_checksum` parse-and-store (never verified,
+  "debugging only").
+- `indeo5::DecodeReturn` / `reference_rotation` / `output_row_order`
+  (spec/08 §6.3/§8) — the `ICDecompress` return codes, the per-frame
+  reference-buffer rotation, the bit-26 output-written flag, and the
+  top-down (YUV) / bottom-up (RGB) row order.
+- `indeo5::tables` (spec/05 §4.1 / spec/06 §5.1 / spec/08 §3.2,
+  audit-corrected) — the numeric static tables extracted from the
+  binary's on-disk `.data` regions (Extractor round 9 / Auditor
+  round 10): `VLC_END` `[2, 4, 8, 12]`, the `[6, -7, 42]` wavelet-synth
+  constants, and the 60-entry `DEQUANT_SCALE_BITS` per-codebook FP scale
+  table (byte-exact IEEE-754 bit patterns).
+
 What is **not** yet implemented for Indeo 5: the entropy-fused per-block
 inverse Slant transform itself (spec/06 §2 — gated, see docs-gaps), the
 per-tile coefficient stream that drives it (spec/05), and the
-inter-frame motion-compensation predictor (spec/07). The synthesis +
-table primitives above operate on caller-supplied band / coefficient
-buffers and stop at their documented chapter boundary. Indeo 5 is
-decode-only and not yet registered into the codec registry (no frames
-are produced end-to-end yet).
+inter-frame motion-compensation predictor (spec/07). The synthesis,
+output-stage, and table primitives above operate on caller-supplied
+band / coefficient / plane buffers and stop at their documented chapter
+boundary. Indeo 5 is decode-only and not yet registered into the codec
+registry (no frames are produced end-to-end yet).
 
 ### Indeo 5 reported docs-gaps
 
@@ -84,10 +123,15 @@ are produced end-to-end yet).
   implements the standard rule and rejects non-Kraft-valid descriptors
   rather than inventing the multi-symbol semantics.
 - **Entropy-fused per-block inverse Slant** (spec/06 §2). The 192-handler
-  dispatch table, the per-codebook dequantiser scale table at `.data
-  0x10097eb8`, and the page-1 handler-to-slot mapping are partial /
-  Extractor-deferred (spec/06 §6 items 1/2/3/7); the per-block transform
-  cannot be reproduced end-to-end until those tables are dumped.
+  dispatch table lives in the `.data` BSS tail (zero on disk, populated
+  by 192 inline init-time writes per audit/00 §2 site 7) and the page-1
+  handler-to-slot mapping is unenumerated (spec/06 §6 items 2/3/7); the
+  per-block transform cannot be reproduced end-to-end until those are
+  specified. The per-codebook dequantiser scale table **is now
+  extracted** (audit-corrected to the doubles array at `0x10097ed8`,
+  vendored as `indeo5::DEQUANT_SCALE_BITS`), but its
+  `band_glob_quant`→index relationship still rides the gated
+  state-register path (spec/06 §6 item 1).
 
 ### Indeo 3 (`IV31` / `IV32`)
 

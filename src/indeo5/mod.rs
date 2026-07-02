@@ -24,6 +24,7 @@
 //! headers and the per-tile coefficient stream) is parsed by the
 //! later modules as they land.
 
+mod assemble;
 mod band;
 mod bitreader;
 mod checksum;
@@ -45,6 +46,7 @@ mod tables;
 mod tile;
 mod wavelet;
 
+pub use assemble::{assemble_frame, AssembleError};
 pub use band::{BandError, BandFlags, BandHeader, DEFAULT_RV_TAB_SEL, MAX_RV_CORR};
 pub use bitreader::{BitReader, BitReaderError, MAX_READ_BITS};
 pub use checksum::{

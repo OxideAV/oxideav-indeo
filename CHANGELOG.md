@@ -8,6 +8,18 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) whole-frame output assembly** (`indeo5::assemble`,
+  `spec/08 §1`/`§3.3`/`§5`/`§6.2`) — the top-level thread over the
+  landed output stage. `assemble_frame(luma, chroma_v, chroma_u,
+  format)` validates the chroma planes' geometry against the format's
+  subsampling (`spec/08 §5.1` `ceil(luma/scale)`), converts each plane
+  through the §3.3 bias-and-clamp in the §1.3 `U → V → Y` decode order,
+  and packs the planes into the format's `spec/08 §5.3` planar host
+  layout, returning a `HostBuffer`. `AssembleError` rejects non-planar
+  formats (`Yuy2` §9.4 / RGB §9.1 deferrals) and chroma-geometry
+  mismatches with the exact expected dimensions. Closes the
+  reconstruction-plane → host-buffer loop over caller-supplied planes.
+  6 new unit tests (lib count 935 → 941).
 - **Indeo 5 (`IV50`) extracted static data tables** (`indeo5::tables`,
   `spec/05 §4.1`/`spec/06 §5.1`/`spec/08 §3.2`, audit-corrected per
   `audit/00 §2.5`/`§2.6`) — the numeric data tables extracted from the
