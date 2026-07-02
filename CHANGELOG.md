@@ -8,6 +8,22 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) reference-frame buffer-slot rotation**
+  (`indeo5::refbuf`, `spec/07 §1.2`/`§1.3`/`§4.1`/`§4.3`) — the
+  two-frame ping-pong state machine. `RefSlots` models the eight
+  codec-instance slots at `[ebx+0xf4..0x114]` (current / dirty flags /
+  primary / next-current / secondary pair / output) as opaque tokens;
+  `pre_decode(frame_type)` implements the `spec/07 §1.2` `0x1003fbe8`
+  dispatch (INTRA discards references, INTER clears the secondary-dirty
+  flag, DROPPABLE conditionally swaps the secondary pair) and
+  `post_decode(frame_type)` the `spec/07 §1.3` `0x1003fc18` dispatch —
+  INTRA/INTER promote to the primary reference (with the
+  secondary/next-current ping-pong), DROPPABLE_INTER_SCAL swaps then
+  promotes, and DROPPABLE_INTER does **not** promote `next_current`
+  (the `spec/07 §1.5` droppable invariant: no later frame references
+  it, so it can be dropped under load). A sequence test proves the
+  droppable frame never enters the reference rotation. 8 new unit
+  tests (lib count 961 → 969).
 - **Indeo 5 (`IV50`) motion-compensated coefficient-fetch kernels**
   (`indeo5::mc`, `spec/07 §4.4`/`§5.2`/`§5.3`/`§5.5`/`§5.6`) — the four
   MC kernels of the coefficient-layer inter predictor. Indeo 5 predicts

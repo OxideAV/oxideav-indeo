@@ -112,6 +112,11 @@ table-free structural layer is landed:
   kernels over the band-coefficient layer (full-pel add, half-pel X/Y
   two-tap average, 2D half-pel four-sample average) with the §5.5
   residual-add semantics and the §5.6 `& 0xc` no-MC transform-id gate.
+- `indeo5::RefSlots` (spec/07 §1.2/§1.3/§4) — the reference-frame
+  two-frame ping-pong: the eight `[ebx+0xf4..0x114]` slots with the
+  pre-/post-decode per-frame-type rotation dispatches, including the
+  §1.5 droppable invariant (DROPPABLE_INTER never becomes a future
+  reference).
 
 What remains for spec/07: the per-tile MV-inheritance fast path
 (§3.4/§3.5 — needs the per-band `0x3604`/`0x3664` inheritance-MV
