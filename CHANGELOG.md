@@ -8,6 +8,23 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) extracted static data tables** (`indeo5::tables`,
+  `spec/05 §4.1`/`spec/06 §5.1`/`spec/08 §3.2`, audit-corrected per
+  `audit/00 §2.5`/`§2.6`) — the numeric data tables extracted from the
+  binary's on-disk `.data` regions (Extractor round 9 +
+  Auditor round 10), transcribed verbatim from
+  `tables/region_10097eb8*` / `region_10098438.hex`. `VLC_END`
+  `[2, 4, 8, 12]` is the per-codebook `vlcEnd` state-flag table
+  (`0x10097eb8`); `WAVELET_SYNTH_CONSTANTS` `[6, -7, 42]` +
+  `WAVELET_SYNTH_ROUND_BIAS` `128` are the synthesis-kernel `pmullw`
+  operands (`0x10098438`, the audit-refuted-LeGall values);
+  `DEQUANT_SCALE_BITS` is the 60-entry per-codebook dequantiser FP scale
+  table (`0x10097ed8`, IEEE 754 stored as raw LE bit patterns — first
+  entry `0.38196…`, entries 1..49 in `[0.5, 1.7]`, 49.. the `0.99`
+  default fill) with `dequant_scale(i)` reinterpreting to `f64`. These
+  feed the still-gated coefficient / inverse-Slant path (`spec/05`/`06
+  §2`); vendored as documented inputs. 6 new unit tests (lib count
+  929 → 935).
 - **Indeo 5 (`IV50`) decoder finalisation** (`indeo5::finalise`,
   `spec/08 §6.3`/`§8.1`/`§8.2`/`§8.5`) — the post-host-write cleanup
   decisions. `DecodeReturn` models the three `ICDecompress` return codes
@@ -21,7 +38,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `output_row_order(format)` gives the `spec/08 §6.3` row order
   (top-down for YUV, bottom-up for RGB per the BMP `biHeight`
   convention). Table-free; reuses the `spec/01` `FrameType`. 5 new unit
-  tests (lib count 925 → 930).
+  tests (lib count 924 → 929).
 - **Indeo 5 (`IV50`) frame / band checksum parse-and-store**
   (`indeo5::checksum`, `spec/08 §7`) — the wiki-documented
   `frm_checksum` / `band_checksum` fields, which the shipping decoder
@@ -33,7 +50,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `checksum_flag` then the optional 16-bit value. `ChecksumField::in_range`
   models the `spec/08 §7.1` `cmp .., 0xffff; ja error` range guard and
   `enforced()` is always `false` (store-only, `spec/08 §7.4`). No
-  checksum arithmetic. 6 new unit tests (lib count 919 → 925).
+  checksum arithmetic. 6 new unit tests (lib count 918 → 924).
 - **Indeo 5 (`IV50`) planar host-buffer packing** (`indeo5::pack`,
   `spec/08 §5.3`/`§6.2`) — the per-plane writers' planar concatenation.
   `pack_planar(planes, format)` lays the three reconstructed planes into
@@ -44,7 +61,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `HostBuffer::plane_bytes(role)` locates any plane. The packed `Yuy2`
   (`Y0 U Y1 V` sampling deferred, `spec/08 §9.4`) and RGB (LUT-gated,
   `spec/08 §9.1`) formats return `None`. 6 new unit tests (lib count
-  913 → 919).
+  912 → 918).
 - **Indeo 5 (`IV50`) output-format dispatch** (`indeo5::format`,
   `spec/08 §2.2`/`§2.3`/`§5.3`) — the host-output-format routing.
   `OutputFormat` (`Yvu9`/`Yuy2`/`Yv12`/`I420`/`Rgb`) with
@@ -59,7 +76,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `spec/08 §5.3` planar order with the I420 U/V swap vs YV12. The RGB
   pixel conversion stays gated on the docs-gapped YUV→RGB LUT
   (`spec/08 §9.1`) — this module routes to `Rgb` but does not convert.
-  9 new unit tests (lib count 904 → 913).
+  8 new unit tests (lib count 904 → 912).
 - **Indeo 5 (`IV50`) output-stage plane record set + iteration order**
   (`indeo5::planes`, `spec/08 §1.1`/`§1.3`) — the three-plane output
   bookkeeping. `PlaneRole` (`Luma`/`ChromaV`/`ChromaU`) with

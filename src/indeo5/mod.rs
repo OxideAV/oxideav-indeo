@@ -41,6 +41,7 @@ mod pack;
 pub mod pic_size;
 mod picture;
 mod planes;
+mod tables;
 mod tile;
 mod wavelet;
 
@@ -84,5 +85,9 @@ pub use output::{
 pub use pack::{pack_planar, HostBuffer, PlanePlacement};
 pub use picture::{PictureError, PictureHeader};
 pub use planes::{num_bands, FramePlanes, PlaneRole, OUTPUT_ITERATION_ORDER, PLANE_RECORD_ORDER};
+pub use tables::{
+    dequant_scale, DEQUANT_SCALE_BITS, DEQUANT_SCALE_DEFAULT_BITS, DEQUANT_SCALE_LEN, VLC_END,
+    WAVELET_SYNTH_CONSTANTS, WAVELET_SYNTH_ROUND_BIAS,
+};
 pub use tile::{tile_count, Tile, TileGrid};
 pub use wavelet::{recompose_level, recompose_plane, synth_1d, Band, LevelBands};
