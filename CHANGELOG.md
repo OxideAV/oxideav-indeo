@@ -8,6 +8,22 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) motion vectors — packed layout, half-pel mode,
+  predictor** (`indeo5::mv`, `spec/07 §2.1`/`§2.2`/`§2.4`/`§3.2`/`§3.3`)
+  — the first landed piece of the `spec/07` motion-compensation chapter.
+  `Mv` is the one-per-MB signed-byte component pair (`spec/07 §2.1`,
+  `±0x80` range) with the `spec/07 §2.4` packed-slot layout (`Δy` bits
+  0..=7, `Δx` bits 8..=15, `delta_present` bit 23) via
+  `pack`/`unpack`; `resolve_mv(mv, MvResolution)` implements the
+  `spec/07 §2.2` half-pel fold — each component's LSB becomes its
+  half-pel flag (the `ecx & 3` kernel selector `McMode`:
+  full / half-X / half-Y / 2D-half — no true quarter-pel), the
+  arithmetic-shifted remainder the full-pel displacement.
+  `MvPredictor` is the `spec/07 §3.2` **left-neighbour-only** spatial
+  predictor (not a 3-neighbour median) with the `spec/07 §3.3`
+  zero-MV tile-entry reset and the `spec/07 §6.1` skip-inherits-
+  left-neighbour semantics (`decode_mb(Mv::ZERO)`). 10 new unit tests
+  (lib count 941 → 951).
 - **Indeo 5 (`IV50`) whole-frame output assembly** (`indeo5::assemble`,
   `spec/08 §1`/`§3.3`/`§5`/`§6.2`) — the top-level thread over the
   landed output stage. `assemble_frame(luma, chroma_v, chroma_u,

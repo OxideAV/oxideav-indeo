@@ -37,6 +37,7 @@ mod frame;
 mod gop;
 mod header;
 mod level_table;
+mod mv;
 mod output;
 mod pack;
 pub mod pic_size;
@@ -80,6 +81,7 @@ pub use header::{
     MIN_HEIGHT, MIN_WIDTH, PICTURE_START_CODE,
 };
 pub use level_table::{build_level_table, level_value, LEVEL_TABLE_LEN};
+pub use mv::{resolve_mv, McMode, Mv, MvPredictor, MvResolution, ResolvedMv, MV_DELTA_PRESENT};
 pub use output::{
     bias_and_clamp, plane_stride, OutputError, OutputPlane, ReconstructionPlane, OUTPUT_BIAS,
     OUTPUT_SHIFT, PLANE_STRIDE_ALIGN,
