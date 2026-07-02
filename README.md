@@ -100,6 +100,24 @@ independent of the gated coefficient path:
   constants, and the 60-entry `DEQUANT_SCALE_BITS` per-codebook FP scale
   table (byte-exact IEEE-754 bit patterns).
 
+The **spec/07 motion-compensation chapter** has also opened up — its
+table-free structural layer is landed:
+
+- `indeo5::Mv` / `resolve_mv` / `MvPredictor` (spec/07 §2/§3) — the
+  one-per-MB packed MV layout (Δy/Δx signed bytes + `delta_present`),
+  the §2.2 half-pel fold into the `ecx & 3` kernel selector (`McMode`,
+  no true quarter-pel), and the §3.2 left-neighbour-only spatial
+  predictor with the §3.3 zero-MV tile-entry reset.
+- `indeo5::mc_add_block` / `mb_uses_mc` (spec/07 §5) — the four MC
+  kernels over the band-coefficient layer (full-pel add, half-pel X/Y
+  two-tap average, 2D half-pel four-sample average) with the §5.5
+  residual-add semantics and the §5.6 `& 0xc` no-MC transform-id gate.
+
+What remains for spec/07: the per-tile MV-inheritance fast path
+(§3.4/§3.5 — needs the per-band `0x3604`/`0x3664` inheritance-MV
+tables), and threading the fetcher into a real per-MB walk (rides the
+gated spec/03/spec/05 coefficient path).
+
 What is **not** yet implemented for Indeo 5: the entropy-fused per-block
 inverse Slant transform itself (spec/06 §2 — gated, see docs-gaps), the
 per-tile coefficient stream that drives it (spec/05), and the

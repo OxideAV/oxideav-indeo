@@ -8,6 +8,21 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) motion-compensated coefficient-fetch kernels**
+  (`indeo5::mc`, `spec/07 §4.4`/`§5.2`/`§5.3`/`§5.5`/`§5.6`) — the four
+  MC kernels of the coefficient-layer inter predictor. Indeo 5 predicts
+  on the **band-coefficient layer**, not pixels (`spec/07 §4.4`);
+  `mc_add_block` fetches the MV-displaced signed-16-bit reference
+  rectangle, interpolates per `McMode` (full-pel direct; half-pel X/Y
+  two-tap unweighted average `(a+b)>>1`; 2D half-pel four-sample
+  `(a+b+c+d)>>2` — the packed-`paddw`/`psraw` arithmetic with per-lane
+  wrapping and arithmetic shifts, no rounding bias, `spec/07 §5.3`), and
+  **adds** the prediction into the destination (`spec/07 §5.5` residual-
+  add, wrapping like `paddw`). `mb_uses_mc(transform_id)` models the
+  `spec/07 §5.6` `test eax, 0xc` no-MC gate (fully-intra MB within an
+  inter band). Out-of-bounds displaced reads surface as `McError`
+  instead of relying on the `spec/07 §5.4` padding contract. 10 new
+  unit tests (lib count 951 → 961).
 - **Indeo 5 (`IV50`) motion vectors — packed layout, half-pel mode,
   predictor** (`indeo5::mv`, `spec/07 §2.1`/`§2.2`/`§2.4`/`§3.2`/`§3.3`)
   — the first landed piece of the `spec/07` motion-compensation chapter.
