@@ -38,6 +38,7 @@ mod gop;
 mod header;
 mod level_table;
 mod mb;
+mod mb_header;
 mod mc;
 mod mv;
 mod output;
@@ -88,6 +89,9 @@ pub use level_table::{build_level_table, level_value, LEVEL_TABLE_LEN};
 pub use mb::{
     blocks_per_mb, mb_stride, partial_mb_pad_rows, Macroblock, MbBlock, MbGrid, BAND_INDEX_FLAGS,
     BLK_STRIDE_TABLE_A, BLK_STRIDE_TABLE_B, FOUR_BLOCK_X, FOUR_BLOCK_Y, FOUR_BLOCK_Z,
+};
+pub use mb_header::{
+    effective_mb_quant, Cbp, MbContext, MbHeader, MbHeaderError, QdeltaMode, MAX_QUANT,
 };
 pub use mc::{mb_uses_mc, mc_add_block, BandView, McError, MC_TRANSFORM_FLAG_MASK};
 pub use mv::{resolve_mv, McMode, Mv, MvPredictor, MvResolution, ResolvedMv, MV_DELTA_PRESENT};
