@@ -38,15 +38,16 @@ On top of the header stack, the **entropy + transform primitives** the
 per-tile coefficient path will consume now land as self-contained,
 spec-backed units:
 
-- `indeo5::Codebook` — the shared canonical-Huffman codebook (spec/04
-  §1/§3.2/§4.3) the per-MB header VLCs and the per-block coefficient
-  stream both invoke: `build` runs the standard left-to-right canonical
-  assignment from a per-row bit-length descriptor, `decode` walks the
-  LSB-first reader. `MB_HUFF_PRESETS` / `BLOCK_HUFF_PRESETS` vendor the
-  eight preset records per context as documented numeric data. **The
-  preset records are not Kraft-valid under the standard rule** (a
-  reported docs-gap — see below); `build` is correct for the encoder's
-  inline custom descriptors and the Kraft-valid case.
+- `indeo5::Codebook` — the shared Huffman codebook in the **IVI
+  prefix form** (Indeo 4 wiki annex A, deferred to by the Indeo 5
+  page): row `k` codes are `[k ones][0][xbits[k] extras]` with the
+  last row's terminator replaced by an extra bit, so every descriptor
+  is an exactly-complete code (Kraft sum = 1) — this **resolves the
+  formerly-reported spec/04 Kraft anomaly** (the r338 note's
+  anomalous-preset set is exactly what the per-symbol-length
+  misreading produces). Extra bits decode MSB-first
+  (fixture-arbitrated). `MB_HUFF_PRESETS` / `BLOCK_HUFF_PRESETS`
+  vendor the eight preset records per context; all sixteen now build.
 - `indeo5::build_level_table` — the spec/04 §3.4 256-byte level
   zig-zag-folded signed-byte lookup the per-block decoder maps codeword
   indices through.
@@ -136,9 +137,9 @@ staged scope, and the pipeline's middle is now threaded end-to-end:
   and CBP, with the header VLCs zig-zag-folded to signed values.
 - `indeo5::RvTable` / `escape_lindex` / `run_advance` (spec/05
   §2/§4.2) — the per-band run-value mechanism: parallel
-  `(run_add[], lindex[])` arrays, destructive `rv_tab_corr` patching,
-  the three-symbol escape aggregation, and the level fold. Table
-  *contents* are a reported docs-gap.
+  `RV_TABLE_SLOTS` static contents (the r338 `0x100972f4`
+  extraction), the composite `(run, val)` decode, `rv_tab_corr`
+  entry swaps, and the three-symbol escape aggregation.
 - `indeo5::slant` (spec/06 §1/§2) — the SWAR paired-16-bit
   butterfly primitives (`ror 1`/`ror 2`/`ror 0x11`, the `0x7ffc7ffc`
   / `0xfff8fff8` masks), the §2.1 eight-cluster handler taxonomy, the
@@ -148,16 +149,18 @@ staged scope, and the pipeline's middle is now threaded end-to-end:
 On top, **whole frames now decode to pixels**:
 
 - `indeo5::decode_intra_picture` — the spec/02 §4.4 per-frame walk:
-  picture header → per-plane (Y, U, V) band headers → per-tile size
-  headers → per-MB walk → wavelet recompose (LL-innermost band
-  order) → spec/08 bias-and-clamp + planar pack into a `HostBuffer`.
-  Every region the staged spec fully determines produces real pixels
-  (empty bands / empty tiles / skipped MBs / no-AC CBPs → the §3.3
-  mid-grey); the gated elements surface as `DecodeFrontier` records
-  (`CodedBlockData` / `CodebookRequired` / `MvInheritance`) with the
-  explicit-size / `band_data_size` skip paths keeping the parse
-  going. Byte-exact end-to-end integration tests drive CIF YVU9
-  frames to full host buffers.
+  picture header → per-plane band headers → per-tile size headers →
+  the two-phase tile walk (all MB headers, then all coded blocks'
+  `(run, val)` coefficient streams — the fixture-arbitrated split) →
+  wavelet recompose (LL-innermost band order) → spec/08
+  bias-and-clamp + planar pack into a `HostBuffer`. **Both staged
+  real `IV50` INTRA fixtures decode end-to-end**: every band's
+  entropy stream is consumed to byte-exact exhaustion (`BandTrace`),
+  with 1096 coded blocks censused on the 320x240 frame. Zero-
+  coefficient regions produce exact pixels (mid-grey); decoded
+  coefficients are structurally validated but reconstruct as zero
+  pending the scan/dequant/Slant numeric staging. The only remaining
+  frontier is `MvInheritance` (inter tiles in `mv_inherit` bands).
 - `indeo5::Indeo5Decoder` — the multi-frame session: GOP carry, the
   spec/07 §1.2 per-band reference workspace, NULL repeat-previous
   (spec/08 §6.4), the §3.4 frame-number soft-correction, spec/08
@@ -167,56 +170,83 @@ On top, **whole frames now decode to pixels**:
   predictor: zero-MV tile-entry reset, skip-inherits-left MV, and
   the MC copy through `mc_add_block` for decoded non-zero MVs.
 
-What is **not** yet implemented for Indeo 5: the per-block `(run,
-level)` coefficient stream and the entropy-fused inverse Slant it
-drives (gated on the rv-table contents — spec/05 §7 items 1/2/8 —
-and the 192-handler / page-1 enumeration — spec/06 §6 items 2/3/7),
-the Kraft-anomalous preset codebooks (spec/04; the default block
-preset 7 and custom descriptors do build and decode), and the
-per-tile MV-inheritance fast path (spec/07 §3.4/§3.5 — needs the
-per-band `0x3604`/`0x3664` tables). Coded-block regions therefore
-reconstruct as zeros behind a reported frontier. Indeo 5 is
-decode-only and not yet registered into the codec registry.
+What is **not** yet implemented for Indeo 5: pixel reconstruction of
+the decoded coefficients — the per-band scan order, the
+`band_glob_quant` dequantisation scales, and the 8-point inverse
+Slant equations are not yet numerically staged in `docs/` (see the
+docs-gaps below), so coded-block regions reconstruct as zeros while
+their entropy streams are fully decoded and validated; the per-tile
+MV-inheritance fast path (spec/07 §3.4/§3.5 — needs the per-band
+`0x3604`/`0x3664` tables) also remains gated. Indeo 5 is decode-only
+and not yet registered into the codec registry.
 
 ### Indeo 5 reported docs-gaps
 
-- **Preset Huffman-descriptor Kraft anomaly** (spec/04 §1.4/§1.5 vs
-  §3.2). The eight preset row-length records per context, as listed in
-  the spec, are not Kraft-valid per-row bit-length codebooks under the
-  §3.2 "standard canonical-Huffman" rule (scaled Kraft sums ≠ `2^max`
-  for most records). The §3.2 builder is itself documented as deduced
-  from `mov` patterns, with a 4-byte table entry carrying up to three
-  symbols per 10-bit prefix — a non-plain-prefix-free decode whose exact
-  code-space rule needs a dump of the populated 4 KB lookup table
-  (spec/04 §6 item 8, an Extractor-round subject). `Codebook::build`
-  implements the standard rule and rejects non-Kraft-valid descriptors
-  rather than inventing the multi-symbol semantics.
-- **Entropy-fused per-block inverse Slant** (spec/06 §2). The 192-handler
-  dispatch table lives in the `.data` BSS tail (zero on disk, populated
-  by 192 inline init-time writes per audit/00 §2 site 7) and the page-1
-  handler-to-slot mapping is unenumerated (spec/06 §6 items 2/3/7); the
-  per-block transform cannot be reproduced end-to-end until those are
-  specified. The per-codebook dequantiser scale table **is now
-  extracted** (audit-corrected to the doubles array at `0x10097ed8`,
-  vendored as `indeo5::DEQUANT_SCALE_BITS`), but its
-  `band_glob_quant`→index relationship still rides the gated
-  state-register path (spec/06 §6 item 1).
-- **Per-band rv-table contents** (spec/05 §7 items 1/2/8). The eight
-  preset `(run_add[], lindex[])` pairs (`rv_tab_sel = 0..7`), the
-  ninth default slot, and the sibling per-symbol bit-length arrays
-  are runtime-built in the per-instance arena and not yet extracted;
-  the crate implements the lookup / patch / escape *mechanism* over
-  caller-supplied contents.
-- **Per-tile explicit-size semantics** (spec/03 §2.4 vs §2.8). §2.4
-  states the explicit byte count excludes the tile-header bits while
-  the §2.8 reconciliation-and-advance reads as a whole-tile count;
-  the driver applies the §2.8 operational reading and flags the
-  tension for a Specifier/Auditor pass.
-- **Chroma tile-count rule** (spec/02 §4.1 vs spec/03 §1.1). The §4.1
-  `ceil(slice_count * mb_dim / band_dim)` formula and the §1.1
-  worked-example chroma tile counts (1×1 at CIF vs ≈5×4 at 640×480)
-  are mutually inconsistent; the driver uses the luma-consistent
-  `ceil(band_dim / slice_size)` rule and reports the discrepancy.
+Resolved this round (r388, arbitrated against the two staged `IV50`
+INTRA fixtures — every alternative reading fails the byte-exact
+band-exhaustion test):
+
+- **Preset Huffman-descriptor Kraft anomaly** — resolved: the
+  descriptors are IVI prefix-form `xbits` rows, not per-symbol code
+  lengths (see `indeo5::Codebook`). spec/04 §1.3/§3.2's
+  literal-length builder description is an erratum.
+- **Per-band rv-table contents** — resolved by the r338 static
+  extraction (`tables/rv_tables_100972f4.*`), transcribed as
+  `indeo5::RV_TABLE_SLOTS` with the composite decode semantics
+  documented in `indeo5::rv_table` (A = per-run magnitude counts,
+  B = vlc→composite permutation, 0/1 = EOB/ESC markers, values
+  arranged around per-run interval midpoints; `rv_tab_corr` pairs
+  swap entries).
+- **Per-tile explicit-size semantics** (spec/03 §2.4 vs §2.8) —
+  resolved for §2.8: the count spans the whole tile from its first
+  byte (three independent byte-exact tile→band-end chains in the
+  320x240 fixture).
+- **spec/03 §4.5 field order** — erratum: the CBP precedes the
+  qdelta VLC (wiki `value31` < `value33` order), and the
+  single-block CBP flag sense is `1 = coded` (§4.3 case-A pseudocode
+  is inverted). The qdelta/MV VLCs ride the frame-level MB codebook,
+  not the band's block codebook.
+- **Tile payload layout** — the per-tile stream is two-phase (all MB
+  headers, then all coded-block streams; the Indeo 4 wiki
+  "Macroblocks info data" / "Blocks data" split), not interleaved
+  per MB as a spec/03 §5 reading suggests.
+- **Chroma tile-count rule** (spec/02 §4.1 vs spec/03 §1.1) —
+  behaviourally resolved by the r338 fixtures for the un-sliced
+  config (chroma tiles independently per band); the multi-slice
+  formula stays open.
+
+Still open (the numeric material needed for pixel-exact
+reconstruction of coded coefficients):
+
+- **Scan order, dequantisation and the fused inverse Slant**
+  (spec/05 §5.1, spec/06 §2/§5). The per-band scan tables, the
+  `band_glob_quant`→scale mapping, and the per-handler butterfly
+  equations are structurally described but not numerically staged;
+  decoded `(run, val)` streams are therefore validated and counted
+  (`DecodeStats`, `BandTrace`) but reconstruct as zero. An Extractor
+  round staging the scan tables + the dequant base tables (and a
+  Specifier pass on the 8-point Slant equations) closes this.
+- **DC handling for intra blocks.** The 240x180 black-frame fixture
+  decodes with *no* coefficients anywhere (the vendor decoder
+  reproduces `Y=16, U=V=128` for it), so the zero state is pinned;
+  how non-zero DC content is carried (in-stream at scan position 0
+  vs a differential side channel per the Indeo 4 annex-B wording)
+  needs a fixture-backed trace.
+- **Escape value fold + over-256 symbols.** The ESC path's 3-VLC bit
+  structure is pinned by the fixtures (two emissions), the value
+  fold is provisional; custom codebooks wider than 256 symbols
+  (e.g. the 320x240 Y band's 269) have no rv-table mapping for their
+  tail symbols.
+- **Band trailing tails.** The 320x240 fixture's bands leave 3-8
+  non-zero bytes unconsumed inside the explicit tile counts
+  (`BandTrace` pins them); whether the vendor decoder reads them is
+  undetermined.
+- **Vendor output conversion.** The staged `expected.yuv` files are
+  the sandbox harness's packed-4:2:2 view of the vendor decoder's
+  RGB24 output (the black frame lands at `Y=16, U=V=128`), so
+  byte-exact output comparison additionally needs the spec/08 §3.7
+  YUV→RGB LUT contents (unstaged) and the harness's RGB→YUV
+  convention.
 
 ### Indeo 3 (`IV31` / `IV32`)
 

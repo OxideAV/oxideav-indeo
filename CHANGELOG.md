@@ -8,6 +8,30 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) real-bitstream entropy layer — both staged INTRA
+  fixtures decode end-to-end** (r388). Fixture-arbitrated resolutions
+  (each is the unique reading under which all six band payloads of the
+  two vendored Intel/Ligos keyframes reach byte-exact exhaustion):
+  IVI prefix-form codebooks (`[k ones][0][xbits extras]`, last row
+  unterminated, MSB-first extras — resolves the reported spec/04
+  Kraft anomaly; all 16 presets now build exactly-complete codes);
+  the nine static rv-table slots transcribed from the r338
+  `0x100972f4` extraction with their decoded semantics (per-run
+  magnitude counts + vlc→composite permutation with EOB/ESC markers
+  and interval-midpoint values; `rv_tab_corr` = entry swaps); the
+  two-phase tile layout (all MB headers, then all coded-block
+  `(run, val)` streams); CBP-before-qdelta field order with the
+  single-block flag sense `1 = coded` (two spec/03 errata); qdelta/MV
+  VLCs through the frame-level MB codebook with the recentred `+0x80`
+  zig-zag fold; spec/03 §2.8 whole-tile explicit sizes (behaviourally
+  confirmed three times). New `BandTrace` per-band consumption
+  reporting, `coded_blocks`/`coefficients`/`escapes` stats, and
+  `BlockStreamFault` errors; the `CodedBlockData`/`CodebookRequired`
+  frontiers are retired (coefficient streams decode). Coefficient
+  *pixel* reconstruction stays gated on the scan/dequant/inverse-Slant
+  numeric docs-gaps. Two vendored fixtures + end-to-end structural
+  tests (540/900 MBs, 1096-coded-block census, byte-exact black-frame
+  exhaustion 126/55/55).
 - **Indeo 5 (`IV50`) multi-frame session decoder** (`indeo5::Indeo5Decoder`,
   `spec/01 §3` + `spec/07 §1/§4` + `spec/08 §6/§8`) — the stateful
   sequence surface. Carries the last INTRA's GOP, the previous frame's
