@@ -1,5 +1,7 @@
 # oxideav-indeo
 
+[![CI](https://github.com/OxideAV/oxideav-indeo/actions/workflows/ci.yml/badge.svg)](https://github.com/OxideAV/oxideav-indeo/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/oxideav-indeo.svg)](https://crates.io/crates/oxideav-indeo) [![docs.rs](https://docs.rs/oxideav-indeo/badge.svg)](https://docs.rs/oxideav-indeo) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Pure-Rust Intel Indeo (IV2 / IV3 / IV4 / IV5) video codec family for the
 [oxideav](https://github.com/OxideAV/oxideav-workspace) framework. Built
 from clean-room specification and behavioural-trace documents under
