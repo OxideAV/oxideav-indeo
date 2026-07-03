@@ -1,25 +1,32 @@
 //! Indeo 5 per-macroblock header (`spec/03 §4`).
 //!
 //! Spec source: `docs/video/indeo/indeo5/spec/03-tile-and-macroblock-layer.md`
-//! §4 plus the `spec/04 §5.2`/`§5.3` symbol-to-signed-value mapping.
+//! §4 plus the `spec/04 §3.4` symbol-to-signed-value mapping.
 //!
 //! Each macroblock of a coded tile is prefixed by a small
-//! variable-width header (`spec/03 §4.5` field order):
+//! variable-width header. **Field order (fixture-arbitrated, r388):**
+//! the CBP precedes the qdelta VLC — the wiki "Block header" annex
+//! order (`value31`/`value32` before `value33`), the only order under
+//! which the staged `IV50` fixtures decode to byte-exact band
+//! exhaustion. `spec/03 §4.5`'s qdelta-first summary table does not
+//! decode the fixtures and is reported as an erratum.
 //!
 //! | Field         | Width  | Condition                                |
 //! | ------------- | ------ | ---------------------------------------- |
 //! | `mb_coded`    | 1 bit  | always (`0` = coded, `1` = **skipped**)  |
+//! | `cbp`         | 4 bits | coded AND `blocks_per_mb == 4`           |
+//! | `block_coded` | 1 bit  | coded AND `blocks_per_mb == 1`           |
 //! | `mb_qdelta`   | VLC    | `qdelta_present` AND coded               |
 //! | `mv_x_delta`  | VLC    | inter tile AND coded                     |
 //! | `mv_y_delta`  | VLC    | inter tile AND coded                     |
-//! | `cbp`         | 4 bits | coded AND `blocks_per_mb == 4`           |
-//! | `block_coded` | 1 bit  | coded AND `blocks_per_mb == 1`           |
 //!
-//! The VLC fields decode through the band's block-Huffman codebook
-//! ([`super::Codebook`], `spec/03 §4.2`/`§4.4`) and the decoded
-//! codeword index is folded to a signed value via the shared level
-//! zig-zag table (`spec/04 §3.4`/`§5.2`/`§5.3`,
-//! [`super::build_level_table`]).
+//! The qdelta / MV VLCs decode through the **MB-Huffman** codebook
+//! (the frame-level `mb_huff_desc` selection — the Indeo 4 wiki
+//! annex D describes Table A as coding "quant delta and motion vector
+//! delta signals"), and the decoded symbol folds to a signed value via
+//! the shared level zig-zag table read as an offset around `+0x80`
+//! (`spec/04 §3.4`, [`super::build_level_table`]): symbol `0 → 0`,
+//! `1 → +1`, `2 → -1`, `3 → +2`, …
 
 use super::bitreader::{BitReader, BitReaderError};
 use super::codebook::{Codebook, CodebookError};
@@ -32,7 +39,7 @@ pub const MAX_QUANT: u8 = 31;
 /// Errors raised while parsing a per-MB header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MbHeaderError {
-    /// A VLC field failed to decode against the band codebook.
+    /// A VLC field failed to decode against the codebook.
     Vlc(CodebookError),
     /// Underlying bit-reader fault.
     BitReader(BitReaderError),
@@ -40,7 +47,7 @@ pub enum MbHeaderError {
     /// table's index space (`spec/04 §3.4`).
     SymbolOutOfRange {
         /// The decoded symbol.
-        symbol: u16,
+        symbol: u32,
     },
 }
 
@@ -110,8 +117,10 @@ pub enum Cbp {
     /// follow); a `0` means DC-only.
     FourBlock(u8),
     /// Case A — single-block MB: the 1-bit `block_coded` flag.
-    /// `false` (bit 0) = the block is fully coded, `true` (bit 1) =
-    /// DC-only (`spec/03 §4.3` case-A pseudocode).
+    /// **Fixture-arbitrated sense (r388):** bit `1` = the block is
+    /// coded (AC follows), bit `0` = no AC data — the *opposite* of
+    /// the `spec/03 §4.3` case-A pseudocode (which does not decode the
+    /// staged fixtures' chroma bands; reported as an erratum).
     SingleBlock {
         /// `true` when the single block carries no AC residual.
         dc_only: bool,
@@ -133,8 +142,7 @@ impl Cbp {
     }
 }
 
-/// The per-tile context the per-MB header parse needs (`spec/03
-/// §4.5` conditions).
+/// The per-tile context the per-MB header parse needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MbContext {
     /// The band's qdelta mode (`spec/03 §4.2`).
@@ -162,9 +170,9 @@ pub struct MbHeader {
     pub cbp: Option<Cbp>,
 }
 
-/// Decode one VLC through the band codebook and fold the codeword
-/// index to a signed value via the level zig-zag table
-/// (`spec/04 §5.2`/`§5.3`).
+/// Decode one VLC and fold the symbol to a signed value via the level
+/// zig-zag table read as an offset around `+0x80` (`spec/04 §3.4`):
+/// symbol `0 → 0`, `1 → +1`, `2 → -1`, `3 → +2`, …
 fn decode_signed_vlc(
     r: &mut BitReader<'_>,
     codebook: &Codebook,
@@ -174,14 +182,17 @@ fn decode_signed_vlc(
     if symbol as usize >= LEVEL_TABLE_LEN {
         return Err(MbHeaderError::SymbolOutOfRange { symbol });
     }
-    Ok(level_value(level_table, symbol as u8))
+    // The table byte, re-centred: unsigned byte minus 0x80.
+    let raw = level_value(level_table, symbol as u8) as u8;
+    Ok(raw.wrapping_sub(0x80) as i8)
 }
 
 impl MbHeader {
-    /// Parse one per-MB header in the `spec/03 §4.5` field order.
+    /// Parse one per-MB header in the fixture-arbitrated field order
+    /// (skip, CBP, qdelta, MV pair — see the module docs).
     ///
-    /// `codebook` is the band's active block-Huffman codebook (the
-    /// `blk_huff_desc` selection, `spec/02 §3.6`) shared by the qdelta
+    /// `codebook` is the **MB-Huffman** codebook (the frame-level
+    /// `mb_huff_desc` selection, `spec/02 §2.6`) shared by the qdelta
     /// and MV-delta VLCs; `level_table` is the shared zig-zag fold
     /// (`spec/04 §3.4`, [`super::build_level_table`]).
     pub fn parse(
@@ -200,28 +211,29 @@ impl MbHeader {
             });
         }
 
-        // §4.2 — conditional per-MB quantiser delta.
+        // §4.3 — CBP: 4-bit field (case B) or 1-bit flag (case A).
+        let cbp = if ctx.blocks_per_mb == 4 {
+            Some(Cbp::FourBlock(r.read(4)? as u8))
+        } else {
+            // r388 fixture-arbitrated sense: 1 = coded, 0 = no AC.
+            Some(Cbp::SingleBlock {
+                dc_only: r.read_bit()? == 0,
+            })
+        };
+
+        // §4.2 — conditional per-MB quantiser delta (after the CBP).
         let qdelta = match ctx.qdelta_mode {
             QdeltaMode::Explicit => Some(decode_signed_vlc(r, codebook, level_table)?),
             QdeltaMode::Absent | QdeltaMode::Inherit => None,
         };
 
-        // §4.4 — conditional MV delta pair (x then y, §4.5 order).
+        // §4.4 — conditional MV delta pair (x then y).
         let mv_delta = if ctx.explicit_mv {
             let dx = decode_signed_vlc(r, codebook, level_table)?;
             let dy = decode_signed_vlc(r, codebook, level_table)?;
             Some((dx, dy))
         } else {
             None
-        };
-
-        // §4.3 — CBP: 4-bit field (case B) or 1-bit flag (case A).
-        let cbp = if ctx.blocks_per_mb == 4 {
-            Some(Cbp::FourBlock(r.read(4)? as u8))
-        } else {
-            Some(Cbp::SingleBlock {
-                dc_only: r.read_bit()? == 1,
-            })
         };
 
         Ok(MbHeader {
@@ -257,8 +269,7 @@ mod tests {
                 self.bits.push(((value >> i) & 1) as u8);
             }
         }
-        /// Emit a codeword MSB-first (the order `Codebook::decode`
-        /// consumes single bits in).
+        /// Emit a codeword MSB-first (stream order).
         fn put_codeword(&mut self, code: u32, len: u8) {
             for i in (0..len).rev() {
                 self.bits.push(((code >> i) & 1) as u8);
@@ -283,10 +294,10 @@ mod tests {
         }
     }
 
-    /// A tiny Kraft-valid codebook: four symbols, each with a 2-bit
-    /// codeword (`00`, `01`, `10`, `11`).
+    /// A tiny single-row codebook: four symbols, each two extra bits
+    /// (`xx`, no prefix).
     fn flat_codebook() -> Codebook {
-        Codebook::build(&[2, 2, 2, 2]).unwrap()
+        Codebook::build(&[2]).unwrap()
     }
 
     fn intra_ctx(blocks_per_mb: u32, qdelta_mode: QdeltaMode) -> MbContext {
@@ -352,10 +363,10 @@ mod tests {
 
     #[test]
     fn coded_mb_single_block_flag() {
-        // Case A: block_coded bit 0 = fully coded, 1 = DC-only.
+        // Case A (r388 sense): bit 1 = coded, 0 = DC-only.
         let mut w = BitWriter::new();
         w.put(0, 1); // coded
-        w.put(1, 1); // block_coded = 1 -> DC-only
+        w.put(0, 1); // block_coded = 0 -> DC-only
         let bytes = w.finish();
         let mut r = BitReader::new(&bytes).unwrap();
         let table = build_level_table();
@@ -369,24 +380,42 @@ mod tests {
     }
 
     #[test]
-    fn explicit_qdelta_zig_zag_fold() {
-        // Symbol 0 folds to -0x80? level table index 0 = -0x80; the
-        // small header alphabets use the early indices: index 1 =
-        // -0x7f (i=2, even -> 2/2-0x80 = -0x7f)... Use the table
-        // itself as ground truth.
+    fn explicit_qdelta_after_cbp_zig_zag_fold() {
+        // Field order: CBP first, then the qdelta VLC. Symbol 3 folds
+        // to +2 under the recentred zig-zag (0, +1, -1, +2, ...).
         let table = build_level_table();
         let cb = flat_codebook();
-        // Encode symbol 2 (third 2-bit codeword).
-        let cw = cb.codewords().iter().find(|c| c.symbol == 2).unwrap();
+        let cw = cb.codeword(3).unwrap();
         let mut w = BitWriter::new();
         w.put(0, 1); // coded
-        w.put_codeword(cw.code, cw.length); // qdelta VLC
         w.put(0b0000, 4); // CBP
+        w.put_codeword(cw.code, cw.length); // qdelta VLC
         let bytes = w.finish();
         let mut r = BitReader::new(&bytes).unwrap();
         let ctx = intra_ctx(4, QdeltaMode::Explicit);
         let mb = MbHeader::parse(&mut r, &ctx, &cb, &table).unwrap();
-        assert_eq!(mb.qdelta, Some(level_value(&table, 2)));
+        assert_eq!(mb.qdelta, Some(2));
+    }
+
+    #[test]
+    fn zig_zag_fold_recentres_around_0x80() {
+        // spec/04 §3.4 mapping via the +0x80 recentre: 0 -> 0,
+        // 1 -> +1, 2 -> -1, 3 -> +2, 4 -> -2.
+        let table = build_level_table();
+        let cb = flat_codebook();
+        let expect = [0i8, 1, -1, 2];
+        for (sym, &want) in expect.iter().enumerate() {
+            let cw = cb.codeword(sym as u32).unwrap();
+            let mut w = BitWriter::new();
+            w.put(0, 1);
+            w.put(0, 4);
+            w.put_codeword(cw.code, cw.length);
+            let bytes = w.finish();
+            let mut r = BitReader::new(&bytes).unwrap();
+            let ctx = intra_ctx(4, QdeltaMode::Explicit);
+            let mb = MbHeader::parse(&mut r, &ctx, &cb, &table).unwrap();
+            assert_eq!(mb.qdelta, Some(want), "symbol {sym}");
+        }
     }
 
     #[test]
@@ -407,16 +436,16 @@ mod tests {
 
     #[test]
     fn inter_mv_delta_pair_order() {
-        // Field order (spec/03 §4.5): qdelta, mv_x, mv_y, cbp.
+        // Field order: CBP, then mv_x, mv_y.
         let table = build_level_table();
         let cb = flat_codebook();
-        let cw1 = *cb.codewords().iter().find(|c| c.symbol == 1).unwrap();
-        let cw3 = *cb.codewords().iter().find(|c| c.symbol == 3).unwrap();
+        let cw1 = cb.codeword(1).unwrap();
+        let cw3 = cb.codeword(3).unwrap();
         let mut w = BitWriter::new();
         w.put(0, 1); // coded
-        w.put_codeword(cw1.code, cw1.length); // mv_x symbol 1
-        w.put_codeword(cw3.code, cw3.length); // mv_y symbol 3
         w.put(0b0101, 4); // CBP
+        w.put_codeword(cw1.code, cw1.length); // mv_x symbol 1 -> +1
+        w.put_codeword(cw3.code, cw3.length); // mv_y symbol 3 -> +2
         let bytes = w.finish();
         let mut r = BitReader::new(&bytes).unwrap();
         let ctx = MbContext {
@@ -425,10 +454,7 @@ mod tests {
             blocks_per_mb: 4,
         };
         let mb = MbHeader::parse(&mut r, &ctx, &cb, &table).unwrap();
-        assert_eq!(
-            mb.mv_delta,
-            Some((level_value(&table, 1), level_value(&table, 3)))
-        );
+        assert_eq!(mb.mv_delta, Some((1, 2)));
         assert_eq!(mb.cbp, Some(Cbp::FourBlock(0b0101)));
     }
 

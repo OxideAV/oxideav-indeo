@@ -73,7 +73,8 @@ pub use codebook::{
     MAX_ROWS, MB_HUFF_PRESETS,
 };
 pub use decode::{
-    decode_intra_picture, DecodeError, DecodeFrontier, DecodeStats, DecodedPicture, FrontierReason,
+    decode_intra_picture, BandTrace, BlockStreamFault, DecodeError, DecodeFrontier, DecodeStats,
+    DecodedPicture, FrontierReason,
 };
 pub use finalise::{
     frame_produces_output, is_output_written, mark_output_written, output_row_order,
@@ -111,8 +112,8 @@ pub use picture::{PictureError, PictureHeader};
 pub use planes::{num_bands, FramePlanes, PlaneRole, OUTPUT_ITERATION_ORDER, PLANE_RECORD_ORDER};
 pub use refbuf::RefSlots;
 pub use rv_table::{
-    coefficient_for_lindex, escape_lindex, run_advance, RvTable, RvTableError,
-    ESCAPE_LINDEX_HI_SHIFT, RV_TABLE_SLOT_STRIDE,
+    escape_lindex, escape_value, run_advance, RvEntry, RvSlotData, RvTable, RvTableError,
+    RV_TABLE_SLOTS,
 };
 pub use session::{Indeo5Decoder, SessionError, SessionOutput};
 pub use slant::{

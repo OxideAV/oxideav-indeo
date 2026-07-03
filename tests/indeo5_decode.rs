@@ -2,14 +2,12 @@
 //!
 //! Drive `indeo5::decode_intra_picture` over synthetic IV50 bitstreams
 //! exactly as a downstream consumer would: picture header stack →
-//! per-band / per-tile / per-MB structural walk → wavelet recompose →
+//! per-band / per-tile / per-MB / per-block walk → wavelet recompose →
 //! `spec/08` bias-and-clamp + planar pack. An all-zero-coefficient
 //! frame reconstructs to the `spec/08 §3.3` mid-grey (`(0 + 0x200) >>
 //! 2 = 128`) in every plane.
 
-use oxideav_indeo::indeo5::{
-    decode_intra_picture, FrontierReason, PlaneRole, TileDataSize, TileHeader,
-};
+use oxideav_indeo::indeo5::{decode_intra_picture, PlaneRole, TileDataSize, TileHeader};
 
 /// LSB-first bit packer mirroring the decoder's bit order
 /// (`spec/00 §3`).
@@ -194,72 +192,74 @@ fn coded_mb_without_ac_reconstructs() {
 }
 
 #[test]
-fn coded_block_data_frontier_skipped_via_explicit_size() {
+fn coded_block_stream_decodes_through_default_tables() {
+    // A coded MB whose CBP requests one block of AC data, driven
+    // through the default block codebook (preset 7) and the default
+    // rv-table (slot 8): one (run 0, +1) coefficient then EOB. Under
+    // slot 8, vlc 0 maps to composite 28 = run-0 midpoint = +1, and
+    // vlc 4 is the EOB marker; both ride row 0 of preset 7 (xbits 3):
+    // codewords "0 000" and "0 100" (prefix, MSB-first extras).
     let mut w = BitWriter::new();
     intra_cif_header(&mut w);
 
-    // Y band, one tile with an explicit byte count. The first MB's
-    // CBP requests AC data -> the driver must record the gated
-    // frontier and skip to tile_start + size.
+    // Y band, one tile with an explicit whole-tile byte count
+    // (spec/03 §2.8 reading, behaviourally confirmed).
     plain_band_header(&mut w, 12);
     let tile_start = w.byte_len();
     w.put(0, 1); // value24
     w.put(1, 1); // value25 = 1 -> explicit
-    w.put(6, 8); // value26 = 6 bytes (whole tile, §2.8 reading)
-    w.put(0, 1); // MB 0: coded
-    w.put(0b0001, 4); // CBP: block 0 carries AC -> gated
-    w.align();
-    while w.byte_len() < tile_start + 6 {
-        w.put(0xaa, 8); // opaque (gated) coefficient bytes
+    w.put(56, 8); // value26: whole tile = 56 bytes
+                  // Phase 1 — MB headers: MB 0 coded (CBP block 0), rest skipped.
+    w.put(0, 1);
+    w.put(0b0001, 4);
+    for _ in 1..(22 * 18) {
+        w.put(1, 1);
     }
-    // Chroma bands still decode after the skip.
+    // Phase 2 — block streams: (run 0, +1) then EOB.
+    w.put(0, 1); // vlc 0: prefix "0"
+    w.put(0b000, 3); // extras (MSB-first) = 0
+    w.put(0, 1); // vlc 4: prefix "0"
+    w.put(0b001, 3); // extras (MSB-first) = 100b = 4
+    w.align();
+    while w.byte_len() < tile_start + 56 {
+        w.put(0, 8); // trailing tile padding (skipped via §2.8)
+    }
     for _ in 0..2 {
-        w.put(0x01, 8);
+        w.put(0x01, 8); // empty chroma bands
         w.align();
     }
     let bitstream = w.finish();
 
     let decoded = decode_intra_picture(&bitstream).expect("decode");
-    assert!(decoded.parse_complete, "explicit size allows the skip");
-    assert_eq!(decoded.frontiers.len(), 1);
-    let f = decoded.frontiers[0];
-    assert_eq!(f.plane_idx, 0);
-    assert_eq!(f.band_idx, 0);
-    assert_eq!(f.tile_idx, 0);
-    assert_eq!(f.reason, FrontierReason::CodedBlockData);
-    assert!(f.skipped_past);
-    assert!(!decoded.fully_reconstructed());
-    // The chroma bands after the skip were still walked.
-    assert_eq!(decoded.stats.bands, 3);
-    assert_eq!(decoded.stats.empty_bands, 2);
-    // Output is still produced; gated regions stay zero -> mid-grey.
+    assert!(decoded.parse_complete);
+    assert!(decoded.fully_reconstructed(), "no frontiers on intra");
+    assert_eq!(decoded.stats.coded_blocks, 1);
+    assert_eq!(decoded.stats.coefficients, 1);
+    assert_eq!(decoded.stats.escapes, 0);
+    assert_eq!(decoded.stats.mbs_skipped, 22 * 18 - 1);
+    // Pixel reconstruction of the coefficient is gated on the
+    // scan/dequant/transform docs-gap: output stays mid-grey.
     let out = decoded.output.expect("output");
     assert!(out.data.iter().all(|&b| b == 128));
 }
 
 #[test]
-fn implicit_frontier_without_band_size_stops_parse() {
+fn truncated_coefficient_stream_is_an_error() {
+    // A coded MB whose CBP requests AC data but whose stream is
+    // zero-padding runs the (run 0, +1) codeword off the block's
+    // coefficient budget (or off the buffer) — a hard decode error,
+    // not a silent guess.
     let mut w = BitWriter::new();
     intra_cif_header(&mut w);
 
-    // Y band, implicit-size tile whose first MB requests AC data and
-    // no band_data_size to bail to: the parse must stop (and report
-    // it) rather than guess.
     plain_band_header(&mut w, 12);
     w.put(0, 1); // value24
     w.put(0, 1); // value25 -> implicit
     w.put(0, 1); // MB 0: coded
-    w.put(0b1111, 4); // CBP: AC data follows -> gated, unskippable
+    w.put(0b1111, 4); // CBP: AC data follows
     let bitstream = w.finish();
 
-    let decoded = decode_intra_picture(&bitstream).expect("decode");
-    assert!(!decoded.parse_complete);
-    assert_eq!(decoded.frontiers.len(), 1);
-    assert!(!decoded.frontiers[0].skipped_past);
-    // Output is still assembled from the zero seed.
-    let out = decoded.output.expect("output");
-    assert_eq!(out.data.len(), CIF_LUMA + 2 * CIF_CHROMA);
-    assert!(out.data.iter().all(|&b| b == 128));
+    assert!(decode_intra_picture(&bitstream).is_err());
 }
 
 #[test]

@@ -164,8 +164,7 @@ impl Indeo5Decoder {
             FrameType::Intra => {
                 let gop = header.gop.clone().expect("INTRA carries a GOP");
                 let frame = header.frame.as_ref().expect("INTRA carries a frame header");
-                let payload =
-                    decode_payload(&mut r, &gop, frame.flags.band_data_size_present(), None)?;
+                let payload = decode_payload(&mut r, &gop, frame, None)?;
                 let format = output_format(&gop);
                 let output = assemble_frame(
                     &payload.recon[0],
@@ -192,12 +191,7 @@ impl Indeo5Decoder {
                     .frame
                     .as_ref()
                     .expect("predicted frame carries a frame header");
-                let payload = decode_payload(
-                    &mut r,
-                    &gop,
-                    frame.flags.band_data_size_present(),
-                    Some(&self.reference),
-                )?;
+                let payload = decode_payload(&mut r, &gop, frame, Some(&self.reference))?;
                 let format = output_format(&gop);
                 let output = assemble_frame(
                     &payload.recon[0],
@@ -250,7 +244,6 @@ impl Indeo5Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::indeo5::FrontierReason;
 
     /// LSB-first bit packer mirroring the reader's bit order.
     struct BitWriter {
@@ -438,63 +431,57 @@ mod tests {
     #[test]
     fn inter_coded_mb_with_mv_applies_mc_copy() {
         // Drive the spec/07 predictor copy with an explicit MV via a
-        // CUSTOM (Kraft-valid) band codebook of 15 4-bit symbols (the
-        // 4-bit num_rows field caps a custom descriptor at 15 rows).
-        // The level zig-zag maps the early symbols to large
-        // magnitudes (symbol 13 -> -121), so use a 256x256 luma band
-        // and code the LAST MB (at 240,240) so the displaced fetch
-        // stays in-bounds — and no later skipped MB inherits the MV.
-        use crate::indeo5::{build_level_table, Codebook};
-        let table = build_level_table();
-        let cb = Codebook::build(&[4; 15]).unwrap();
-        let sym = 13u16;
-        let d = table[sym as usize] as i32;
-        assert_eq!(d, -121); // full-pel delta for both components
+        // CUSTOM frame-level MB codebook of one 8-extra-bit row (256
+        // symbols). Under the recentred zig-zag fold, symbol 242 maps
+        // to -121, so use a 256x256 luma band and code the LAST MB
+        // (at 240,240) so the displaced fetch stays in-bounds — and
+        // no later skipped MB inherits the MV.
+        use crate::indeo5::Codebook;
+        let cb = Codebook::build(&[8]).unwrap();
+        let sym = 242u32; // recentred zig-zag: 242 -> -121
 
         let mut dec = Indeo5Decoder::new();
         let mut w = BitWriter::new();
         intra_frame(&mut w, 0, 256);
         dec.decode(&w.finish()).expect("intra");
 
-        // INTER: luma band with a custom blk_huff_desc; a 16x16 MB
-        // grid; MBs 0..254 skipped, MB 255 (at 240,240) coded with
-        // MV deltas + CBP 0. src = 240 - 121 = 119: in-bounds.
+        // INTER: the frame header carries the custom mb_huff_desc
+        // (frame_flags bit 6); a 16x16 MB grid; MBs 0..254 skipped,
+        // MB 255 (at 240,240) coded with CBP 0 + MV deltas.
+        // src = 240 - 121 = 119: in-bounds.
         let mut w = BitWriter::new();
         w.put(0x1f, 5);
         w.put(1, 3);
         w.put(1, 8);
-        w.put(0x00, 8); // frame_flags
-        w.put(0, 3);
+        w.put(0x40, 8); // frame_flags: mb_huff_desc present
+        w.put(7, 3); // custom descriptor
+        w.put(1, 4); // num_rows = 1
+        w.put(8, 4); // xbits[0] = 8
+        w.put(0, 3); // value5
         w.align();
-        w.put(0x80, 8); // luma band_flags: blk_huff_present (bit 7)
-                        // blk_huff_desc: id=7 custom, 15 rows of 4 bits each.
-        w.put(7, 3);
-        w.put(15, 4);
-        for _ in 0..15 {
-            w.put(4, 4);
-        }
+        w.put(0x00, 8); // luma band_flags: non-empty, defaults
         w.put(0, 1); // checksum_flag
         w.put(10, 5); // band_glob_quant
         w.align();
         w.put(0, 1); // tile value24
         w.put(0, 1); // value25 -> implicit
-                     // MBs 0..254 skipped.
+                     // MB-header phase: MBs 0..254 skipped.
         for _ in 0..255 {
             w.put(1, 1);
         }
-        // MB 255: coded; MV VLCs (x then y, spec/03 §4.5); CBP=0.
+        // MB 255: coded; CBP first, then the MV VLC pair (x, y).
         w.put(0, 1);
-        let cw = *cb.codewords().iter().find(|c| c.symbol == sym).unwrap();
-        w.put_codeword(cw.code, cw.length);
-        w.put_codeword(cw.code, cw.length);
         w.put(0b0000, 4); // CBP: no AC
+        let cw = cb.codeword(sym).unwrap();
+        w.put_codeword(cw.code, cw.length);
+        w.put_codeword(cw.code, cw.length);
         w.align();
         for _ in 0..2 {
             w.put(0x01, 8); // empty chroma bands
             w.align();
         }
         let f1 = dec.decode(&w.finish()).expect("inter mv");
-        assert!(f1.parse_complete, "custom codebook decodes the MV VLCs");
+        assert!(f1.parse_complete, "custom MB codebook decodes the MVs");
         assert!(f1.frontiers.is_empty());
         assert_eq!(f1.stats.mbs, 256);
         assert_eq!(f1.stats.mbs_skipped, 255);
@@ -531,12 +518,10 @@ mod tests {
     }
 
     #[test]
-    fn kraft_anomalous_preset_mv_band_is_gated() {
-        // An inter band with explicit MVs whose blk_huff_desc selects
-        // a Kraft-anomalous block preset (id 1) cannot build a
-        // codebook under the standard rule (the spec/04 §1.4/§3.2
-        // docs-gap) and hits the CodebookRequired frontier. (The
-        // default preset 7 IS Kraft-valid and builds.)
+    fn preset_block_codebook_band_decodes() {
+        // A coded inter band whose blk_huff_desc selects preset 1
+        // (formerly mis-modelled as Kraft-anomalous) now builds and
+        // the MB walk decodes: 4 skipped MBs, reference carry.
         let mut dec = Indeo5Decoder::new();
         let mut w = BitWriter::new();
         intra_32(&mut w, 0);
@@ -550,19 +535,23 @@ mod tests {
         w.put(0, 3);
         w.align();
         w.put(0x80, 8); // luma band: blk_huff_present
-        w.put(1, 3); // blk_huff_desc: preset id 1 (Kraft-anomalous)
+        w.put(1, 3); // blk_huff_desc: preset id 1
         w.put(0, 1); // checksum_flag
         w.put(10, 5); // band_glob_quant
         w.align();
         w.put(0, 1); // tile: implicit size, coded
         w.put(0, 1);
-        // (No MB bits: the gate fires before any MB is read.)
-        let out = dec.decode(&w.finish());
-        // The frontier is unskippable (implicit size, no band size):
-        // parse stops but output still assembles.
-        let f = out.expect("gated but assembled");
-        assert!(!f.parse_complete);
-        assert_eq!(f.frontiers.len(), 1);
-        assert_eq!(f.frontiers[0].reason, FrontierReason::CodebookRequired);
+        for _ in 0..4 {
+            w.put(1, 1); // all 4 MBs skipped
+        }
+        w.align();
+        for _ in 0..2 {
+            w.put(0x01, 8); // empty chroma bands
+            w.align();
+        }
+        let f = dec.decode(&w.finish()).expect("preset band decodes");
+        assert!(f.parse_complete);
+        assert!(f.frontiers.is_empty());
+        assert_eq!(f.stats.mbs_skipped, 4);
     }
 }
