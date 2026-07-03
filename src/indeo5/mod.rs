@@ -47,6 +47,7 @@ mod planes;
 mod refbuf;
 mod tables;
 mod tile;
+mod tile_header;
 mod wavelet;
 
 pub use assemble::{assemble_frame, AssembleError};
@@ -98,4 +99,8 @@ pub use tables::{
     WAVELET_SYNTH_CONSTANTS, WAVELET_SYNTH_ROUND_BIAS,
 };
 pub use tile::{tile_count, Tile, TileGrid};
+pub use tile_header::{
+    explicit_size_matches, tile_predictor_active, TileDataSize, TileHeader, MAX_TILE_DATA_SIZE,
+    TILE_SIZE_ESCAPE,
+};
 pub use wavelet::{recompose_level, recompose_plane, synth_1d, Band, LevelBands};
