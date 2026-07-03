@@ -8,6 +8,89 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) multi-frame session decoder** (`indeo5::Indeo5Decoder`,
+  `spec/01 §3` + `spec/07 §1/§4` + `spec/08 §6/§8`) — the stateful
+  sequence surface. Carries the last INTRA's GOP, the previous frame's
+  per-plane per-band coefficient buffers (the `spec/07 §1.2` reference
+  workspace), the `spec/01 §3.4` frame-number soft-correction input,
+  the held host buffer NULL frames re-emit byte-for-byte, and the
+  `RefSlots` rotation. INTER frames decode structurally against the
+  reference: bands seed from the reference carry, and the per-MB walk
+  drives the `spec/07` band-coefficient-layer predictor (zero-MV
+  tile-entry reset §3.3, skip-inherits-left-MV §6.1, half-pel fold
+  §2.2, MC copy through `mc_add_block` §5.5 — real for the no-AC
+  subset, tested with an explicit MV decoded via a custom Kraft-valid
+  codebook). Reference promotion follows `spec/08 §8.1`
+  (INTRA/INTER promote; DROPPABLE_INTER_SCAL promotes with the
+  chroma-pair swap; DROPPABLE_INTER/NULL leave the reference — the
+  `spec/07 §1.5` droppable invariant, sequence-tested). New
+  `MvInheritance` frontier for coded tiles in `mv_inherit` bands
+  (`spec/07 §3.4`/`§3.5` tables docs-gap). 7 new unit tests (lib count
+  1018 → 1025).
+- **Indeo 5 (`IV50`) whole-frame INTRA decode driver — first IV50
+  pixels through `assemble_frame`** (`indeo5::decode_intra_picture`,
+  `spec/02 §4.4` walk). Threads picture header → per-plane (Y, U, V)
+  band headers → per-tile size headers → per-MB grid/header walk →
+  per-plane wavelet recompose (`spec/06 §3`, LL-innermost band order)
+  → `spec/08` bias-and-clamp + planar pack into a `HostBuffer`. Every
+  region the staged spec fully determines decodes to real pixels
+  (empty bands / empty tiles / skipped MBs / coded MBs with no-AC
+  CBPs → the §3.3 mid-grey `128`); gated elements surface as
+  `DecodeFrontier` records (`CodedBlockData` — rv-table contents +
+  fused-handler enumeration; `CodebookRequired` — Kraft-anomalous
+  presets) with the `spec/03 §2.6` explicit-size and `spec/02 §3.2`
+  `band_data_size` skips keeping the parse going, else
+  `parse_complete = false` with already-parsed planes still
+  assembled. `PictureHeader::parse_with_reader` exposes the
+  post-frame-header cursor. New `tests/indeo5_decode.rs` drives six
+  whole-frame scenarios end-to-end asserting byte-exact mid-grey
+  output over the full CIF YVU9 buffer (lib count 1016 → 1018, +7
+  integration tests).
+- **Indeo 5 (`IV50`) SWAR Slant-butterfly primitives + page-0 handler
+  map** (`indeo5::slant`, `spec/06 §1`/`§2`) — the paired-16-bit
+  primitives every fused dispatch handler is built from (pack/unpack,
+  `ror 1` halve, `ror 2` quarter, `ror 0x11` transpose-and-divide,
+  paired add, the `0x7ffc7ffc` pair-normalise + `0xfff8fff8`
+  dequant-fused masks), the §2.1 eight-cluster taxonomy
+  (`HandlerCluster`, RVA ranges + rotate signatures), the §2.3 page-0
+  handler-to-slot scan table (`PAGE0_ROW_PASS_HANDLERS`, 16 pairs),
+  the representative `b0a_fragment` / `b1a_fragment` / `a0_fragment`
+  kernels, and the §2.4 `dispatch_use` transform-variant page
+  selection. Full 192-handler + page-1 enumeration stays a reported
+  docs-gap (`spec/06 §6` items 2/3/7). 12 new unit tests (1004 → 1016).
+- **Indeo 5 (`IV50`) rv-table mechanism** (`indeo5::rv_table`,
+  `spec/05 §2`/`§4.2`) — the per-band `(run_add[], lindex[])` parallel
+  byte arrays the decoded `vlc` indexes, the §2.4 destructive in-place
+  `rv_tab_corr` patching (even index → `run_add[i/2]`, odd →
+  `lindex[i/2]`), the §4.2 escape aggregation
+  `lindex_lo | (lindex_hi << 6)`, the `run += run_add + 1` scan
+  advance, and the §2.3 signed fold through the level zig-zag table.
+  Table *contents* stay a reported docs-gap (`spec/05 §7` items
+  1/2/8). 9 new unit tests (995 → 1004).
+- **Indeo 5 (`IV50`) per-MB header** (`indeo5::mb_header`, `spec/03
+  §4` + `spec/04 §5.2`/`§5.3`) — the §4.5 field order: 1-bit
+  `mb_coded` (1 = skipped), three-mode qdelta (absent / explicit VLC /
+  inherit), the MV-delta pair for explicit-MV inter tiles, and the
+  CBP (4-bit LSB-first per-block, or the case-A 1-bit `block_coded`
+  whose set state means DC-only). Header VLCs decode through the
+  band's block-Huffman codebook and zig-zag-fold to signed values;
+  `effective_mb_quant` is the `spec/06 §5.2` `0..=31` clamp. 8 new
+  unit tests (987 → 995).
+- **Indeo 5 (`IV50`) macroblock grid** (`indeo5::mb`, `spec/03 §3`) —
+  `MbGrid` (per-axis `ceil(tile/mb_size)`, §3.3 raster iteration, §3.2
+  last-column/bottom-row clamp, 1-or-4 block raster layout), the
+  vendored four-block coordinate tables (`.rdata
+  0x10088c38/c48/c58`), the per-frame-type block-stride tables
+  (`.rdata 0x10088c08/0x10088c18`), the band-index flags table
+  (`.rdata 0x10088bf0`), `mb_stride`, and the 2-vs-5-row partial-MB
+  padding selector. 10 new unit tests (977 → 987).
+- **Indeo 5 (`IV50`) per-tile data-size header** (`indeo5::tile_header`,
+  `spec/03 §2`) — the 4-stage `value24..value27` prefix code (1-bit
+  empty tile / 2-bit implicit remainder / 10-bit explicit count /
+  34-bit escape-extended count), `tile_predictor_active` (§2.7, with
+  the intra force-clear), and `explicit_size_matches` (§2.8). The
+  §2.4-vs-§2.8 size-covers-header tension is documented as a reported
+  docs-gap. 8 new unit tests (969 → 977).
 - **Indeo 5 (`IV50`) reference-frame buffer-slot rotation**
   (`indeo5::refbuf`, `spec/07 §1.2`/`§1.3`/`§4.1`/`§4.3`) — the
   two-frame ping-pong state machine. `RefSlots` models the eight

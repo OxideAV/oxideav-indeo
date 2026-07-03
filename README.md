@@ -118,19 +118,65 @@ table-free structural layer is landed:
   §1.5 droppable invariant (DROPPABLE_INTER never becomes a future
   reference).
 
-What remains for spec/07: the per-tile MV-inheritance fast path
-(§3.4/§3.5 — needs the per-band `0x3604`/`0x3664` inheritance-MV
-tables), and threading the fetcher into a real per-MB walk (rides the
-gated spec/03/spec/05 coefficient path).
+The **spec/03 tile-and-macroblock layer** is landed in full for its
+staged scope, and the pipeline's middle is now threaded end-to-end:
 
-What is **not** yet implemented for Indeo 5: the entropy-fused per-block
-inverse Slant transform itself (spec/06 §2 — gated, see docs-gaps), the
-per-tile coefficient stream that drives it (spec/05), and the
-inter-frame motion-compensation predictor (spec/07). The synthesis,
-output-stage, and table primitives above operate on caller-supplied
-band / coefficient / plane buffers and stop at their documented chapter
-boundary. Indeo 5 is decode-only and not yet registered into the codec
-registry (no frames are produced end-to-end yet).
+- `indeo5::TileHeader` / `TileDataSize` / `tile_predictor_active` /
+  `explicit_size_matches` (spec/03 §2) — the 4-stage
+  `value24..value27` per-tile data-size prefix code (empty / implicit
+  / 8-bit / escape-extended 24-bit), the §2.7 predictor-context flag
+  (intra force-clear), and the §2.8 reconciliation check.
+- `indeo5::MbGrid` / `Macroblock` / `MbBlock` (spec/03 §3) — the
+  per-tile MB grid (ceil counts, raster iteration, boundary clamp,
+  block raster layout) plus the vendored four-block coordinate /
+  block-stride / band-flags tables (`.rdata 0x10088bf0..0x10088c58`).
+- `indeo5::MbHeader` / `Cbp` / `QdeltaMode` / `effective_mb_quant`
+  (spec/03 §4, spec/04 §5.2/§5.3, spec/06 §5.2) — the per-MB header
+  in §4.5 field order: skip flag, three-mode qdelta, MV-delta pair,
+  and CBP, with the header VLCs zig-zag-folded to signed values.
+- `indeo5::RvTable` / `escape_lindex` / `run_advance` (spec/05
+  §2/§4.2) — the per-band run-value mechanism: parallel
+  `(run_add[], lindex[])` arrays, destructive `rv_tab_corr` patching,
+  the three-symbol escape aggregation, and the level fold. Table
+  *contents* are a reported docs-gap.
+- `indeo5::slant` (spec/06 §1/§2) — the SWAR paired-16-bit
+  butterfly primitives (`ror 1`/`ror 2`/`ror 0x11`, the `0x7ffc7ffc`
+  / `0xfff8fff8` masks), the §2.1 eight-cluster handler taxonomy, the
+  §2.3 page-0 handler-to-slot scan table, representative fragment
+  kernels, and the §2.4 transform-variant dispatch selection.
+
+On top, **whole frames now decode to pixels**:
+
+- `indeo5::decode_intra_picture` — the spec/02 §4.4 per-frame walk:
+  picture header → per-plane (Y, U, V) band headers → per-tile size
+  headers → per-MB walk → wavelet recompose (LL-innermost band
+  order) → spec/08 bias-and-clamp + planar pack into a `HostBuffer`.
+  Every region the staged spec fully determines produces real pixels
+  (empty bands / empty tiles / skipped MBs / no-AC CBPs → the §3.3
+  mid-grey); the gated elements surface as `DecodeFrontier` records
+  (`CodedBlockData` / `CodebookRequired` / `MvInheritance`) with the
+  explicit-size / `band_data_size` skip paths keeping the parse
+  going. Byte-exact end-to-end integration tests drive CIF YVU9
+  frames to full host buffers.
+- `indeo5::Indeo5Decoder` — the multi-frame session: GOP carry, the
+  spec/07 §1.2 per-band reference workspace, NULL repeat-previous
+  (spec/08 §6.4), the §3.4 frame-number soft-correction, spec/08
+  §8.1 reference promotion (with the droppable no-promote invariant
+  and the DROPPABLE_INTER_SCAL chroma swap), and a structural INTER
+  decode whose per-MB walk drives the spec/07 band-coefficient-layer
+  predictor: zero-MV tile-entry reset, skip-inherits-left MV, and
+  the MC copy through `mc_add_block` for decoded non-zero MVs.
+
+What is **not** yet implemented for Indeo 5: the per-block `(run,
+level)` coefficient stream and the entropy-fused inverse Slant it
+drives (gated on the rv-table contents — spec/05 §7 items 1/2/8 —
+and the 192-handler / page-1 enumeration — spec/06 §6 items 2/3/7),
+the Kraft-anomalous preset codebooks (spec/04; the default block
+preset 7 and custom descriptors do build and decode), and the
+per-tile MV-inheritance fast path (spec/07 §3.4/§3.5 — needs the
+per-band `0x3604`/`0x3664` tables). Coded-block regions therefore
+reconstruct as zeros behind a reported frontier. Indeo 5 is
+decode-only and not yet registered into the codec registry.
 
 ### Indeo 5 reported docs-gaps
 
@@ -155,6 +201,22 @@ registry (no frames are produced end-to-end yet).
   vendored as `indeo5::DEQUANT_SCALE_BITS`), but its
   `band_glob_quant`→index relationship still rides the gated
   state-register path (spec/06 §6 item 1).
+- **Per-band rv-table contents** (spec/05 §7 items 1/2/8). The eight
+  preset `(run_add[], lindex[])` pairs (`rv_tab_sel = 0..7`), the
+  ninth default slot, and the sibling per-symbol bit-length arrays
+  are runtime-built in the per-instance arena and not yet extracted;
+  the crate implements the lookup / patch / escape *mechanism* over
+  caller-supplied contents.
+- **Per-tile explicit-size semantics** (spec/03 §2.4 vs §2.8). §2.4
+  states the explicit byte count excludes the tile-header bits while
+  the §2.8 reconciliation-and-advance reads as a whole-tile count;
+  the driver applies the §2.8 operational reading and flags the
+  tension for a Specifier/Auditor pass.
+- **Chroma tile-count rule** (spec/02 §4.1 vs spec/03 §1.1). The §4.1
+  `ceil(slice_count * mb_dim / band_dim)` formula and the §1.1
+  worked-example chroma tile counts (1×1 at CIF vs ≈5×4 at 640×480)
+  are mutually inconsistent; the driver uses the luma-consistent
+  `ceil(band_dim / slice_size)` rule and reports the discrepancy.
 
 ### Indeo 3 (`IV31` / `IV32`)
 
