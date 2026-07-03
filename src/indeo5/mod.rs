@@ -48,6 +48,7 @@ mod picture;
 mod planes;
 mod refbuf;
 mod rv_table;
+mod slant;
 mod tables;
 mod tile;
 mod tile_header;
@@ -107,6 +108,12 @@ pub use refbuf::RefSlots;
 pub use rv_table::{
     coefficient_for_lindex, escape_lindex, run_advance, RvTable, RvTableError,
     ESCAPE_LINDEX_HI_SHIFT, RV_TABLE_SLOT_STRIDE,
+};
+pub use slant::{
+    a0_fragment, b0a_fragment, b1a_fragment, dispatch_use, pair_add, pair_normalise, pair_pack,
+    pair_ror1, pair_ror17, pair_ror2, pair_unpack, DispatchUse, HandlerCluster, Page0Handler,
+    PairRotate, BLOCK_BYTES, BLOCK_ROW_STRIDE, DEQUANT_FUSED_MASK, PAGE0_ROW_PASS_HANDLERS,
+    PAIR_NORM_MASK,
 };
 pub use tables::{
     dequant_scale, DEQUANT_SCALE_BITS, DEQUANT_SCALE_DEFAULT_BITS, DEQUANT_SCALE_LEN, VLC_END,
