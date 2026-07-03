@@ -82,32 +82,45 @@ impl PictureHeader {
     /// the §3.4 duplicate-`frame_number` soft-correction (`None` for
     /// the first frame of a session).
     pub fn parse(bitstream: &[u8], prev_frame_number: Option<u8>) -> Result<Self, PictureError> {
+        Ok(Self::parse_with_reader(bitstream, prev_frame_number)?.0)
+    }
+
+    /// Like [`PictureHeader::parse`], but also return the bit reader,
+    /// positioned at the first per-band payload byte (`spec/02 §2.8`
+    /// frame-header alignment exit) so the per-band decode
+    /// (`spec/02 §4.4`) can continue from the same cursor. For a NULL
+    /// frame the reader sits after the picture-start triplet.
+    pub fn parse_with_reader<'a>(
+        bitstream: &'a [u8],
+        prev_frame_number: Option<u8>,
+    ) -> Result<(Self, super::bitreader::BitReader<'a>), PictureError> {
         let (start, mut r) = PictureStart::parse(bitstream, prev_frame_number)?;
 
-        match start.frame_type {
-            FrameType::Null => Ok(PictureHeader {
+        let header = match start.frame_type {
+            FrameType::Null => PictureHeader {
                 start,
                 gop: None,
                 frame: None,
-            }),
+            },
             FrameType::Intra => {
                 let gop = GopHeader::parse(&mut r)?;
                 let frame = FrameHeader::parse(&mut r, true)?;
-                Ok(PictureHeader {
+                PictureHeader {
                     start,
                     gop: Some(gop),
                     frame: Some(frame),
-                })
+                }
             }
             FrameType::Inter | FrameType::DroppableInter | FrameType::DroppableInterScalability => {
                 let frame = FrameHeader::parse(&mut r, false)?;
-                Ok(PictureHeader {
+                PictureHeader {
                     start,
                     gop: None,
                     frame: Some(frame),
-                })
+                }
             }
-        }
+        };
+        Ok((header, r))
     }
 
     /// The parsed frame type (after the §3.4 soft-correction).

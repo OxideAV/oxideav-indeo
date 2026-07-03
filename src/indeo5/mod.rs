@@ -31,6 +31,7 @@ mod checksum;
 mod chroma;
 mod clip_table;
 mod codebook;
+mod decode;
 mod finalise;
 mod format;
 mod frame;
@@ -69,6 +70,9 @@ pub use clip_table::{
 pub use codebook::{
     Codebook, CodebookError, Codeword, HuffContext, BLOCK_HUFF_PRESETS, DEFAULT_PRESET_ID,
     MAX_ROWS, MB_HUFF_PRESETS,
+};
+pub use decode::{
+    decode_intra_picture, DecodeError, DecodeFrontier, DecodeStats, DecodedPicture, FrontierReason,
 };
 pub use finalise::{
     frame_produces_output, is_output_written, mark_output_written, output_row_order,
