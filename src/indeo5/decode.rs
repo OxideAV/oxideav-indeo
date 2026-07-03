@@ -62,6 +62,8 @@ use super::header::FrameType;
 use super::level_table::{build_level_table, LEVEL_TABLE_LEN};
 use super::mb::MbGrid;
 use super::mb_header::{MbContext, MbHeader, MbHeaderError, QdeltaMode};
+use super::mc::{mc_add_block, BandView, McError};
+use super::mv::{resolve_mv, Mv, MvPredictor, MvResolution};
 use super::output::{plane_stride, OutputError, ReconstructionPlane};
 use super::pack::HostBuffer;
 use super::picture::{PictureError, PictureHeader};
@@ -109,6 +111,26 @@ pub enum DecodeError {
         at_byte: u64,
         /// The size field's target byte.
         target_byte: u64,
+    },
+    /// An INTER frame's reference band buffers did not match the
+    /// GOP-derived band geometry (`spec/07 §1.2` workspace contract).
+    ReferenceMismatch {
+        /// Plane index.
+        plane_idx: usize,
+        /// Band index.
+        band_idx: usize,
+    },
+    /// A motion-compensated fetch fell outside the reference band
+    /// (`spec/07 §5.4` padding contract violated by the MV).
+    Mc {
+        /// Plane index.
+        plane_idx: usize,
+        /// Band index.
+        band_idx: usize,
+        /// Tile index in raster order.
+        tile_idx: usize,
+        /// The underlying error.
+        error: McError,
     },
     /// Underlying bit-reader fault.
     BitReader(BitReaderError),
@@ -171,6 +193,22 @@ impl core::fmt::Display for DecodeError {
                 f,
                 "indeo5 decode: size field targets byte {target_byte} behind cursor byte {at_byte} (spec/03 §2.8)"
             ),
+            DecodeError::ReferenceMismatch {
+                plane_idx,
+                band_idx,
+            } => write!(
+                f,
+                "indeo5 decode: plane {plane_idx} band {band_idx}: reference band geometry mismatch (spec/07 §1.2)"
+            ),
+            DecodeError::Mc {
+                plane_idx,
+                band_idx,
+                tile_idx,
+                error,
+            } => write!(
+                f,
+                "indeo5 decode: plane {plane_idx} band {band_idx} tile {tile_idx}: {error}"
+            ),
             DecodeError::BitReader(e) => write!(f, "indeo5 decode: {e}"),
             DecodeError::Output(e) => write!(f, "indeo5 decode: {e}"),
             DecodeError::Assemble(e) => write!(f, "indeo5 decode: {e}"),
@@ -188,10 +226,17 @@ pub enum FrontierReason {
     /// the fused inverse-Slant handler enumeration (`spec/06 §6`
     /// items 2/3/7).
     CodedBlockData,
-    /// The band's per-MB VLC fields need a preset block-Huffman
-    /// codebook — gated on the `spec/04 §1.4`/`§3.2` Kraft-anomaly
-    /// docs-gap (the multi-symbol 4 KB-table assignment rule).
+    /// The band's per-MB VLC fields selected a block-Huffman preset
+    /// that does not build under the standard canonical rule — the
+    /// `spec/04 §1.4`/`§3.2` Kraft-anomaly docs-gap (the multi-symbol
+    /// 4 KB-table assignment rule). Custom descriptors and the
+    /// Kraft-valid presets (including the default, preset 7) build
+    /// and decode.
     CodebookRequired,
+    /// A coded tile in an inter band with the MV-inheritance flag
+    /// set — gated on the `spec/07 §3.4`/`§3.5` per-band
+    /// `0x3604`/`0x3664` inheritance-MV tables docs-gap.
+    MvInheritance,
 }
 
 /// One gated element the driver encountered (and, where possible,
@@ -391,12 +436,125 @@ fn to_reconstruction_plane(
     ReconstructionPlane::new(w, h, stride, data)
 }
 
+/// Walk one coded **inter** tile's macroblock grid (`spec/03 §3/§4`
+/// and `spec/07 §3/§5/§6`), applying the motion-compensated
+/// predictor copy for every reconstructable MB. `work` holds the
+/// band's coefficient layer seeded with the reference content;
+/// `reference` is the previous frame's band at the same geometry.
+#[allow(clippy::too_many_arguments)]
+fn walk_tile_mbs_inter(
+    r: &mut BitReader<'_>,
+    grid: &MbGrid,
+    ctx: &MbContext,
+    codebook: Option<&Codebook>,
+    fallback: &Codebook,
+    level_table: &[i8; LEVEL_TABLE_LEN],
+    stats: &mut DecodeStats,
+    at: (usize, usize, usize),
+    tile: &super::tile::Tile,
+    mv_res: MvResolution,
+    work: &mut [i16],
+    reference: &[i16],
+    band_w: usize,
+) -> Result<Option<FrontierReason>, DecodeError> {
+    let vlc_needed = ctx.qdelta_mode == QdeltaMode::Explicit || ctx.explicit_mv;
+    if vlc_needed && codebook.is_none() {
+        return Ok(Some(FrontierReason::CodebookRequired));
+    }
+    let cb = codebook.unwrap_or(fallback);
+    let (plane_idx, band_idx, tile_idx) = at;
+
+    // spec/07 §3.3 — zero-MV predictor reset at tile entry.
+    let mut predictor = MvPredictor::new();
+
+    for mb in grid.iter() {
+        let header =
+            MbHeader::parse(r, ctx, cb, level_table).map_err(|error| DecodeError::MbHeader {
+                plane_idx,
+                band_idx,
+                tile_idx,
+                error,
+            })?;
+        stats.mbs += 1;
+
+        let mv = if header.skipped {
+            stats.mbs_skipped += 1;
+            // spec/07 §6.1 — skip inherits the left-neighbour MV.
+            predictor.decode_mb(Mv::ZERO)
+        } else {
+            let delta = header
+                .mv_delta
+                .map(|(dx, dy)| Mv { x: dx, y: dy })
+                .unwrap_or(Mv::ZERO);
+            let mv = predictor.decode_mb(delta);
+            if let Some(cbp) = header.cbp {
+                if cbp.coded_blocks(ctx.blocks_per_mb) > 0 {
+                    return Ok(Some(FrontierReason::CodedBlockData));
+                }
+            }
+            stats.mbs_coded_no_ac += 1;
+            mv
+        };
+
+        // A zero MV leaves the seed (= the reference content at the
+        // same position, spec/07 §4.4 predictor carry). A non-zero MV
+        // replaces the MB region with the MV-displaced prediction —
+        // the residual is zero here (skip / CBP-without-AC), so the
+        // spec/07 §5.5 residual-add over a zeroed region is a copy.
+        if mv != Mv::ZERO {
+            let resolved = resolve_mv(mv, mv_res);
+            let dst_x = (tile.x + mb.x) as usize;
+            let dst_y = (tile.y + mb.y) as usize;
+            for row in 0..mb.height as usize {
+                let base = (dst_y + row) * band_w + dst_x;
+                work[base..base + mb.width as usize].fill(0);
+            }
+            mc_add_block(
+                work,
+                band_w,
+                dst_x,
+                dst_y,
+                BandView {
+                    data: reference,
+                    stride: band_w,
+                },
+                dst_x as i32 + resolved.dx,
+                dst_y as i32 + resolved.dy,
+                mb.width as usize,
+                mb.height as usize,
+                resolved.mode,
+            )
+            .map_err(|error| DecodeError::Mc {
+                plane_idx,
+                band_idx,
+                tile_idx,
+                error,
+            })?;
+        }
+    }
+    Ok(None)
+}
+
+/// The decoded payload of one picture-carrying frame: the per-plane
+/// band coefficient buffers (the `spec/07 §1.2` reference workspace
+/// for the next frame) plus the recomposed reconstruction planes.
+#[derive(Debug, Clone)]
+pub(crate) struct PayloadOutcome {
+    pub bands: Vec<Vec<Band>>,
+    pub recon: Vec<ReconstructionPlane>,
+    pub frontiers: Vec<DecodeFrontier>,
+    pub stats: DecodeStats,
+    pub parse_complete: bool,
+}
+
 /// Decode one INTRA frame to pixels.
 ///
 /// Threads the `spec/02 §4.4` per-plane / per-band / per-tile walk
 /// over the staged structural layers, recomposes each plane's bands
 /// (`spec/06 §3`), and assembles the `spec/08` host buffer. See the
-/// module docs for the gated-element (frontier) semantics.
+/// module docs for the gated-element (frontier) semantics. For
+/// multi-frame sequences (INTER / NULL-repeat) use
+/// [`super::Indeo5Decoder`].
 pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeError> {
     let (header, mut r) = PictureHeader::parse_with_reader(bitstream, None)?;
 
@@ -417,14 +575,52 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
         });
     }
 
-    let gop: &GopHeader = header.gop.as_ref().expect("INTRA frame carries a GOP");
+    let gop = header.gop.as_ref().expect("INTRA frame carries a GOP");
     let frame = header
         .frame
         .as_ref()
         .expect("INTRA frame carries a frame header");
     let band_size_present = frame.flags.band_data_size_present();
-    let slice_size = gop.slice_size();
 
+    let payload = decode_payload(&mut r, gop, band_size_present, None)?;
+    let format = output_format(gop);
+    let output = assemble_frame(
+        &payload.recon[0],
+        &payload.recon[2],
+        &payload.recon[1],
+        format,
+    )?;
+
+    Ok(DecodedPicture {
+        header,
+        format: Some(format),
+        output: Some(output),
+        frontiers: payload.frontiers,
+        stats: payload.stats,
+        parse_complete: payload.parse_complete,
+    })
+}
+
+/// The host output format the GOP subsampling selects
+/// (`spec/08 §2.2`).
+pub(crate) fn output_format(gop: &GopHeader) -> OutputFormat {
+    match gop.flags.subsampling() {
+        Subsampling::Yvu9 => OutputFormat::Yvu9,
+        Subsampling::Yv12 => OutputFormat::Yv12,
+    }
+}
+
+/// Decode a picture-carrying frame's per-band payload and recompose
+/// its planes (`spec/02 §4.4` walk). `reference` is `None` for an
+/// INTRA frame (zero seeds) and the previous frame's band buffers for
+/// an INTER frame (`spec/07 §4.4` band-coefficient-layer prediction).
+pub(crate) fn decode_payload(
+    r: &mut BitReader<'_>,
+    gop: &GopHeader,
+    band_size_present: bool,
+    reference: Option<&[Vec<Band>]>,
+) -> Result<PayloadOutcome, DecodeError> {
+    let slice_size = gop.slice_size();
     let level_table = build_level_table();
     // Never consulted (only passed when no VLC field is gated on).
     let fallback_codebook = Codebook::build(&[1, 1]).expect("trivial codebook");
@@ -454,15 +650,33 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
     let mut frontiers: Vec<DecodeFrontier> = Vec::new();
     let mut parse_complete = true;
     let mut recon_planes: Vec<ReconstructionPlane> = Vec::with_capacity(3);
+    let mut all_bands: Vec<Vec<Band>> = Vec::with_capacity(3);
 
     for (plane_idx, geom) in planes_geom.iter().enumerate() {
-        // Seed every band with zeros; only parsed content overwrites.
-        let bands: Vec<Band> = (0..geom.band_info.len())
+        // Seed every band: zeros for INTRA; the previous frame's band
+        // content for INTER (spec/07 §4.4 — empty bands / empty tiles
+        // / skipped MBs carry the predictor forward).
+        let mut bands: Vec<Band> = (0..geom.band_info.len())
             .map(|band_idx| {
                 let (bw, bh) = band_dims(geom.width, geom.height, geom.levels, band_idx);
-                Band::new(bw as usize, bh as usize, vec![0i32; (bw * bh) as usize])
+                match reference {
+                    Some(prev) => prev
+                        .get(plane_idx)
+                        .and_then(|p| p.get(band_idx))
+                        .filter(|b| b.width == bw as usize && b.height == bh as usize)
+                        .cloned()
+                        .ok_or(DecodeError::ReferenceMismatch {
+                            plane_idx,
+                            band_idx,
+                        }),
+                    None => Ok(Band::new(
+                        bw as usize,
+                        bh as usize,
+                        vec![0i32; (bw * bh) as usize],
+                    )),
+                }
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         for (band_idx, binfo) in geom.band_info.iter().enumerate() {
             if !parse_complete {
@@ -470,7 +684,7 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
             }
             r.align()?;
             let band_start = r.byte_pos();
-            let band_header = BandHeader::parse(&mut r, band_size_present).map_err(|error| {
+            let band_header = BandHeader::parse(&mut *r, band_size_present).map_err(|error| {
                 DecodeError::Band {
                     plane_idx,
                     band_idx,
@@ -494,6 +708,28 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
                 band_header.flags.qdelta_present(),
                 band_header.flags.qdelta_inherit(),
             );
+            let inter = reference.is_some();
+            // spec/03 §4.4 — an inter band carries explicit MVs only
+            // when the per-band MV-inheritance flag is clear; the
+            // inheritance path rides the docs-gapped spec/07 §3.4
+            // per-band `0x3604`/`0x3664` tables.
+            let explicit_mv = inter && !band_header.flags.mv_inherit();
+            let mv_inherit_gated = inter && band_header.flags.mv_inherit();
+            let mv_res = if binfo.mv_halfpel {
+                MvResolution::HalfPel
+            } else {
+                MvResolution::FullPel
+            };
+
+            // The inter walk works on the band's coefficient layer as
+            // i16 (the spec/07 §5 packed-word arithmetic); seed = the
+            // reference carry already in `bands[band_idx]`.
+            let mut work: Vec<i16> = if inter {
+                bands[band_idx].data.iter().map(|&v| v as i16).collect()
+            } else {
+                Vec::new()
+            };
+            let ref_i16: Vec<i16> = if inter { work.clone() } else { Vec::new() };
 
             r.align()?;
             let mut band_aborted = false;
@@ -503,11 +739,18 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
                     let tile = tile_grid.tile(col, row).expect("in-range tile");
                     r.align()?;
                     let tile_start = r.byte_pos();
-                    let th = TileHeader::parse(&mut r, false)?; // intra: predictor off
+                    // The §2.7 predictor context flag reads the
+                    // frame-level `[frame+0xec]` array whose origin is
+                    // the spec/03 §6.3-item-5 open question; passed
+                    // clear (intra frames force it clear anyway).
+                    let th = TileHeader::parse(&mut *r, false)?;
                     stats.tiles += 1;
 
                     match th.size {
                         TileDataSize::Empty => {
+                            // Intra: no coded blocks (zeros). Inter:
+                            // the tile inherits the reference content
+                            // already seeded (spec/03 §2.2).
                             stats.empty_tiles += 1;
                         }
                         TileDataSize::Implicit | TileDataSize::Explicit(_) => {
@@ -519,19 +762,43 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
                             );
                             let ctx = MbContext {
                                 qdelta_mode,
-                                explicit_mv: false, // intra tile (spec/03 §4.4)
+                                explicit_mv,
                                 blocks_per_mb: grid.blocks_per_mb(),
                             };
-                            let frontier = walk_tile_mbs(
-                                &mut r,
-                                &grid,
-                                &ctx,
-                                codebook.as_ref(),
-                                &fallback_codebook,
-                                &level_table,
-                                &mut stats,
-                                (plane_idx, band_idx, tile_idx),
-                            )?;
+                            let frontier = if mv_inherit_gated {
+                                // Coded tile in an MV-inheritance band:
+                                // the per-MB MV/transform-id markers
+                                // ride the docs-gapped spec/07 §3.4
+                                // tables.
+                                Some(FrontierReason::MvInheritance)
+                            } else if inter {
+                                walk_tile_mbs_inter(
+                                    &mut *r,
+                                    &grid,
+                                    &ctx,
+                                    codebook.as_ref(),
+                                    &fallback_codebook,
+                                    &level_table,
+                                    &mut stats,
+                                    (plane_idx, band_idx, tile_idx),
+                                    tile,
+                                    mv_res,
+                                    &mut work,
+                                    &ref_i16,
+                                    bw as usize,
+                                )?
+                            } else {
+                                walk_tile_mbs(
+                                    &mut *r,
+                                    &grid,
+                                    &ctx,
+                                    codebook.as_ref(),
+                                    &fallback_codebook,
+                                    &level_table,
+                                    &mut stats,
+                                    (plane_idx, band_idx, tile_idx),
+                                )?
+                            };
                             r.align()?;
 
                             if let Some(reason) = frontier {
@@ -539,13 +806,13 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
                                     TileDataSize::Explicit(n) => {
                                         // spec/03 §2.6 skip path (§2.8
                                         // whole-tile byte-count reading).
-                                        skip_to_byte(&mut r, tile_start + u64::from(n))?;
+                                        skip_to_byte(&mut *r, tile_start + u64::from(n))?;
                                         true
                                     }
                                     TileDataSize::Implicit => {
                                         if let Some(end) = band_end {
                                             // spec/02 §3.2 band-level skip.
-                                            skip_to_byte(&mut r, end)?;
+                                            skip_to_byte(&mut *r, end)?;
                                             band_aborted = true;
                                             true
                                         } else {
@@ -570,7 +837,7 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
                                 // encoder's count exceeds what the walk
                                 // consumed; a target behind the cursor
                                 // is the §2.8 error return.
-                                skip_to_byte(&mut r, tile_start + u64::from(n))?;
+                                skip_to_byte(&mut *r, tile_start + u64::from(n))?;
                             }
                         }
                     }
@@ -583,13 +850,20 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
                 if let Some(end) = band_end {
                     r.align()?;
                     if r.byte_pos() < end {
-                        skip_to_byte(&mut r, end)?;
+                        skip_to_byte(&mut *r, end)?;
                     }
                 }
             }
-            // Bands whose coefficients are gated keep their zero
-            // seed; the band buffer is only rewritten by the (still
-            // gated) coefficient path, so nothing to do here.
+            // Intra bands whose coefficients are gated keep their
+            // zero seed; an inter band writes back its worked
+            // coefficient layer (reference carry + MC updates).
+            if inter {
+                bands[band_idx] = Band::new(
+                    bw as usize,
+                    bh as usize,
+                    work.iter().map(|&v| v as i32).collect(),
+                );
+            }
         }
 
         // spec/06 §3.4 — bottom-up recompose: bands[0] is the
@@ -603,20 +877,12 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
             .collect();
         let plane = recompose_plane(&bands[0], &levels);
         recon_planes.push(to_reconstruction_plane(&plane, geom.width, geom.height)?);
+        all_bands.push(bands);
     }
 
-    // spec/08 — bias-and-clamp + planar pack. Plane decode order was
-    // Y, U, V (spec/02 §4.4); assemble takes (luma, V, U).
-    let format = match gop.flags.subsampling() {
-        Subsampling::Yvu9 => OutputFormat::Yvu9,
-        Subsampling::Yv12 => OutputFormat::Yv12,
-    };
-    let output = assemble_frame(&recon_planes[0], &recon_planes[2], &recon_planes[1], format)?;
-
-    Ok(DecodedPicture {
-        header,
-        format: Some(format),
-        output: Some(output),
+    Ok(PayloadOutcome {
+        bands: all_bands,
+        recon: recon_planes,
         frontiers,
         stats,
         parse_complete,

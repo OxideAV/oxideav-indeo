@@ -49,6 +49,7 @@ mod picture;
 mod planes;
 mod refbuf;
 mod rv_table;
+mod session;
 mod slant;
 mod tables;
 mod tile;
@@ -113,6 +114,7 @@ pub use rv_table::{
     coefficient_for_lindex, escape_lindex, run_advance, RvTable, RvTableError,
     ESCAPE_LINDEX_HI_SHIFT, RV_TABLE_SLOT_STRIDE,
 };
+pub use session::{Indeo5Decoder, SessionError, SessionOutput};
 pub use slant::{
     a0_fragment, b0a_fragment, b1a_fragment, dispatch_use, pair_add, pair_normalise, pair_pack,
     pair_ror1, pair_ror17, pair_ror2, pair_unpack, DispatchUse, HandlerCluster, Page0Handler,
