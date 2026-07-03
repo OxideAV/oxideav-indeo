@@ -96,3 +96,46 @@ fn indeo5_320x240_intra_decodes_all_bands() {
         );
     }
 }
+
+#[test]
+fn session_decodes_fixture_then_null_repeat() {
+    // The stateful session surface over a real INTRA keyframe, then a
+    // NULL frame (spec/08 §6.4): byte-for-byte repeat of the held
+    // output.
+    use oxideav_indeo::indeo5::Indeo5Decoder;
+    let mut dec = Indeo5Decoder::new();
+    let f0 = dec.decode(INDEO5).expect("intra");
+    assert!(f0.parse_complete);
+    assert_eq!(f0.output.data.len(), 320 * 240 + 2 * 80 * 60);
+
+    // NULL frame: PSC + frame_type 4 + a fresh frame number.
+    let null = [0x1f | (4 << 5), 0x01, 0, 0, 0, 0, 0, 0];
+    let f1 = dec.decode(&null).expect("null");
+    assert!(f1.repeated_previous);
+    assert_eq!(f1.output.data, f0.output.data);
+}
+
+#[test]
+fn truncated_fixture_prefixes_never_panic() {
+    // Robustness: every truncation of both real bitstreams must
+    // return (Ok or Err) without panicking or over-reading.
+    for fixture in [EDUC, INDEO5] {
+        for len in 0..fixture.len() {
+            let _ = decode_intra_picture(&fixture[..len]);
+        }
+    }
+}
+
+#[test]
+fn corrupted_fixture_bytes_never_panic() {
+    // Deterministic single-byte corruptions across the smaller
+    // fixture: the decoder may reject or mis-decode, never panic.
+    let mut buf = EDUC.to_vec();
+    for i in 0..buf.len() {
+        for flip in [0x01u8, 0x80, 0xff] {
+            buf[i] ^= flip;
+            let _ = decode_intra_picture(&buf);
+            buf[i] ^= flip;
+        }
+    }
+}
