@@ -48,6 +48,7 @@ pub mod pic_size;
 mod picture;
 mod planes;
 mod refbuf;
+pub mod registry;
 mod rv_table;
 mod session;
 mod slant;
@@ -111,6 +112,11 @@ pub use pack::{pack_planar, HostBuffer, PlanePlacement};
 pub use picture::{PictureError, PictureHeader};
 pub use planes::{num_bands, FramePlanes, PlaneRole, OUTPUT_ITERATION_ORDER, PLANE_RECORD_ORDER};
 pub use refbuf::RefSlots;
+pub use registry::{
+    codec_id_for_fourcc, decode_video_frame, make_decoder, probe, register, register_codecs,
+    Indeo5RegistryDecoder, CODEC_ID_STR, INDEO5_FOURCCS, PROBE_CONFIDENCE_HEADER_OK,
+    PROBE_CONFIDENCE_TAG_ONLY,
+};
 pub use rv_table::{
     escape_lindex, escape_value, run_advance, RvEntry, RvSlotData, RvTable, RvTableError,
     RV_TABLE_SLOTS,

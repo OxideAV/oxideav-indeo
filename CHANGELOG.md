@@ -8,6 +8,27 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) codec-registry integration + `oxideav_core::Decoder`
+  bridge** (r398, `indeo5::registry`). Mirrors the sibling Indeo 3
+  bridge: `codec_id_for_fourcc` maps the `IV50` FourCC (case-insensitive)
+  to codec id `indeo5`; `Indeo5RegistryDecoder` implements
+  `oxideav_core::Decoder` over the stateful `Indeo5Decoder`
+  (send/receive/flush/reset, NULL-repeat and INTER-predict preserved);
+  `make_decoder` / `register_codecs` / `register` install the codec
+  (caps + factory + probe + FourCC tag), and the crate-level `register`
+  now installs both Indeo 3 and Indeo 5. Each decoded frame's planar
+  host buffer is reshaped into a `PixelFormat::Yuv444P` `VideoFrame` —
+  the two native chroma planes box-upsampled to full luma resolution
+  (`spec/08 §3.5` top-left-cosited box filter), since the framework
+  carries no 4:1:0 format. `probe` validates a first packet's
+  picture-start header; `decode_video_frame` is the one-shot direct-API
+  counterpart. `SessionOutput` now carries the coded luma `dimensions`
+  so a consumer can shape the planar output without re-parsing. The
+  reshaped pixels are exactly what the decoder reconstructs (uniform
+  mid-grey where the `spec/06` fused-transform / dequant docs-gap keeps
+  coefficient synthesis gated). 11 registry unit tests + 5 end-to-end
+  tests driving the real 320×240 `IV50` fixture through the `Decoder`
+  trait (Yuv444P shape, NULL-repeat, first-frame INTRA gate, reset).
 - **Indeo 5 (`IV50`) real-bitstream entropy layer — both staged INTRA
   fixtures decode end-to-end** (r388). Fixture-arbitrated resolutions
   (each is the unique reading under which all six band payloads of the

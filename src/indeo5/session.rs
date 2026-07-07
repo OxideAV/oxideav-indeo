@@ -91,6 +91,12 @@ pub struct SessionOutput {
     pub repeated_previous: bool,
     /// The host output format.
     pub format: OutputFormat,
+    /// The coded luma dimensions `(width, height)` of this frame
+    /// (`spec/02 §1.6`). Carried through NULL / INTER frames from the
+    /// governing INTRA GOP so a consumer can shape the planar
+    /// [`output`](Self::output) into a strided surface without
+    /// re-parsing the header.
+    pub dimensions: (u32, u32),
     /// The assembled planar host buffer.
     pub output: HostBuffer,
     /// Gated elements encountered this frame (empty for NULL).
@@ -151,10 +157,15 @@ impl Indeo5Decoder {
                     .held
                     .clone()
                     .expect("first-frame gate guarantees a held output");
+                let g = self
+                    .gop
+                    .as_ref()
+                    .expect("first-frame gate guarantees a held GOP");
                 SessionOutput {
                     frame_type,
                     repeated_previous: true,
                     format,
+                    dimensions: (g.width, g.height),
                     output: buffer,
                     frontiers: Vec::new(),
                     stats: DecodeStats::default(),
@@ -172,6 +183,7 @@ impl Indeo5Decoder {
                     &payload.recon[1],
                     format,
                 )?;
+                let dimensions = (gop.width, gop.height);
                 self.gop = Some(gop);
                 self.promote(frame_type, payload.bands);
                 self.held = Some((format, output.clone()));
@@ -179,6 +191,7 @@ impl Indeo5Decoder {
                     frame_type,
                     repeated_previous: false,
                     format,
+                    dimensions,
                     output,
                     frontiers: payload.frontiers,
                     stats: payload.stats,
@@ -199,12 +212,14 @@ impl Indeo5Decoder {
                     &payload.recon[1],
                     format,
                 )?;
+                let dimensions = (gop.width, gop.height);
                 self.promote(frame_type, payload.bands);
                 self.held = Some((format, output.clone()));
                 SessionOutput {
                     frame_type,
                     repeated_previous: false,
                     format,
+                    dimensions,
                     output,
                     frontiers: payload.frontiers,
                     stats: payload.stats,

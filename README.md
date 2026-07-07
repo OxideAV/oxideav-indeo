@@ -179,8 +179,23 @@ Slant equations are not yet numerically staged in `docs/` (see the
 docs-gaps below), so coded-block regions reconstruct as zeros while
 their entropy streams are fully decoded and validated; the per-tile
 MV-inheritance fast path (spec/07 §3.4/§3.5 — needs the per-band
-`0x3604`/`0x3664` tables) also remains gated. Indeo 5 is decode-only
-and not yet registered into the codec registry.
+`0x3604`/`0x3664` tables) also remains gated. Indeo 5 is decode-only.
+
+Indeo 5 is now **wired into the codec registry** (`indeo5::register`,
+called from the crate-level `register`): the `IV50` FourCC routes to
+codec id `indeo5`, and `indeo5::Indeo5RegistryDecoder` implements
+`oxideav_core::Decoder` over the stateful `Indeo5Decoder` (NULL /
+repeat frames re-emit the held output, INTER frames predict against
+the reference). Each decoded frame's planar host buffer is reshaped
+into a `PixelFormat::Yuv444P` `VideoFrame` — the two native chroma
+planes box-upsampled to full luma resolution via the spec/08 §3.5
+top-left-cosited filter, exactly as the sibling Indeo 3 bridge does
+(no 4:1:0 pixel format exists in the framework). `indeo5::probe`
+validates a first packet's picture-start header so a real `IV50`
+payload out-ranks a colliding claimant, and `indeo5::decode_video_frame`
+is the one-shot direct-API counterpart. The reshaped pixels are
+exactly what the decoder reconstructs — uniform mid-grey where the
+coefficient transform stays at the docs-gap below.
 
 ### Indeo 5 reported docs-gaps
 

@@ -59,16 +59,19 @@
 pub mod indeo3;
 pub mod indeo5;
 
-/// Install this crate's codecs (the Indeo 3 `IV31` / `IV32` decoder)
-/// into a [`oxideav_core::RuntimeContext`].
+/// Install this crate's codecs into a [`oxideav_core::RuntimeContext`]:
+/// the Indeo 3 (`IV31` / `IV32`) decoder and the Indeo 5 (`IV50`)
+/// decoder.
 ///
 /// This is the crate-level registration entry point, delegating to
-/// [`indeo3::register`]. The `oxideav_core::register!` macro below wires
-/// it into `oxideav-meta`'s zero-config fleet registration; direct
-/// callers can invoke this (or [`indeo3::register_codecs`] for a bare
+/// [`indeo3::register`] and [`indeo5::register`]. The
+/// `oxideav_core::register!` macro below wires it into `oxideav-meta`'s
+/// zero-config fleet registration; direct callers can invoke this (or
+/// [`indeo3::register_codecs`] / [`indeo5::register_codecs`] for a bare
 /// [`oxideav_core::CodecRegistry`]) themselves.
 pub fn register(ctx: &mut oxideav_core::RuntimeContext) {
     indeo3::register(ctx);
+    indeo5::register(ctx);
 }
 
 oxideav_core::register!("indeo", register);
