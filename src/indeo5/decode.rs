@@ -846,19 +846,38 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
         format,
     )?;
 
-    // spec/08 §7 reconstruction oracle: recompute the per-band and
-    // per-frame checksums from the assembled pixels and compare them
-    // against the stream's stored values (formulas recovered by
-    // black-box validation; see `super::verify`). A luma band stays
-    // Mismatch while its coefficient→pixel transform is gated; a
-    // genuinely-flat chroma band matches exactly.
+    let (bands, frame_ck) = reconstruction_checksums(&output, frame.frm_checksum, &payload.blocks);
+
+    Ok(DecodedPicture {
+        header,
+        format: Some(format),
+        output: Some(output),
+        frontiers: payload.frontiers,
+        stats: payload.stats,
+        band_traces: payload.band_traces,
+        bands,
+        frame_checksum: frame_ck,
+        parse_complete: payload.parse_complete,
+    })
+}
+
+/// `spec/08 §7` reconstruction oracle: recompute the per-band and
+/// per-frame checksums from the assembled pixels and compare them
+/// against the stream's stored values (formulas recovered by black-box
+/// validation; see [`super::verify`]). A luma band stays
+/// [`super::ChecksumStatus::Mismatch`] while its coefficient→pixel
+/// transform is gated; a genuinely-flat chroma band matches exactly.
+pub(crate) fn reconstruction_checksums(
+    output: &HostBuffer,
+    stored_frame_checksum: Option<u16>,
+    blocks: &[BandBlockSet],
+) -> (Vec<BandReconstruction>, super::ChecksumStatus) {
     let luma = output.plane_bytes(super::PlaneRole::Luma);
     let cu = output.plane_bytes(super::PlaneRole::ChromaU);
     let cv = output.plane_bytes(super::PlaneRole::ChromaV);
     let frame_ck =
-        super::ChecksumStatus::compare(frame.frm_checksum, super::frame_checksum(luma, cu, cv));
-    let bands = payload
-        .blocks
+        super::ChecksumStatus::compare(stored_frame_checksum, super::frame_checksum(luma, cu, cv));
+    let bands = blocks
         .iter()
         .map(|set| {
             // For a 0-level plane the band is the plane, so its
@@ -881,18 +900,7 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
             }
         })
         .collect();
-
-    Ok(DecodedPicture {
-        header,
-        format: Some(format),
-        output: Some(output),
-        frontiers: payload.frontiers,
-        stats: payload.stats,
-        band_traces: payload.band_traces,
-        bands,
-        frame_checksum: frame_ck,
-        parse_complete: payload.parse_complete,
-    })
+    (bands, frame_ck)
 }
 
 /// The host output format the GOP subsampling selects

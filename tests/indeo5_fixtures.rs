@@ -167,17 +167,30 @@ fn session_decodes_fixture_then_null_repeat() {
     // The stateful session surface over a real INTRA keyframe, then a
     // NULL frame (spec/08 §6.4): byte-for-byte repeat of the held
     // output.
-    use oxideav_indeo::indeo5::Indeo5Decoder;
+    use oxideav_indeo::indeo5::{ChecksumStatus, Indeo5Decoder};
     let mut dec = Indeo5Decoder::new();
     let f0 = dec.decode(INDEO5).expect("intra");
     assert!(f0.parse_complete);
     assert_eq!(f0.output.data.len(), 320 * 240 + 2 * 80 * 60);
+
+    // The session path surfaces the same spec/08 §7 reconstruction
+    // oracle as the one-shot INTRA path: three bands, luma unverified
+    // (transform gated), the frame checksum a mismatch.
+    assert_eq!(f0.bands.len(), 3);
+    assert!(matches!(
+        f0.bands[0].checksum,
+        ChecksumStatus::Mismatch { stored: 0xee60, .. }
+    ));
+    assert!(matches!(f0.frame_checksum, ChecksumStatus::Mismatch { .. }));
 
     // NULL frame: PSC + frame_type 4 + a fresh frame number.
     let null = [0x1f | (4 << 5), 0x01, 0, 0, 0, 0, 0, 0];
     let f1 = dec.decode(&null).expect("null");
     assert!(f1.repeated_previous);
     assert_eq!(f1.output.data, f0.output.data);
+    // A NULL repeat carries no coefficient work list / checksum.
+    assert!(f1.bands.is_empty());
+    assert_eq!(f1.frame_checksum, ChecksumStatus::Absent);
 }
 
 #[test]

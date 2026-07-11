@@ -27,7 +27,10 @@
 //! pixels; the motion-compensated predictor copy (skip-inherited and
 //! explicitly-decoded MVs over the band-coefficient layer) is real.
 
-use super::decode::{decode_payload, output_format, DecodeError, DecodeFrontier, DecodeStats};
+use super::decode::{
+    decode_payload, output_format, reconstruction_checksums, BandReconstruction, DecodeError,
+    DecodeFrontier, DecodeStats,
+};
 use super::finalise::{reference_rotation, ReferenceRotation};
 use super::format::OutputFormat;
 use super::gop::GopHeader;
@@ -36,6 +39,7 @@ use super::pack::HostBuffer;
 use super::picture::{PictureError, PictureHeader};
 use super::refbuf::RefSlots;
 use super::wavelet::Band;
+use super::ChecksumStatus;
 use super::{assemble_frame, AssembleError};
 
 /// Errors raised by the multi-frame session.
@@ -103,6 +107,12 @@ pub struct SessionOutput {
     pub frontiers: Vec<DecodeFrontier>,
     /// Structural counts for this frame (zeros for NULL).
     pub stats: DecodeStats,
+    /// Per-band decoded-coefficient work list + `spec/08 §7`
+    /// reconstruction-checksum status (empty for NULL / repeat frames).
+    pub bands: Vec<BandReconstruction>,
+    /// The recomputed-vs-stored frame checksum (`spec/08 §7.1`,
+    /// [`ChecksumStatus::Absent`] for NULL).
+    pub frame_checksum: ChecksumStatus,
     /// `false` when parsing stopped at an unskippable frontier.
     pub parse_complete: bool,
 }
@@ -169,6 +179,8 @@ impl Indeo5Decoder {
                     output: buffer,
                     frontiers: Vec::new(),
                     stats: DecodeStats::default(),
+                    bands: Vec::new(),
+                    frame_checksum: ChecksumStatus::Absent,
                     parse_complete: true,
                 }
             }
@@ -184,6 +196,8 @@ impl Indeo5Decoder {
                     format,
                 )?;
                 let dimensions = (gop.width, gop.height);
+                let (bands, frame_checksum) =
+                    reconstruction_checksums(&output, frame.frm_checksum, &payload.blocks);
                 self.gop = Some(gop);
                 self.promote(frame_type, payload.bands);
                 self.held = Some((format, output.clone()));
@@ -195,6 +209,8 @@ impl Indeo5Decoder {
                     output,
                     frontiers: payload.frontiers,
                     stats: payload.stats,
+                    bands,
+                    frame_checksum,
                     parse_complete: payload.parse_complete,
                 }
             }
@@ -213,6 +229,8 @@ impl Indeo5Decoder {
                     format,
                 )?;
                 let dimensions = (gop.width, gop.height);
+                let (bands, frame_checksum) =
+                    reconstruction_checksums(&output, frame.frm_checksum, &payload.blocks);
                 self.promote(frame_type, payload.bands);
                 self.held = Some((format, output.clone()));
                 SessionOutput {
@@ -223,6 +241,8 @@ impl Indeo5Decoder {
                     output,
                     frontiers: payload.frontiers,
                     stats: payload.stats,
+                    bands,
+                    frame_checksum,
                     parse_complete: payload.parse_complete,
                 }
             }
