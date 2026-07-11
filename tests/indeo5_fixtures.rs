@@ -51,9 +51,35 @@ fn educ_240x180_black_frame_decodes() {
     // decoder emits Y=16, U=V=128 for this frame through its own
     // output conversion; our planar output pins the mid-grey zero
     // state pending the spec/08 output-LUT staging).
-    let out = d.output.expect("output");
+    let out = d.output.as_ref().expect("output");
     assert_eq!(out.data.len(), 240 * 180 + 2 * 60 * 45);
     assert!(out.data.iter().all(|&b| b == 128));
+
+    // spec/08 §7 reconstruction oracle (formula recovered by black-box
+    // validation). The educ band checksums are Y=0x2c00, U=V=0. Our
+    // uniform-128 reconstruction is byte-sum-exact for the two chroma
+    // bands (their real content is neutral 128) but not the luma band
+    // (whose real content is Y=16), so exactly two of the three bands
+    // verify — a quantitative pin of the coefficient-transform frontier.
+    use oxideav_indeo::indeo5::ChecksumStatus;
+    assert_eq!(d.bands.len(), 3);
+    assert_eq!(d.bands[0].plane_idx, 0);
+    assert!(matches!(
+        d.bands[0].checksum,
+        ChecksumStatus::Mismatch {
+            stored: 0x2c00,
+            computed: 0
+        }
+    ));
+    assert!(d.bands[1].checksum.verified());
+    assert!(d.bands[2].checksum.verified());
+    assert_eq!(d.bands_verified(), 2);
+    // The whole-frame checksum stays a mismatch while any plane is
+    // gated (stored 0x1800 vs the uniform-128 recompute).
+    assert!(matches!(
+        d.frame_checksum,
+        ChecksumStatus::Mismatch { stored: 0x1800, .. }
+    ));
 }
 
 #[test]
@@ -95,6 +121,45 @@ fn indeo5_320x240_intra_decodes_all_bands() {
             "band tail too large: {consumed}/{declared}"
         );
     }
+
+    // Per-band decoded coefficient work list (spec/05 stream): every
+    // walked block is surfaced with its scan-ordered coefficients + the
+    // effective per-MB quantiser, in decode order, for the (docs-gapped)
+    // coefficient->pixel transform stage.
+    use oxideav_indeo::indeo5::{BlockCoding, ChecksumStatus};
+    assert_eq!(d.bands.len(), 3);
+    let y_band = &d.bands[0];
+    assert_eq!(y_band.glob_quant, 9); // band+0x40 = 9 (r388 erratum)
+    let coded = y_band
+        .blocks
+        .iter()
+        .filter(|b| b.coding == BlockCoding::Coded)
+        .count();
+    assert_eq!(coded, 678); // matches stats.coded_blocks for the Y band
+                            // Every coded block's scan positions stay within its budget
+                            // and its quantiser is a valid 0..=31 value.
+    for b in &y_band.blocks {
+        assert!(b.quant <= 31);
+        assert!(b.blk_size == 8);
+    }
+    // A coded block with non-zero coefficients exists (they are decoded
+    // and carried, not discarded).
+    assert!(y_band
+        .blocks
+        .iter()
+        .any(|b| b.coding == BlockCoding::Coded && b.coeffs.iter().any(|&c| c != 0)));
+
+    // spec/08 §7 reconstruction oracle. The Y band stores checksum
+    // 0xee60 (the r388 --watch value); our uniform-128 recompute is 0,
+    // so the luma band is a Mismatch — the coefficient transform is
+    // gated. The two chroma bands' real content is near-neutral, so
+    // their stored checksums do not match uniform-128 either; every
+    // band with content is correctly flagged unverified.
+    assert!(matches!(
+        y_band.checksum,
+        ChecksumStatus::Mismatch { stored: 0xee60, .. }
+    ));
+    assert!(matches!(d.frame_checksum, ChecksumStatus::Mismatch { .. }));
 }
 
 #[test]

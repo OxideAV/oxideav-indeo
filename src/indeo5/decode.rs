@@ -55,7 +55,7 @@ use super::gop::{BandInfo, GopHeader, Subsampling};
 use super::header::FrameType;
 use super::level_table::{build_level_table, LEVEL_TABLE_LEN};
 use super::mb::MbGrid;
-use super::mb_header::{MbContext, MbHeader, MbHeaderError, QdeltaMode};
+use super::mb_header::{effective_mb_quant, MbContext, MbHeader, MbHeaderError, QdeltaMode};
 use super::mc::{mc_add_block, BandView, McError};
 use super::mv::{resolve_mv, Mv, MvPredictor, MvResolution};
 use super::output::{plane_stride, OutputError, ReconstructionPlane};
@@ -339,6 +339,32 @@ pub struct BandTrace {
     pub declared: Option<u32>,
 }
 
+/// One band's decoded coefficient work list plus its checksum status:
+/// the input the (docs-gapped) coefficient→pixel transform stage
+/// consumes, and the `spec/08 §7` reconstruction oracle for the band.
+#[derive(Debug, Clone)]
+pub struct BandReconstruction {
+    /// Plane index (0 = Y; 1..2 = the chroma chains).
+    pub plane_idx: usize,
+    /// Band index within the plane.
+    pub band_idx: usize,
+    /// The band's global quantiser (`spec/06 §5.1`, `band_glob_quant`).
+    pub glob_quant: u8,
+    /// Every walked block of the band, in decode order, carrying its
+    /// scan-ordered decoded coefficients (`spec/05` stream) plus the
+    /// block's effective per-MB quantiser (`spec/06 §5.2`). Empty when
+    /// the band took a gated / empty path.
+    pub blocks: Vec<BlockRecord>,
+    /// The band's stored `band_checksum` (`spec/08 §7.2`), if present.
+    pub stored_checksum: Option<u16>,
+    /// The band checksum recomputed from the reconstructed pixels vs
+    /// the stored value (`spec/08 §7.2`, formula recovered by black-box
+    /// validation) — a byte-sum-exact reconstruction oracle. Luma bands
+    /// stay [`ChecksumStatus::Mismatch`] while the transform is gated;
+    /// genuinely-flat chroma bands match exactly.
+    pub checksum: super::ChecksumStatus,
+}
+
 /// One decoded INTRA frame: the parsed header stack, the assembled
 /// host buffer, and the structural coverage report.
 #[derive(Debug, Clone)]
@@ -357,6 +383,14 @@ pub struct DecodedPicture {
     pub stats: DecodeStats,
     /// Per-band consumption traces.
     pub band_traces: Vec<BandTrace>,
+    /// Per-band decoded coefficients + reconstruction-checksum status
+    /// (the coefficient→pixel transform's input work list and its
+    /// `spec/08 §7` oracle).
+    pub bands: Vec<BandReconstruction>,
+    /// The recomputed-vs-stored **frame** checksum (`spec/08 §7.1`,
+    /// formula recovered by black-box validation). [`ChecksumStatus::Match`]
+    /// only once every plane reconstructs byte-sum-exactly.
+    pub frame_checksum: super::ChecksumStatus,
     /// `false` when a frontier could not be skipped past and parsing
     /// stopped early (later bands / planes reconstruct as zeros).
     pub parse_complete: bool,
@@ -367,6 +401,12 @@ impl DecodedPicture {
     /// hitting a gate.
     pub fn fully_reconstructed(&self) -> bool {
         self.parse_complete && self.frontiers.is_empty()
+    }
+
+    /// The count of bands whose recomputed checksum matched the stored
+    /// value (`spec/08 §7.2`) — bands reconstructed byte-sum-exactly.
+    pub fn bands_verified(&self) -> usize {
+        self.bands.iter().filter(|b| b.checksum.verified()).count()
     }
 }
 
@@ -431,6 +471,38 @@ struct MbRecord {
     height: u32,
 }
 
+/// How one block of a coded macroblock is signalled (`spec/03 §4.3`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockCoding {
+    /// CBP bit set — a `(run, val)` coefficient stream follows.
+    Coded,
+    /// CBP bit clear — DC-only / no coefficient stream.
+    DcOnly,
+    /// The whole MB carried the skip flag — no header fields either.
+    Skipped,
+}
+
+/// One block of a walked tile, in band coordinates, carrying its
+/// decoded scan-ordered coefficients (`spec/05` stream through the
+/// band codebook + rv-table; `coeffs[pos]` is the value emitted at
+/// scan position `pos`, `0..budget`).
+#[derive(Debug, Clone)]
+pub struct BlockRecord {
+    /// Band-relative top-left x of the block.
+    pub x: u32,
+    /// Band-relative top-left y of the block.
+    pub y: u32,
+    /// Block side (4 or 8).
+    pub blk_size: u32,
+    /// Effective per-MB quantiser (`spec/06 §5.2`).
+    pub quant: u8,
+    /// How the block was signalled.
+    pub coding: BlockCoding,
+    /// Scan-position-ordered coefficient values (first
+    /// `blk_size * blk_size` entries meaningful).
+    pub coeffs: [i16; 64],
+}
+
 /// Decode one coded block's `(run, val)` coefficient stream
 /// (`spec/05` + the wiki "Block data" annex): symbols through the
 /// block codebook, `(run, val)` through the rv-table, `pos += run + 1`
@@ -445,6 +517,7 @@ fn decode_block_stream(
     budget: u32,
     stats: &mut DecodeStats,
     at: (usize, usize, usize),
+    coeffs: &mut [i16; 64],
 ) -> Result<(), DecodeError> {
     let (plane_idx, band_idx, tile_idx) = at;
     let mut pos: i32 = -1;
@@ -456,7 +529,7 @@ fn decode_block_stream(
             tile_idx,
             reason: BlockStreamFault::UnmappedSymbol { symbol },
         })?;
-        let run = match entry {
+        let (run, val) = match entry {
             RvEntry::Eob => return Ok(()),
             RvEntry::Esc => {
                 stats.escapes += 1;
@@ -465,10 +538,10 @@ fn decode_block_stream(
                 let run = blk_cb.decode(r).map_err(DecodeError::Codebook)?;
                 let lo = blk_cb.decode(r).map_err(DecodeError::Codebook)?;
                 let hi = blk_cb.decode(r).map_err(DecodeError::Codebook)?;
-                let _val = escape_value(escape_lindex(lo, hi));
-                run.min(255) as u8
+                let val = escape_value(escape_lindex(lo, hi));
+                (run.min(255) as u8, val)
             }
-            RvEntry::Val { run, val: _val } => run,
+            RvEntry::Val { run, val } => (run, val),
         };
         pos = run_advance(pos, run);
         if pos >= budget as i32 {
@@ -482,6 +555,7 @@ fn decode_block_stream(
                 },
             });
         }
+        coeffs[pos as usize] = val;
         stats.coefficients += 1;
     }
 }
@@ -501,11 +575,14 @@ fn walk_tile_intra(
     blk_budget: u32,
     stats: &mut DecodeStats,
     at: (usize, usize, usize),
+    tile: &super::tile::Tile,
+    band_glob_quant: u8,
+    sink: &mut dyn FnMut(BlockRecord),
 ) -> Result<(), DecodeError> {
     let (plane_idx, band_idx, tile_idx) = at;
     // Phase 1 — MB headers.
-    let mut records: Vec<MbHeader> = Vec::new();
-    for _mb in grid.iter() {
+    let mut records: Vec<(MbHeader, super::mb::Macroblock)> = Vec::new();
+    for mb in grid.iter() {
         let header =
             MbHeader::parse(r, ctx, mb_cb, level_table).map_err(|error| DecodeError::MbHeader {
                 plane_idx,
@@ -517,24 +594,49 @@ fn walk_tile_intra(
         if header.skipped {
             stats.mbs_skipped += 1;
         }
-        records.push(header);
+        records.push((header, mb));
     }
     // Phase 2 — coded-block coefficient streams.
-    for header in &records {
+    for (header, mb) in &records {
+        let quant = header
+            .qdelta
+            .map(|d| effective_mb_quant(band_glob_quant, d))
+            .unwrap_or(band_glob_quant);
+        let blocks = grid.blocks(mb);
         if header.skipped {
+            for blk in &blocks {
+                sink(BlockRecord {
+                    x: tile.x + blk.x,
+                    y: tile.y + blk.y,
+                    blk_size: grid.blk_size,
+                    quant,
+                    coding: BlockCoding::Skipped,
+                    coeffs: [0i16; 64],
+                });
+            }
             continue;
         }
         let Some(cbp) = header.cbp else { continue };
         if cbp.coded_blocks(ctx.blocks_per_mb) == 0 {
             stats.mbs_coded_no_ac += 1;
-            continue;
         }
-        for b in 0..ctx.blocks_per_mb {
-            if !cbp.block_coded(b) {
-                continue;
-            }
-            stats.coded_blocks += 1;
-            decode_block_stream(r, blk_cb, rv, blk_budget, stats, at)?;
+        for blk in &blocks {
+            let mut coeffs = [0i16; 64];
+            let coding = if cbp.block_coded(blk.block_idx) {
+                stats.coded_blocks += 1;
+                decode_block_stream(r, blk_cb, rv, blk_budget, stats, at, &mut coeffs)?;
+                BlockCoding::Coded
+            } else {
+                BlockCoding::DcOnly
+            };
+            sink(BlockRecord {
+                x: tile.x + blk.x,
+                y: tile.y + blk.y,
+                blk_size: grid.blk_size,
+                quant,
+                coding,
+                coeffs,
+            });
         }
     }
     Ok(())
@@ -650,7 +752,8 @@ fn walk_tile_inter(
                 continue;
             }
             stats.coded_blocks += 1;
-            decode_block_stream(r, blk_cb, rv, blk_budget, stats, at)?;
+            let mut coeffs = [0i16; 64];
+            decode_block_stream(r, blk_cb, rv, blk_budget, stats, at, &mut coeffs)?;
         }
     }
     Ok(())
@@ -684,6 +787,18 @@ pub(crate) struct PayloadOutcome {
     pub stats: DecodeStats,
     pub band_traces: Vec<BandTrace>,
     pub parse_complete: bool,
+    pub blocks: Vec<BandBlockSet>,
+}
+
+/// All walked blocks of one band, in decode order (the reconstruction
+/// work list the coefficient stage hands the transform stage).
+#[derive(Debug, Clone)]
+pub(crate) struct BandBlockSet {
+    pub plane_idx: usize,
+    pub band_idx: usize,
+    pub glob_quant: u8,
+    pub records: Vec<BlockRecord>,
+    pub stored_checksum: Option<u16>,
 }
 
 /// Decode one INTRA frame to pixels.
@@ -705,6 +820,8 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
             frontiers: Vec::new(),
             stats: DecodeStats::default(),
             band_traces: Vec::new(),
+            bands: Vec::new(),
+            frame_checksum: super::ChecksumStatus::Absent,
             parse_complete: true,
         });
     }
@@ -729,6 +846,42 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
         format,
     )?;
 
+    // spec/08 §7 reconstruction oracle: recompute the per-band and
+    // per-frame checksums from the assembled pixels and compare them
+    // against the stream's stored values (formulas recovered by
+    // black-box validation; see `super::verify`). A luma band stays
+    // Mismatch while its coefficient→pixel transform is gated; a
+    // genuinely-flat chroma band matches exactly.
+    let luma = output.plane_bytes(super::PlaneRole::Luma);
+    let cu = output.plane_bytes(super::PlaneRole::ChromaU);
+    let cv = output.plane_bytes(super::PlaneRole::ChromaV);
+    let frame_ck =
+        super::ChecksumStatus::compare(frame.frm_checksum, super::frame_checksum(luma, cu, cv));
+    let bands = payload
+        .blocks
+        .iter()
+        .map(|set| {
+            // For a 0-level plane the band is the plane, so its
+            // reconstructed pixels are the whole plane's bytes; the
+            // band checksum is over `pixel - 128`.
+            let pixels = match set.plane_idx {
+                0 => luma,
+                1 => cu,
+                _ => cv,
+            };
+            let checksum =
+                super::ChecksumStatus::compare(set.stored_checksum, super::band_checksum(pixels));
+            BandReconstruction {
+                plane_idx: set.plane_idx,
+                band_idx: set.band_idx,
+                glob_quant: set.glob_quant,
+                blocks: set.records.clone(),
+                stored_checksum: set.stored_checksum,
+                checksum,
+            }
+        })
+        .collect();
+
     Ok(DecodedPicture {
         header,
         format: Some(format),
@@ -736,6 +889,8 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
         frontiers: payload.frontiers,
         stats: payload.stats,
         band_traces: payload.band_traces,
+        bands,
+        frame_checksum: frame_ck,
         parse_complete: payload.parse_complete,
     })
 }
@@ -792,6 +947,7 @@ pub(crate) fn decode_payload(
     let mut parse_complete = true;
     let mut recon_planes: Vec<ReconstructionPlane> = Vec::with_capacity(3);
     let mut all_bands: Vec<Vec<Band>> = Vec::with_capacity(3);
+    let mut all_blocks: Vec<BandBlockSet> = Vec::new();
 
     for (plane_idx, geom) in planes_geom.iter().enumerate() {
         // Seed every band: zeros for INTRA; the previous frame's band
@@ -847,6 +1003,7 @@ pub(crate) fn decode_payload(
             let (count_x, count_y) = band_tile_counts(bw, bh, slice_size);
             let tile_grid = TileGrid::build(bw, bh, count_x, count_y);
 
+            let mut band_blocks: Vec<BlockRecord> = Vec::new();
             let qdelta_mode = QdeltaMode::from_band_flags(
                 band_header.flags.qdelta_present(),
                 band_header.flags.qdelta_inherit(),
@@ -928,6 +1085,9 @@ pub(crate) fn decode_payload(
                                         blk_budget,
                                         &mut stats,
                                         (plane_idx, band_idx, tile_idx),
+                                        tile,
+                                        band_header.band_glob_quant.unwrap_or(0),
+                                        &mut |rec| band_blocks.push(rec),
                                     )?;
                                 }
                                 None
@@ -1005,6 +1165,13 @@ pub(crate) fn decode_payload(
                     work.iter().map(|&v| v as i32).collect(),
                 );
             }
+            all_blocks.push(BandBlockSet {
+                plane_idx,
+                band_idx,
+                glob_quant: band_header.band_glob_quant.unwrap_or(0),
+                records: band_blocks,
+                stored_checksum: band_header.band_checksum,
+            });
         }
 
         // spec/06 §3.4 — bottom-up recompose: bands[0] is the
@@ -1028,6 +1195,7 @@ pub(crate) fn decode_payload(
         stats,
         band_traces,
         parse_complete,
+        blocks: all_blocks,
     })
 }
 

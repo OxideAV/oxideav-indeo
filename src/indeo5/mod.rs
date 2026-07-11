@@ -55,6 +55,7 @@ mod slant;
 mod tables;
 mod tile;
 mod tile_header;
+mod verify;
 mod wavelet;
 
 pub use assemble::{assemble_frame, AssembleError};
@@ -74,8 +75,8 @@ pub use codebook::{
     MAX_ROWS, MB_HUFF_PRESETS,
 };
 pub use decode::{
-    decode_intra_picture, BandTrace, BlockStreamFault, DecodeError, DecodeFrontier, DecodeStats,
-    DecodedPicture, FrontierReason,
+    decode_intra_picture, BandReconstruction, BandTrace, BlockCoding, BlockRecord,
+    BlockStreamFault, DecodeError, DecodeFrontier, DecodeStats, DecodedPicture, FrontierReason,
 };
 pub use finalise::{
     frame_produces_output, is_output_written, mark_output_written, output_row_order,
@@ -137,4 +138,5 @@ pub use tile_header::{
     explicit_size_matches, tile_predictor_active, TileDataSize, TileHeader, MAX_TILE_DATA_SIZE,
     TILE_SIZE_ESCAPE,
 };
+pub use verify::{band_checksum, frame_checksum, ChecksumStatus};
 pub use wavelet::{recompose_level, recompose_plane, synth_1d, Band, LevelBands};

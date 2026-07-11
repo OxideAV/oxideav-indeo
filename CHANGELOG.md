@@ -8,6 +8,33 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 (`IV50`) per-band coefficient work list + `spec/08 §7`
+  reconstruction checksum oracle** (r411, `indeo5::decode`,
+  `indeo5::verify`). The per-block `(run, val)` coefficient streams are
+  no longer discarded after structural validation: `decode_intra_picture`
+  now surfaces every walked block as a `BlockRecord` (band-relative
+  position, block side, effective per-MB quantiser `spec/06 §5.2`,
+  scan-position-ordered decoded coefficients, and `BlockCoding` =
+  coded / DC-only / skipped), grouped per band into
+  `BandReconstruction` on `DecodedPicture::bands` — the input work list
+  the (docs-gapped) coefficient→pixel transform stage will consume. A
+  new `indeo5::verify` module computes the `spec/08 §7` per-band
+  `band_checksum` (`(Σ (pixel−128)) & 0xffff`) and per-frame
+  `frm_checksum` (`(Σ Y + Σ U + Σ V) & 0xffff`, chroma at native
+  resolution) — the arithmetic the spec did not stage because the
+  shipping decoder parses-and-stores checksums but never verifies them
+  (confirmed by a byte-exact black-box corruption test). The formulas
+  were recovered as numeric observations from the two staged `IV50`
+  INTRA fixtures' reference pixels + their stored checksum values (no
+  decoder source consulted) and verified byte-exact on both (`educ`
+  band-Y `0x2c00` / frame `0x1800`; `indeo5` band-Y `0xee60` / frame
+  `0xc975`). `DecodedPicture` now carries a per-band `ChecksumStatus`
+  and a frame `ChecksumStatus`: this turns the qualitative
+  "coefficients reconstruct as zero" note into a quantitative,
+  byte-sum-exact reconstruction oracle — the two chroma bands of the
+  black `educ` frame verify (their real content is neutral 128), the
+  luma band does not (its real content is `Y=16`), pinning the exact
+  coefficient-transform frontier.
 - **Indeo 5 (`IV50`) codec-registry integration + `oxideav_core::Decoder`
   bridge** (r398, `indeo5::registry`). Mirrors the sibling Indeo 3
   bridge: `codec_id_for_fourcc` maps the `IV50` FourCC (case-insensitive)
