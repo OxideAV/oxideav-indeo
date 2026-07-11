@@ -758,8 +758,8 @@ mod tests {
         // The reading-order spelling 'F','R','M','H' = the same
         // numeric DWORD because the on-disk byte sequence is
         // reversed.
-        let frmh = [b'F', b'R', b'M', b'H'];
-        let on_disk = [b'H', b'M', b'R', b'F'];
+        let frmh = *b"FRMH";
+        let on_disk = *b"HMRF";
         assert_eq!(MAGIC_FRMH, u32::from_be_bytes(frmh));
         assert_eq!(MAGIC_FRMH, u32::from_le_bytes(on_disk));
     }
