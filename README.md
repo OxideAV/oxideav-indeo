@@ -172,12 +172,44 @@ On top, **whole frames now decode to pixels**:
   predictor: zero-MV tile-entry reset, skip-inherits-left MV, and
   the MC copy through `mc_add_block` for decoded non-zero MVs.
 
+On top of the whole-frame walk, the decoded coefficients are now
+**surfaced as a reconstruction work list** and validated by a
+**`spec/08 §7` checksum oracle**:
+
+- `indeo5::BandReconstruction` / `BlockRecord` / `BlockCoding` —
+  `decode_intra_picture` (and the session path) no longer discard the
+  per-block `(run, val)` streams after structural validation: every
+  walked block is surfaced with its band-relative position, block side,
+  effective per-MB quantiser (`spec/06 §5.2`), scan-position-ordered
+  decoded coefficients, and coded / DC-only / skipped status — the input
+  the coefficient→pixel transform stage will consume.
+- `indeo5::verify` (`band_checksum` / `frame_checksum` /
+  `ChecksumStatus`) — the `spec/08 §7` per-band `band_checksum`
+  (`(Σ (pixel−128)) & 0xffff`) and per-frame `frm_checksum`
+  (`(Σ Y + Σ U + Σ V) & 0xffff`, chroma native-resolution). The spec did
+  not stage this arithmetic because the shipping decoder parses-and-stores
+  checksums but never verifies them (a byte-exact black-box corruption
+  test confirms a frame with a mangled stored checksum decodes to
+  identical pixels); the formulas were recovered as numeric observations
+  from the two staged fixtures' reference pixels + their stored checksum
+  values and verified byte-exact on both. `DecodedPicture` /
+  `SessionOutput` carry a per-band and per-frame `ChecksumStatus`,
+  turning "coefficients reconstruct as zero" into a **quantitative,
+  byte-sum-exact reconstruction oracle**: the two chroma bands of the
+  black `educ` frame verify (real content neutral 128), the luma band
+  does not (real content `Y=16`), pinning the exact transform frontier.
+
 What is **not** yet implemented for Indeo 5: pixel reconstruction of
-the decoded coefficients — the per-band scan order, the
-`band_glob_quant` dequantisation scales, and the 8-point inverse
-Slant equations are not yet numerically staged in `docs/` (see the
-docs-gaps below), so coded-block regions reconstruct as zeros while
-their entropy streams are fully decoded and validated; the per-tile
+the decoded coefficients — the 8-point inverse Slant butterfly
+equations are **not staged in `docs/`** at the numeric level (`spec/06`
+records the handler taxonomy, the SWAR masks, and the extracted synth
+constants, but explicitly leaves the per-handler butterfly arithmetic
+as un-transcribed immediates inside the DLL, which is a black-box-only
+binary), and the vendor's output color conversion (studio-range
+`Y=16`/neutral `128` for zero signal, via the docs-gapped RGB LUT) is
+likewise unstaged. Coded-block regions therefore reconstruct as the
+`spec/08 §3.3` mid-grey zero state while their entropy streams are
+fully decoded, validated, and now checksummed; the per-tile
 MV-inheritance fast path (spec/07 §3.4/§3.5 — needs the per-band
 `0x3604`/`0x3664` tables) also remains gated. Indeo 5 is decode-only.
 
@@ -231,24 +263,47 @@ band-exhaustion test):
   behaviourally resolved by the r338 fixtures for the un-sliced
   config (chroma tiles independently per band); the multi-slice
   formula stays open.
+- **`spec/08 §7` checksum formula** (r411) — the per-band
+  `band_checksum` is `(Σ (pixel−128)) & 0xffff` over the band's
+  reconstructed pixels and the per-frame `frm_checksum` is
+  `(Σ Y + Σ U + Σ V) & 0xffff` over every sample (chroma at native
+  resolution). Recovered as numeric observations from the two staged
+  fixtures (reference pixels + stored values + a black-box
+  `band+0x20` read) and verified byte-exact on both; the shipping
+  decoder stores-but-never-verifies them (`indeo5::verify`).
 
 Still open (the numeric material needed for pixel-exact
 reconstruction of coded coefficients):
 
-- **Scan order, dequantisation and the fused inverse Slant**
-  (spec/05 §5.1, spec/06 §2/§5). The per-band scan tables, the
-  `band_glob_quant`→scale mapping, and the per-handler butterfly
-  equations are structurally described but not numerically staged;
-  decoded `(run, val)` streams are therefore validated and counted
-  (`DecodeStats`, `BandTrace`) but reconstruct as zero. An Extractor
-  round staging the scan tables + the dequant base tables (and a
-  Specifier pass on the 8-point Slant equations) closes this.
+- **The 8-point inverse Slant butterfly equations** (spec/06 §2).
+  `spec/06` stages the handler taxonomy, the SWAR `ror`/mask
+  primitives, the 192-slot dispatch table (data-extracted r338) and
+  the synth constants, but the per-handler butterfly *arithmetic* is
+  deliberately left as un-transcribed immediates inside the DLL
+  handler bodies (algorithm logic; the DLL is black-box-only, not
+  disassemblable for this crate). The decoded `(run, val)` streams are
+  now surfaced as a per-block reconstruction work list
+  (`BandReconstruction` / `BlockRecord`) with the effective per-MB
+  quantiser, but reconstruct as the mid-grey zero state pending the
+  butterfly equations. **Black-box synthesis-probing to *measure* the
+  transform basis (feed single-coefficient blocks, read the output) is
+  blocked in-round**: the vendor rejects synthetic coded-block streams
+  with `ICDecompress = -100` and faults on a synthetic all-DC luma
+  band, so the basis could not be measured without a bitstream grammar
+  refinement past the entropy layer. Scan order lives *in* the
+  dispatch (no permutation array; spec/05 §5.1); the
+  `band_glob_quant`→scale table is staged
+  (`tables/dequant_scale_10097ed8`).
 - **DC handling for intra blocks.** The 240x180 black-frame fixture
   decodes with *no* coefficients anywhere (the vendor decoder
   reproduces `Y=16, U=V=128` for it), so the zero state is pinned;
   how non-zero DC content is carried (in-stream at scan position 0
   vs a differential side channel per the Indeo 4 annex-B wording)
-  needs a fixture-backed trace.
+  needs a fixture-backed trace. The r411 checksum oracle confirms the
+  black frame's internal luma baseline is `Y=16` (not the `128`
+  mid-grey our bias-and-clamp produces for zero signal) — i.e. the
+  zero-signal luma value is the studio-range black, a data point for
+  the output-conversion gap below.
 - **Escape value fold + over-256 symbols.** The ESC path's 3-VLC bit
   structure is pinned by the fixtures (two emissions), the value
   fold is provisional; custom codebooks wider than 256 symbols
