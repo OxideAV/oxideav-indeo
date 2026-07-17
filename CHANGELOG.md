@@ -6,6 +6,14 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Internal plumbing re-exports (Indeo 3 walker/entropy/MC/strip modules,
+  Indeo 5 transform/tile/table modules — kept public for tests/fuzz) are
+  now `#[doc(hidden)]`, shrinking the documented stable API to the decode
+  entry points, registry surface, and user-facing frame/error types; no
+  semantic or signature changes.
+
 ### Added
 
 - **Indeo 5 (`IV50`) per-band coefficient work list + `spec/08 §7`
