@@ -29,6 +29,21 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 3 stream-driven reconstruction of unpacker-dispatch cells**
+  (r433, `indeo3::exec_plane_plan_with_stream` /
+  `reconstruct_frame_with_stream`, `PlaneExecError::UnpackerCell`).
+  The plane / frame reconstruction pass can now take the frame's
+  input bitstream: each plane's first data-bearing unit, when it is a
+  `spec/06 §5.2` unpacker-dispatch VQ_NULL cell with a byte-exact
+  stream anchor, is driven through the static-table mode-byte
+  executor with **real bitstream bytes** — a static-subset cell
+  (escapes / high-nibble-0 literals) reconstructs for real
+  (`PlaneExecStats::unpacker_static_units`), an arena-gated literal
+  defers to the frontier as before, and the binary's typed faults
+  surface as `PlaneExecError::UnpackerCell`. Frame-wide stats now
+  also fold the previously-dropped unpacker-deferral count
+  (`FrameReconstructStats::vq_null_unpacker_deferred`).
+
 - **Indeo 3 mode-byte stream anchors on the cell tree** (r433,
   `VqCell::data_cursor`, `CellPlanEntry::data_cursor`,
   `PlaneReconstructPlan::first_data_anchor`). The tree walk now

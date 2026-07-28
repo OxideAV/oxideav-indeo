@@ -411,7 +411,8 @@ pub use frame_output::{
     IF09_PASSTHROUGH_RVA, OUTPUT_PLANE_ORDER, OUTPUT_UPSHIFT_BITS, RGB24_STRIDE_FIXUP_BIT_COUNT,
 };
 pub use frame_reconstruct::{
-    reconstruct_frame, FrameReconstructError, FrameReconstructStats, ReconstructedFrame,
+    reconstruct_frame, reconstruct_frame_with_stream, FrameReconstructError, FrameReconstructStats,
+    ReconstructedFrame,
 };
 pub use frame_session::{AdmittedFrame, DecodeSession, FrameAdmission, SessionError};
 pub use frame_yuv::{assemble_yuv, upsample_frame, YuvError, YuvFrame, YuvPlane};
@@ -501,8 +502,8 @@ pub use picture_layer::{
     PLANE_IDX_U, PLANE_IDX_V, PLANE_IDX_Y,
 };
 pub use plane_execute::{
-    exec_plane_plan, plane_strip_len, DeferredFrontier, PlaneExecError, PlaneExecStats,
-    ReconstructedPlane, STRIP_ROW_STRIDE,
+    exec_plane_plan, exec_plane_plan_with_stream, plane_strip_len, DeferredFrontier,
+    PlaneExecError, PlaneExecStats, ReconstructedPlane, UnpackerCellFault, STRIP_ROW_STRIDE,
 };
 pub use plane_reconstruct::{
     classify_cell_tree, classify_plane, drive_vq_null_copies, CellDisposition, CellPlanEntry,

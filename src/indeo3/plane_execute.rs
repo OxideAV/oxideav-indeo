@@ -66,8 +66,13 @@ use super::cell_null::{
     copy_upper_cell, mark_edge_cell, CopyUpperError, CopyUpperGeometry, MarkEdgeError,
     MarkEdgeGeometry, COPY_UPPER_ROW_COUNT,
 };
+use super::cell_reconstruct::{
+    reconstruct_cell_stateful, CellOutcome, CellReconstructError, CellReconstructGeometry,
+    PositionEffect,
+};
 use super::plane_reconstruct::{CellDisposition, CellPlanEntry, PlaneReconstructPlan};
 use super::reconstruct::PREDICTOR_ROW_STRIDE;
+use super::vq::DyadDeltaTable;
 
 /// The per-plane strip pixel-buffer row stride (`spec/07 §0 / §5.1`):
 /// `0xb0` (176) bytes, aliasing [`PREDICTOR_ROW_STRIDE`] so the two
@@ -117,6 +122,10 @@ pub enum PlaneExecError {
         /// The underlying mark-edge error.
         source: MarkEdgeError,
     },
+    /// An unpacker-dispatch unit's static-subset drive faulted (the
+    /// binary's typed error-code-1 / stream-exhaustion faults;
+    /// [`exec_plane_plan_with_stream`] only).
+    UnpackerCell(UnpackerCellFault),
 }
 
 impl core::fmt::Display for PlaneExecError {
@@ -137,11 +146,32 @@ impl core::fmt::Display for PlaneExecError {
             PlaneExecError::MarkEdge { x, y, source } => {
                 write!(f, "indeo3 plane-exec: VQ_NULL skip at ({x}, {y}): {source}")
             }
+            PlaneExecError::UnpackerCell(fault) => write!(
+                f,
+                "indeo3 plane-exec: VQ_NULL unpacker cell at ({}, {}): {}",
+                fault.x, fault.y, fault.source
+            ),
         }
     }
 }
 
 impl std::error::Error for PlaneExecError {}
+
+/// An unpacker-dispatch cell's static-subset drive failed with the
+/// binary's typed fault (`spec/06 §4.3` error-code-1 escape fault,
+/// stream exhaustion, or an out-of-range seed write), tagged with the
+/// unit's plane coordinates. Surfaced by
+/// [`exec_plane_plan_with_stream`] via
+/// [`PlaneExecError::UnpackerCell`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnpackerCellFault {
+    /// Unit top-left x (plane samples).
+    pub x: u32,
+    /// Unit top-left y (plane samples).
+    pub y: u32,
+    /// The underlying executor error.
+    pub source: CellReconstructError,
+}
 
 /// The reconstruction frontier: the first reconstruction unit the
 /// executor had to defer (VQ_DATA on the codebook-bank docs-gap, or
@@ -165,8 +195,15 @@ pub struct PlaneExecStats {
     pub copy_units: usize,
     /// VQ_NULL skip units reconstructed through [`mark_edge_cell`].
     pub skip_units: usize,
+    /// VQ_NULL unpacker-dispatch units whose **static-table subset**
+    /// was driven with real bitstream bytes through
+    /// [`reconstruct_cell_stateful`] (`spec/06 §5.2` + the
+    /// [`CellPlanEntry::data_cursor`] anchor) and completed without
+    /// hitting an arena-gated literal.
+    pub unpacker_static_units: usize,
     /// VQ_NULL unpacker-dispatch units deferred (`spec/06 §5.2`
-    /// hybrid; arena-gated mode-byte stream).
+    /// hybrid; arena-gated mode-byte stream, or no byte-exact
+    /// stream anchor for the unit).
     pub vq_null_unpacker_deferred: usize,
     /// VQ_DATA units deferred (codebook-bank docs-gap).
     pub vq_data_deferred: usize,
@@ -178,9 +215,10 @@ pub struct PlaneExecStats {
 }
 
 impl PlaneExecStats {
-    /// Units reconstructed now (VQ_NULL copy + skip).
+    /// Units reconstructed now (VQ_NULL copy + skip + the
+    /// static-subset unpacker cells).
     pub fn reconstructed(&self) -> usize {
-        self.copy_units + self.skip_units
+        self.copy_units + self.skip_units + self.unpacker_static_units
     }
 
     /// Units deferred (VQ_DATA + INTER).
@@ -288,6 +326,41 @@ fn unit_band_rows(remaining_h: u32) -> usize {
 /// Returns a [`ReconstructedPlane`] with the mutated strip and coverage
 /// stats, or the first [`PlaneExecError`] an executor raises.
 pub fn exec_plane_plan(plan: &PlaneReconstructPlan) -> Result<ReconstructedPlane, PlaneExecError> {
+    exec_plane_plan_inner(plan, None)
+}
+
+/// Spec/06 §5.2 + `spec/07 §5.1` — [`exec_plane_plan`] with the plane's
+/// **input bitstream** attached, so unpacker-dispatch VQ_NULL cells with
+/// a byte-exact stream anchor can drive their static-table subset with
+/// real bitstream bytes.
+///
+/// Only the plan's *first* data-bearing unit has a byte-exact anchor
+/// ([`PlaneReconstructPlan::first_data_anchor`]) — later anchors are
+/// lower bounds because the structural walk cannot consume arena-gated
+/// mode bytes — so exactly that unit (when it is an unpacker-dispatch
+/// cell) is driven through [`reconstruct_cell_stateful`]:
+///
+/// * a static-subset completion (all escapes / high-nibble-0 literals)
+///   reconstructs the cell for real
+///   ([`PlaneExecStats::unpacker_static_units`]);
+/// * an arena-gated literal defers it to the frontier exactly as
+///   before;
+/// * the binary's typed faults (mis-positioned escape, stream
+///   exhaustion) surface as [`PlaneExecError::UnpackerCell`].
+///
+/// Every other unit behaves exactly as in [`exec_plane_plan`].
+pub fn exec_plane_plan_with_stream(
+    plan: &PlaneReconstructPlan,
+    input: &[u8],
+    table: &DyadDeltaTable,
+) -> Result<ReconstructedPlane, PlaneExecError> {
+    exec_plane_plan_inner(plan, Some((input, table)))
+}
+
+fn exec_plane_plan_inner(
+    plan: &PlaneReconstructPlan,
+    stream: Option<(&[u8], &DyadDeltaTable)>,
+) -> Result<ReconstructedPlane, PlaneExecError> {
     if plan.plane_width == 0 {
         return Err(PlaneExecError::ZeroGeometry { is_width: true });
     }
@@ -298,6 +371,9 @@ pub fn exec_plane_plan(plan: &PlaneReconstructPlan) -> Result<ReconstructedPlane
     let mut strip = vec![0u8; plane_strip_len(plan.plane_height)];
     let mut stats = PlaneExecStats::default();
     let mut frontier: Option<DeferredFrontier> = None;
+    // The single unit whose stream anchor is byte-exact (spec/06
+    // §5.1: the first data-bearing unit of the plane).
+    let exact_anchor = plan.first_data_anchor();
 
     for (entry_index, entry) in plan.entries.iter().enumerate() {
         let right_edge = entry.x.saturating_add(entry.w);
@@ -320,11 +396,28 @@ pub fn exec_plane_plan(plan: &PlaneReconstructPlan) -> Result<ReconstructedPlane
             }
             CellDisposition::VqNullUnpacker => {
                 // spec/06 §5.2 — the hybrid "VQ-data without
-                // leaf-byte" cell: its mode-byte stream is
-                // arena-gated exactly like VQ_DATA, so it defers
-                // to the same frontier.
-                stats.vq_null_unpacker_deferred += 1;
-                record_frontier(&mut frontier, entry, entry_index);
+                // leaf-byte" cell. With the input stream attached
+                // and a byte-exact anchor, drive the static-table
+                // subset; otherwise (or on an arena-gated literal)
+                // defer to the frontier like VQ_DATA.
+                let driven = match (stream, exact_anchor) {
+                    (Some((input, table)), Some((anchor_index, cursor)))
+                        if anchor_index == entry_index && cursor <= input.len() =>
+                    {
+                        Some(exec_unpacker_unit(
+                            &mut strip,
+                            entry,
+                            &input[cursor..],
+                            table,
+                            &mut stats,
+                        )?)
+                    }
+                    _ => None,
+                };
+                if !matches!(driven, Some(true)) {
+                    stats.vq_null_unpacker_deferred += 1;
+                    record_frontier(&mut frontier, entry, entry_index);
+                }
             }
             CellDisposition::VqDataArena => {
                 stats.vq_data_deferred += 1;
@@ -345,6 +438,51 @@ pub fn exec_plane_plan(plan: &PlaneReconstructPlan) -> Result<ReconstructedPlane
         stats,
         frontier,
     })
+}
+
+/// Drive one unpacker-dispatch unit's static-table subset over the
+/// strip with real stream bytes. Returns `Ok(true)` when the cell
+/// resolved (complete / terminated / consumed-by-carry) and
+/// `Ok(false)` when it hit an arena-gated literal (the caller defers
+/// it); typed executor faults map to
+/// [`PlaneExecError::UnpackerCell`].
+fn exec_unpacker_unit(
+    strip: &mut [u8],
+    entry: &CellPlanEntry,
+    stream: &[u8],
+    table: &DyadDeltaTable,
+    stats: &mut PlaneExecStats,
+) -> Result<bool, PlaneExecError> {
+    let geometry = CellReconstructGeometry {
+        width_dwords: (entry.w as usize).div_ceil(4),
+        source_rows: (entry.h as usize).max(1),
+        top_left_offset: entry.y as usize * STRIP_ROW_STRIDE + entry.x as usize,
+    };
+    let run =
+        reconstruct_cell_stateful(strip, geometry, stream, table, false).map_err(|source| {
+            PlaneExecError::UnpackerCell(UnpackerCellFault {
+                x: entry.x,
+                y: entry.y,
+                source,
+            })
+        })?;
+    match run.outcome {
+        CellOutcome::Complete(effects) => {
+            stats.unpacker_static_units += 1;
+            // Row-band seeds write one predictor byte each
+            // (spec/07 §3.2).
+            stats.bytes_written += effects
+                .iter()
+                .filter(|e| matches!(e, PositionEffect::RowBandSeed { .. }))
+                .count();
+            Ok(true)
+        }
+        CellOutcome::Terminated { .. } | CellOutcome::SkippedByCarry => {
+            stats.unpacker_static_units += 1;
+            Ok(true)
+        }
+        CellOutcome::DeferredArena { .. } => Ok(false),
+    }
 }
 
 /// Record the first deferred unit as the reconstruction frontier;
@@ -593,6 +731,63 @@ mod tests {
             exec_plane_plan(&plan),
             Err(PlaneExecError::ZeroGeometry { is_width: true })
         );
+    }
+
+    #[test]
+    fn stream_drive_resolves_first_unpacker_unit() {
+        use crate::indeo3::macroblock::{Cell, CellTree, VqCell, VqLeaf, VqNull};
+        use crate::indeo3::vq::DyadDeltaTable;
+
+        // A plane with one unpacker-dispatch cell whose stream anchor
+        // points at a 0xFD escape (skip all remaining rows) — a
+        // static-subset cell that resolves with real bytes.
+        let input = [0u8, 0u8, 0xFD, 0u8];
+        let tree = CellTree {
+            plane_width: 8,
+            plane_height: 4,
+            cells: vec![Cell::Intra {
+                x: 0,
+                y: 0,
+                w: 8,
+                h: 4,
+                vq_leaves: vec![VqCell {
+                    x: 0,
+                    y: 0,
+                    w: 8,
+                    h: 4,
+                    leaf: VqLeaf::Null(VqNull::Unpacker),
+                    data_cursor: Some(2),
+                }],
+            }],
+        };
+        let plan = classify_cell_tree(0, &tree);
+        let table = DyadDeltaTable::load();
+
+        // Without the stream the unit defers.
+        let recon = exec_plane_plan(&plan).expect("plan executes");
+        assert_eq!(recon.stats.vq_null_unpacker_deferred, 1);
+        assert_eq!(recon.stats.unpacker_static_units, 0);
+        assert!(recon.frontier.is_some());
+
+        // With the stream the static subset resolves the cell.
+        let recon = exec_plane_plan_with_stream(&plan, &input, &table).expect("stream drive");
+        assert_eq!(recon.stats.unpacker_static_units, 1);
+        assert_eq!(recon.stats.vq_null_unpacker_deferred, 0);
+        assert!(recon.frontier.is_none());
+        assert!(recon.stats.is_fully_reconstructed());
+
+        // An arena-gated literal at the anchor still defers.
+        let gated = [0u8, 0u8, 0x30, 0u8];
+        let recon = exec_plane_plan_with_stream(&plan, &gated, &table).expect("stream drive");
+        assert_eq!(recon.stats.unpacker_static_units, 0);
+        assert_eq!(recon.stats.vq_null_unpacker_deferred, 1);
+        assert!(recon.frontier.is_some());
+
+        // A truncated stream (0xFB with no counter byte) surfaces the
+        // binary's typed fault through the plane executor.
+        let hostile = [0u8, 0u8, 0xFB];
+        let err = exec_plane_plan_with_stream(&plan, &hostile, &table).unwrap_err();
+        assert!(matches!(err, PlaneExecError::UnpackerCell(_)));
     }
 
     #[test]

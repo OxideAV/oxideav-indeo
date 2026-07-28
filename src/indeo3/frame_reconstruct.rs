@@ -48,8 +48,12 @@
 use super::frame::DecodedFrame;
 use super::frame_assemble::{OutputFrame, OutputPlane};
 use super::frame_output::upshift_7bit_to_8bit;
-use super::plane_execute::{exec_plane_plan, PlaneExecError, ReconstructedPlane, STRIP_ROW_STRIDE};
+use super::plane_execute::{
+    exec_plane_plan, exec_plane_plan_with_stream, PlaneExecError, ReconstructedPlane,
+    STRIP_ROW_STRIDE,
+};
 use super::plane_reconstruct::classify_cell_tree;
+use super::vq::DyadDeltaTable;
 
 /// Frame-wide reconstruction coverage, folding every present plane's
 /// [`super::PlaneExecStats`].
@@ -61,6 +65,13 @@ pub struct FrameReconstructStats {
     pub copy_units: usize,
     /// VQ_NULL skip units reconstructed across all planes.
     pub skip_units: usize,
+    /// VQ_NULL unpacker-dispatch units whose static-table subset was
+    /// driven with real bitstream bytes (`spec/06 §5.2`;
+    /// [`reconstruct_frame_with_stream`] only).
+    pub unpacker_static_units: usize,
+    /// VQ_NULL unpacker-dispatch units deferred across all planes
+    /// (`spec/06 §5.2` hybrid; arena-gated mode-byte stream).
+    pub vq_null_unpacker_deferred: usize,
     /// VQ_DATA units deferred across all planes (codebook-bank docs-gap).
     pub vq_data_deferred: usize,
     /// INTER units deferred across all planes (needs a reference frame).
@@ -70,14 +81,16 @@ pub struct FrameReconstructStats {
 }
 
 impl FrameReconstructStats {
-    /// Units reconstructed now across the frame (VQ_NULL copy + skip).
+    /// Units reconstructed now across the frame (VQ_NULL copy + skip
+    /// + static-subset unpacker cells).
     pub fn reconstructed(&self) -> usize {
-        self.copy_units + self.skip_units
+        self.copy_units + self.skip_units + self.unpacker_static_units
     }
 
-    /// Units deferred across the frame (VQ_DATA + INTER).
+    /// Units deferred across the frame (VQ_NULL unpacker + VQ_DATA +
+    /// INTER).
     pub fn deferred(&self) -> usize {
-        self.vq_data_deferred + self.inter_deferred
+        self.vq_null_unpacker_deferred + self.vq_data_deferred + self.inter_deferred
     }
 
     /// Total reconstruction units visited across the frame.
@@ -187,12 +200,38 @@ fn upshift_plane(plane: &ReconstructedPlane) -> OutputPlane {
 pub fn reconstruct_frame(
     frame: &DecodedFrame,
 ) -> Result<ReconstructedFrame, FrameReconstructError> {
+    reconstruct_frame_inner(frame, None)
+}
+
+/// [`reconstruct_frame`] with the frame's **input bitstream** attached
+/// (`spec/06 §5.2`): each plane's first data-bearing unit, when it is
+/// an unpacker-dispatch VQ_NULL cell, is driven through the
+/// static-table mode-byte executor with real bitstream bytes (see
+/// [`exec_plane_plan_with_stream`]). `input` is the same buffer that
+/// was passed to [`super::decode_frame`] — the recorded stream anchors
+/// are absolute offsets into it.
+pub fn reconstruct_frame_with_stream(
+    frame: &DecodedFrame,
+    input: &[u8],
+    table: &DyadDeltaTable,
+) -> Result<ReconstructedFrame, FrameReconstructError> {
+    reconstruct_frame_inner(frame, Some((input, table)))
+}
+
+fn reconstruct_frame_inner(
+    frame: &DecodedFrame,
+    stream: Option<(&[u8], &DyadDeltaTable)>,
+) -> Result<ReconstructedFrame, FrameReconstructError> {
     let mut planes = Vec::with_capacity(frame.planes.len());
     let mut stats = FrameReconstructStats::default();
 
     for decoded in &frame.planes {
         let plan = classify_cell_tree(decoded.plane_idx, &decoded.tree);
-        let recon = exec_plane_plan(&plan).map_err(|source| FrameReconstructError {
+        let recon = match stream {
+            Some((input, table)) => exec_plane_plan_with_stream(&plan, input, table),
+            None => exec_plane_plan(&plan),
+        }
+        .map_err(|source| FrameReconstructError {
             plane_idx: decoded.plane_idx,
             source,
         })?;
@@ -200,6 +239,8 @@ pub fn reconstruct_frame(
         stats.planes += 1;
         stats.copy_units += recon.stats.copy_units;
         stats.skip_units += recon.stats.skip_units;
+        stats.unpacker_static_units += recon.stats.unpacker_static_units;
+        stats.vq_null_unpacker_deferred += recon.stats.vq_null_unpacker_deferred;
         stats.vq_data_deferred += recon.stats.vq_data_deferred;
         stats.inter_deferred += recon.stats.inter_deferred;
         stats.bytes_written += recon.stats.bytes_written;
@@ -413,13 +454,15 @@ mod tests {
             planes: 2,
             copy_units: 3,
             skip_units: 2,
+            unpacker_static_units: 1,
+            vq_null_unpacker_deferred: 2,
             vq_data_deferred: 4,
             inter_deferred: 1,
             bytes_written: 256,
         };
-        assert_eq!(stats.reconstructed(), 5);
-        assert_eq!(stats.deferred(), 5);
-        assert_eq!(stats.total(), 10);
+        assert_eq!(stats.reconstructed(), 6);
+        assert_eq!(stats.deferred(), 7);
+        assert_eq!(stats.total(), 13);
         assert!(!stats.is_fully_reconstructed());
     }
 }
