@@ -59,6 +59,14 @@ pub enum CellDisposition {
     /// (`spec/04 §4`, `spec/07 §4.4`). Table-free; reconstructable now
     /// via [`super::mark_edge_cell`].
     VqNullSkip,
+    /// VQ_NULL `1` — the one-bit "dispatch into the per-byte
+    /// unpacker" sub-code (`spec/04 §4` / `§7.3`, `spec/06 §5.2`):
+    /// the cell's data is a mode-byte stream read directly from the
+    /// bitstream with no codebook-index byte. Gated on the same
+    /// per-frame-arena docs-gap as VQ_DATA for its literal dyads
+    /// (the static-table-only subset is drivable via
+    /// [`super::reconstruct_cell_static`]).
+    VqNullUnpacker,
     /// VQ_DATA — the leaf byte indexes the per-frame codebook arena
     /// (`spec/04 §3.1`). Gated on the `spec/04 §7.1` codebook-bank
     /// docs-gap.
@@ -103,6 +111,9 @@ pub struct DispositionCounts {
     pub vq_null_copy: usize,
     /// VQ_NULL skip cells (table-free; reconstructable now).
     pub vq_null_skip: usize,
+    /// VQ_NULL unpacker-dispatch cells (`spec/06 §5.2` hybrid;
+    /// mode-byte-stream driven, arena-gated for literal dyads).
+    pub vq_null_unpacker: usize,
     /// VQ_DATA cells (codebook-bank docs-gap).
     pub vq_data_arena: usize,
     /// INTER cells (motion compensation; needs a reference frame).
@@ -112,7 +123,11 @@ pub struct DispositionCounts {
 impl DispositionCounts {
     /// Total reconstruction units across all dispositions.
     pub fn total(&self) -> usize {
-        self.vq_null_copy + self.vq_null_skip + self.vq_data_arena + self.inter_mc
+        self.vq_null_copy
+            + self.vq_null_skip
+            + self.vq_null_unpacker
+            + self.vq_data_arena
+            + self.inter_mc
     }
 
     /// Units reconstructable now from the unblocked (VQ_NULL) subset.
@@ -120,15 +135,17 @@ impl DispositionCounts {
         self.vq_null_copy + self.vq_null_skip
     }
 
-    /// Units gated on a docs-gap or a reference frame (VQ_DATA + INTER).
+    /// Units gated on a docs-gap or a reference frame (VQ_NULL
+    /// unpacker-dispatch + VQ_DATA + INTER).
     pub fn deferred(&self) -> usize {
-        self.vq_data_arena + self.inter_mc
+        self.vq_null_unpacker + self.vq_data_arena + self.inter_mc
     }
 
     fn record(&mut self, disposition: CellDisposition) {
         match disposition {
             CellDisposition::VqNullCopy => self.vq_null_copy += 1,
             CellDisposition::VqNullSkip => self.vq_null_skip += 1,
+            CellDisposition::VqNullUnpacker => self.vq_null_unpacker += 1,
             CellDisposition::VqDataArena => self.vq_data_arena += 1,
             CellDisposition::InterMc => self.inter_mc += 1,
         }
@@ -190,6 +207,7 @@ pub fn classify_cell_tree(plane_idx: usize, tree: &CellTree) -> PlaneReconstruct
                     let disposition = match vq.leaf {
                         VqLeaf::Null(VqNull::Copy) => CellDisposition::VqNullCopy,
                         VqLeaf::Null(VqNull::Skip) => CellDisposition::VqNullSkip,
+                        VqLeaf::Null(VqNull::Unpacker) => CellDisposition::VqNullUnpacker,
                         VqLeaf::Data { .. } => CellDisposition::VqDataArena,
                     };
                     counts.record(disposition);
@@ -310,7 +328,9 @@ pub fn drive_vq_null_copies(
                 stats.bytes_copied += cell_stats.bytes_copied;
             }
             CellDisposition::VqNullSkip => stats.skip_cells += 1,
-            CellDisposition::VqDataArena | CellDisposition::InterMc => {}
+            CellDisposition::VqNullUnpacker
+            | CellDisposition::VqDataArena
+            | CellDisposition::InterMc => {}
         }
     }
 

@@ -6,6 +6,27 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Indeo 3 VQ_NULL sub-code is a prefix code, not a fixed 2-bit
+  field** (r433, `indeo3::decode_plane_tree`). The tree walk read a
+  fixed 2-bit VQ_NULL sub-code and faulted on `10`/`11`
+  (`InvalidVqNullSubCode`), following the `spec/03 §4.1` wiki-aligned
+  reading. That reading is superseded by the `spec/04 §4` instruction
+  listing (`add bl, bl; jb 0x10006bac`) and the `spec/06 §1.1`/`§5.2`
+  refinement: the sub-code is a **prefix code** — `1` (one bit)
+  dispatches into the per-byte unpacker (the "VQ-data without
+  leaf-byte" hybrid), `00` copies the upper neighbour, `01` marks the
+  cell as a boundary. The walk now consumes exactly one bit for the
+  unpacker sub-code (a fixed 2-bit read would misalign every
+  subsequent tree node) and surfaces the new leaf as
+  `VqNull::Unpacker`; `MacroblockError::InvalidVqNullSubCode` is
+  removed as unreachable. Downstream, the reconstruction classifier
+  maps the new leaf to `CellDisposition::VqNullUnpacker`
+  (`DispositionCounts::vq_null_unpacker`,
+  `PlaneExecStats::vq_null_unpacker_deferred`) — deferred alongside
+  VQ_DATA because its literal dyads ride the same arena docs-gap.
+
 ### Changed
 
 - Internal plumbing re-exports (Indeo 3 walker/entropy/MC/strip modules,

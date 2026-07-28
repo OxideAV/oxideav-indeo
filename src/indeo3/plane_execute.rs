@@ -165,6 +165,9 @@ pub struct PlaneExecStats {
     pub copy_units: usize,
     /// VQ_NULL skip units reconstructed through [`mark_edge_cell`].
     pub skip_units: usize,
+    /// VQ_NULL unpacker-dispatch units deferred (`spec/06 §5.2`
+    /// hybrid; arena-gated mode-byte stream).
+    pub vq_null_unpacker_deferred: usize,
     /// VQ_DATA units deferred (codebook-bank docs-gap).
     pub vq_data_deferred: usize,
     /// INTER units deferred (needs a reference frame).
@@ -182,7 +185,7 @@ impl PlaneExecStats {
 
     /// Units deferred (VQ_DATA + INTER).
     pub fn deferred(&self) -> usize {
-        self.vq_data_deferred + self.inter_deferred
+        self.vq_null_unpacker_deferred + self.vq_data_deferred + self.inter_deferred
     }
 
     /// Total units the executor visited.
@@ -278,9 +281,9 @@ fn unit_band_rows(remaining_h: u32) -> usize {
 ///   to four rows per band (an 8-row cell is two bands).
 /// * [`CellDisposition::VqNullSkip`] → [`mark_edge_cell`], or-setting
 ///   bit 7 over the cell's own bytes.
-/// * [`CellDisposition::VqDataArena`] / [`CellDisposition::InterMc`] →
-///   counted and recorded as the deferred frontier (first occurrence),
-///   then skipped.
+/// * [`CellDisposition::VqNullUnpacker`] / [`CellDisposition::VqDataArena`]
+///   / [`CellDisposition::InterMc`] → counted and recorded as the
+///   deferred frontier (first occurrence), then skipped.
 ///
 /// Returns a [`ReconstructedPlane`] with the mutated strip and coverage
 /// stats, or the first [`PlaneExecError`] an executor raises.
@@ -314,6 +317,14 @@ pub fn exec_plane_plan(plan: &PlaneReconstructPlan) -> Result<ReconstructedPlane
             CellDisposition::VqNullSkip => {
                 exec_skip_unit(&mut strip, entry, &mut stats)?;
                 stats.skip_units += 1;
+            }
+            CellDisposition::VqNullUnpacker => {
+                // spec/06 §5.2 — the hybrid "VQ-data without
+                // leaf-byte" cell: its mode-byte stream is
+                // arena-gated exactly like VQ_DATA, so it defers
+                // to the same frontier.
+                stats.vq_null_unpacker_deferred += 1;
+                record_frontier(&mut frontier, entry, entry_index);
             }
             CellDisposition::VqDataArena => {
                 stats.vq_data_deferred += 1;

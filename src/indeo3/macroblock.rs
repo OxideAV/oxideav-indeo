@@ -84,9 +84,22 @@ impl NodeCode {
     }
 }
 
-/// Spec/03 §4.1 — the sub-action of a VQ_NULL leaf, given by the
-/// additional 2-bit sub-code read immediately after the VQ_NULL
-/// node bits.
+/// Spec/04 §4 — the sub-action of a VQ_NULL leaf, given by the
+/// **prefix code** read immediately after the VQ_NULL node bits.
+///
+/// The sub-code is *not* a fixed 2-bit field: the reader at
+/// `IR32_32.DLL!0x100069d2..0x100069f2` consumes one bit, and only
+/// when that bit is 0 consumes a second (`spec/06 §1.1`: "the
+/// effective code lengths are 1 and 2 bits respectively — a prefix
+/// code, not a fixed-length code"):
+///
+/// * `1` (1 bit) → dispatch into the per-byte unpacker at
+///   `0x10006bac` — the "VQ-data without leaf-byte" hybrid
+///   (`spec/04 §4` first bullet, `spec/06 §5.2`).
+/// * `0 0` (2 bits) → copy the upper-neighbour row
+///   (`0x100069f4`).
+/// * `0 1` (2 bits) → mark the cell as a boundary / edge cell
+///   (`0x10006a2f`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VqNull {
     /// Sub-code `00` — copy this cell's pixels from the referenced
@@ -95,6 +108,15 @@ pub enum VqNull {
     /// Sub-code `01` — mark the cell skipped; leave its pixels at
     /// the predictor value.
     Skip,
+    /// Sub-code `1` (one bit) — dispatch into the per-byte
+    /// unpacker: the next bitstream byte is a mode byte read
+    /// directly, with no intervening codebook-index byte
+    /// (`spec/04 §4` / `§7.3`, `spec/06 §5.2`). The mode-byte
+    /// stream consumption itself is the reconstruction stage's
+    /// job (the tree walk records the leaf only, exactly as it
+    /// records — without consuming — a VQ_DATA cell's mode
+    /// bytes).
+    Unpacker,
 }
 
 /// Spec/03 §3 / §4 — a fully resolved leaf cell of the binary tree.
@@ -224,13 +246,6 @@ pub enum MacroblockError {
         /// read needed.
         offset: usize,
     },
-    /// Spec/03 §4.1 — a VQ_NULL leaf's sub-code was `10` or `11`,
-    /// which the original decoder rejects as a bitstream fault
-    /// (return code 3 at `IR32_32.DLL!0x10006ba2`).
-    InvalidVqNullSubCode {
-        /// The offending 2-bit sub-code value (2 or 3).
-        sub_code: u8,
-    },
     /// The plane's [`bitstream_offset`](PlanePrelude::bitstream_offset)
     /// lies past the end of the supplied input buffer.
     BitstreamOffsetOutOfRange {
@@ -264,10 +279,6 @@ impl core::fmt::Display for MacroblockError {
             MacroblockError::LeafByteTruncated { offset } => {
                 write!(f, "leaf-byte read truncated at byte {offset}")
             }
-            MacroblockError::InvalidVqNullSubCode { sub_code } => write!(
-                f,
-                "invalid VQ_NULL sub-code 0b{sub_code:02b} (only 00=copy / 01=skip valid)"
-            ),
             MacroblockError::BitstreamOffsetOutOfRange {
                 bitstream_offset,
                 buffer_len,
@@ -517,18 +528,18 @@ fn walk_vq_tree(
             Ok(())
         }
         NodeCode::LeafLow => {
-            // §4.1 — VQ_NULL leaf: read one additional 2-bit
-            // sub-code (00 = copy, 01 = skip, 10/11 = fault).
-            let sub = reader.read_node()?;
-            let null = match sub {
-                NodeCode::HSplit => VqNull::Copy, // 00
-                NodeCode::VSplit => VqNull::Skip, // 01
-                NodeCode::LeafLow => {
-                    return Err(MacroblockError::InvalidVqNullSubCode { sub_code: 2 })
-                }
-                NodeCode::LeafHigh => {
-                    return Err(MacroblockError::InvalidVqNullSubCode { sub_code: 3 })
-                }
+            // spec/04 §4 — VQ_NULL leaf: read the sub-code PREFIX
+            // code (`spec/06 §1.1`). The first sub-bit
+            // (`0x100069d2`) selects the per-byte-unpacker
+            // dispatch when 1 (a one-bit code); only when it is 0
+            // is a second sub-bit (`0x100069f2`) consumed to
+            // select copy-upper (0) vs mark-boundary (1).
+            let null = if reader.read_bit()? == 1 {
+                VqNull::Unpacker
+            } else if reader.read_bit()? == 0 {
+                VqNull::Copy
+            } else {
+                VqNull::Skip
             };
             out.push(VqCell {
                 x,
@@ -784,19 +795,57 @@ mod tests {
     }
 
     #[test]
-    fn vq_null_invalid_subcode_is_fault() {
-        // INTRA (10), VQ_NULL (10), sub-code 10 (invalid).
-        let bits = codes_to_bits(&[0b10, 0b10, 0b10]);
+    fn vq_null_first_bit_one_is_unpacker_dispatch() {
+        // spec/04 §4 / spec/06 §5.2 — INTRA (10), VQ_NULL (10),
+        // sub-bit 1 → the one-bit "dispatch into the per-byte
+        // unpacker" sub-code (NOT a fault; spec/03 §4.1's
+        // fault reading is superseded by the spec/04 §4 listing's
+        // `jb 0x10006bac` dispatch).
+        let mut bits = codes_to_bits(&[0b10, 0b10]);
+        bits.push(1); // the 1-bit sub-code
         let buf = pack_bits(&bits);
         let prelude = prelude_at(0);
-        let err = decode_plane_tree(&buf, &prelude, 8, 8, false, FrameFlags(0)).unwrap_err();
-        assert_eq!(err, MacroblockError::InvalidVqNullSubCode { sub_code: 2 });
+        let tree = decode_plane_tree(&buf, &prelude, 8, 8, false, FrameFlags(0)).unwrap();
+        match &tree.cells[0] {
+            Cell::Intra { vq_leaves, .. } => {
+                assert_eq!(vq_leaves.len(), 1);
+                assert_eq!(vq_leaves[0].leaf, VqLeaf::Null(VqNull::Unpacker));
+            }
+            other => panic!("expected Intra, got {other:?}"),
+        }
+    }
 
-        // sub-code 11 (also invalid).
-        let bits = codes_to_bits(&[0b10, 0b10, 0b11]);
+    #[test]
+    fn vq_null_unpacker_subcode_consumes_exactly_one_bit() {
+        // spec/06 §1.1 — the sub-code is a PREFIX code: `1` is one
+        // bit, `00`/`01` are two. Prove the one-bit consumption by
+        // following an unpacker leaf with a sibling whose parse
+        // would misalign under a fixed 2-bit read:
+        //
+        // INTRA (10), VQ_TREE: H_SPLIT (00), then
+        //   top:    VQ_NULL (10) + sub-bit 1        (3 bits)
+        //   bottom: VQ_NULL (10) + sub-bits 01      (4 bits)
+        //
+        // Total 11 bits. A fixed 2-bit sub-code read would steal
+        // the bottom child's leading `1` and misparse.
+        let mut bits = codes_to_bits(&[0b10, 0b00, 0b10]);
+        bits.push(1); // top sub-code: unpacker (1 bit)
+        bits.extend_from_slice(&codes_to_bits(&[0b10]));
+        bits.push(0); // bottom sub-code first bit
+        bits.push(1); // bottom sub-code second bit → skip
         let buf = pack_bits(&bits);
-        let err = decode_plane_tree(&buf, &prelude, 8, 8, false, FrameFlags(0)).unwrap_err();
-        assert_eq!(err, MacroblockError::InvalidVqNullSubCode { sub_code: 3 });
+        let prelude = prelude_at(0);
+        let tree = decode_plane_tree(&buf, &prelude, 8, 8, false, FrameFlags(0)).unwrap();
+        match &tree.cells[0] {
+            Cell::Intra { vq_leaves, .. } => {
+                assert_eq!(vq_leaves.len(), 2);
+                assert_eq!(vq_leaves[0].leaf, VqLeaf::Null(VqNull::Unpacker));
+                assert_eq!((vq_leaves[0].w, vq_leaves[0].h), (8, 4));
+                assert_eq!(vq_leaves[1].leaf, VqLeaf::Null(VqNull::Skip));
+                assert_eq!((vq_leaves[1].y, vq_leaves[1].h), (4, 4));
+            }
+            other => panic!("expected Intra, got {other:?}"),
+        }
     }
 
     #[test]
