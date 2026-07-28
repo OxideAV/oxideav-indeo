@@ -29,6 +29,22 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 3 hostile-input robustness suite**
+  (r433, `tests/hostile_indeo3.rs`). Deterministic LCG-driven sweeps
+  enforcing the "typed error or success, never a panic" contract over
+  the whole public Indeo 3 surface: ~4000 arbitrary-garbage buffers,
+  1500 valid-header + random-payload frames (including
+  above-maximum, zero, and non-multiple-of-4 dimensions), full
+  truncation and every-bit mutation sweeps of a valid frame,
+  all-splits / alternating-splits adversarial cell trees at the
+  maximum 640×480 picture size (the deepest recursion the halving
+  geometry allows), 600-frame hostile `Indeo3Decoder` session
+  sequences, and 5000 hostile mode-byte streams through the three
+  cell executors (static, stateful, arena-driven across all four
+  cell-shape variants, plus the sequence driver) with byte-exact
+  `bytes_consumed` invariants. All pass against the current decoder —
+  no robustness fixes were needed.
+
 - **Indeo 3 arena-parameterised cell unpacker** (r433,
   `indeo3::unpack_cell` / `UnpackRun` / `UnpackOutcome` /
   `CellUnpackError` / `arena_primary_offset` /
