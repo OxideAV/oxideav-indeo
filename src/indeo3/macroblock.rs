@@ -21,9 +21,10 @@
 //!   (§3.2), the INTRA leaf → VQ_TREE transition on the same cell
 //!   (§3.3), and the INTER leaf one-byte MV-index read (§3.4).
 //! * §4 — the VQ_TREE walk: H_SPLIT / V_SPLIT halving, the VQ_NULL
-//!   leaf plus its one additional 2-bit sub-code (`00` copy, `01`
-//!   skip, `10`/`11` fault — §4.1), and the VQ_DATA leaf one-byte
-//!   codebook-index read (§4.1).
+//!   leaf plus its sub-code **prefix code** (`00` copy, `01` skip,
+//!   `1` unpacker dispatch — spec/04 §4 / spec/06 §1.1, superseding
+//!   §4.1's fixed-2-bit fault reading), and the VQ_DATA leaf
+//!   one-byte codebook-index read (§4.1).
 //!
 //! What this round deliberately does **not** do (the spec/03
 //! chapter boundary, §7):
@@ -202,6 +203,23 @@ pub struct VqCell {
     pub h: u32,
     /// The resolved VQ leaf for this sub-cell.
     pub leaf: VqLeaf,
+    /// The absolute input-buffer byte offset at which this cell's
+    /// **mode-byte stream** begins, for the data-bearing leaves
+    /// (`spec/06 §5.1` step 4: the per-cell unpacker reads from
+    /// `[ebp]`, which is the next-unloaded-byte cursor):
+    ///
+    /// * [`VqLeaf::Data`] — the byte after the codebook-index byte;
+    /// * [`VqLeaf::Null`] with [`VqNull::Unpacker`] — the cursor at
+    ///   the sub-code bit (`spec/06 §5.2`: no intervening leaf byte);
+    /// * `None` for the copy / skip VQ_NULL leaves (no byte payload).
+    ///
+    /// The structural tree walk does **not** consume the mode-byte
+    /// stream (its literal-dyad length is arena-value-dependent), so
+    /// this anchor is byte-exact for the *first* data-bearing leaf of
+    /// a plane and a lower bound for later ones — the seam the
+    /// interleaved reconstruction walk will thread once the
+    /// `spec/04 §7.1` arena extraction lands.
+    pub data_cursor: Option<usize>,
 }
 
 /// Spec/03 §3 — the resolved binary-tree decomposition of one
@@ -378,6 +396,14 @@ impl<'a> BitReader<'a> {
     /// `ebp`, leaving the bit buffer state untouched (spec/03 §6
     /// item 7: the bit reader's sentinel state survives a
     /// leaf-byte read).
+    /// The absolute input-buffer offset of the next byte the shared
+    /// cursor `ebp` would deliver (`abs_base + next_byte`) — the
+    /// position a byte-level consumer (leaf byte / mode-byte stream)
+    /// reads from next.
+    fn abs_cursor(&self) -> usize {
+        self.abs_base + self.next_byte
+    }
+
     fn read_leaf_byte(&mut self) -> Result<u8, MacroblockError> {
         if self.next_byte >= self.data.len() {
             return Err(MacroblockError::LeafByteTruncated {
@@ -541,24 +567,35 @@ fn walk_vq_tree(
             } else {
                 VqNull::Skip
             };
+            // spec/06 §5.2 — the unpacker sub-code's mode bytes begin
+            // at the byte cursor, with no intervening leaf byte.
+            let data_cursor = match null {
+                VqNull::Unpacker => Some(reader.abs_cursor()),
+                VqNull::Copy | VqNull::Skip => None,
+            };
             out.push(VqCell {
                 x,
                 y,
                 w,
                 h,
                 leaf: VqLeaf::Null(null),
+                data_cursor,
             });
             Ok(())
         }
         NodeCode::LeafHigh => {
             // §4.1 — VQ_DATA leaf: read one byte = codebook index.
             let codebook_index = reader.read_leaf_byte()?;
+            // spec/06 §5.1 — the per-cell unpacker's mode bytes begin
+            // at the byte after the codebook-index byte.
+            let data_cursor = Some(reader.abs_cursor());
             out.push(VqCell {
                 x,
                 y,
                 w,
                 h,
                 leaf: VqLeaf::Data { codebook_index },
+                data_cursor,
             });
             Ok(())
         }
@@ -810,6 +847,68 @@ mod tests {
             Cell::Intra { vq_leaves, .. } => {
                 assert_eq!(vq_leaves.len(), 1);
                 assert_eq!(vq_leaves[0].leaf, VqLeaf::Null(VqNull::Unpacker));
+            }
+            other => panic!("expected Intra, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn data_cursor_anchors_the_mode_byte_stream() {
+        // spec/06 §5.1 — a VQ_DATA leaf's mode bytes begin right
+        // after its codebook-index byte. Tree bits `10 11` live in
+        // byte 0 (ebp advances to 1 on the bit-buffer load), the
+        // leaf byte is byte 1, so the stream anchor is byte 2.
+        let mut bits = codes_to_bits(&[0b10, 0b11]);
+        bits.extend_from_slice(&[0, 0, 0, 0]);
+        let mut buf = pack_bits(&bits);
+        buf.push(0xAB);
+        let prelude = prelude_at(0);
+        let tree = decode_plane_tree(&buf, &prelude, 8, 8, false, FrameFlags(0)).unwrap();
+        match &tree.cells[0] {
+            Cell::Intra { vq_leaves, .. } => {
+                assert_eq!(vq_leaves[0].data_cursor, Some(2));
+            }
+            other => panic!("expected Intra, got {other:?}"),
+        }
+
+        // spec/06 §5.2 — an unpacker-dispatch VQ_NULL has no leaf
+        // byte: the anchor is the cursor right after the sub-code
+        // bit (all five tree bits fit in byte 0, so ebp = 1).
+        let mut bits = codes_to_bits(&[0b10, 0b10]);
+        bits.push(1);
+        let buf = pack_bits(&bits);
+        let tree = decode_plane_tree(&buf, &prelude, 8, 8, false, FrameFlags(0)).unwrap();
+        match &tree.cells[0] {
+            Cell::Intra { vq_leaves, .. } => {
+                assert_eq!(vq_leaves[0].leaf, VqLeaf::Null(VqNull::Unpacker));
+                assert_eq!(vq_leaves[0].data_cursor, Some(1));
+            }
+            other => panic!("expected Intra, got {other:?}"),
+        }
+
+        // Copy / skip VQ_NULL leaves carry no byte payload.
+        let bits = codes_to_bits(&[0b10, 0b10, 0b00]);
+        let buf = pack_bits(&bits);
+        let tree = decode_plane_tree(&buf, &prelude, 8, 8, false, FrameFlags(0)).unwrap();
+        match &tree.cells[0] {
+            Cell::Intra { vq_leaves, .. } => {
+                assert_eq!(vq_leaves[0].data_cursor, None);
+            }
+            other => panic!("expected Intra, got {other:?}"),
+        }
+
+        // A non-zero plane base offsets the anchor absolutely.
+        let mut bits = codes_to_bits(&[0b10, 0b11]);
+        bits.extend_from_slice(&[0, 0, 0, 0]);
+        let mut tail = pack_bits(&bits);
+        tail.push(0xCD);
+        let mut buf = vec![0u8; 3];
+        buf.extend_from_slice(&tail);
+        let prelude = prelude_at(3);
+        let tree = decode_plane_tree(&buf, &prelude, 8, 8, false, FrameFlags(0)).unwrap();
+        match &tree.cells[0] {
+            Cell::Intra { vq_leaves, .. } => {
+                assert_eq!(vq_leaves[0].data_cursor, Some(5));
             }
             other => panic!("expected Intra, got {other:?}"),
         }

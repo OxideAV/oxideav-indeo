@@ -29,6 +29,19 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 3 mode-byte stream anchors on the cell tree** (r433,
+  `VqCell::data_cursor`, `CellPlanEntry::data_cursor`,
+  `PlaneReconstructPlan::first_data_anchor`). The tree walk now
+  records, for every data-bearing VQ leaf, the absolute input-buffer
+  offset at which its mode-byte stream begins (`spec/06 §5.1`: the
+  byte after a VQ_DATA leaf's codebook-index byte; `spec/06 §5.2`:
+  the cursor itself for an unpacker-dispatch VQ_NULL, which has no
+  leaf byte). The anchor is byte-exact for a plane's *first*
+  data-bearing unit and a lower bound for later ones (the structural
+  walk cannot consume arena-gated mode bytes); it is the seam the
+  interleaved reconstruction walk will start from once the `spec/04
+  §7.1` arena extraction lands, surfaced through the classifier plan.
+
 - **Indeo 3 hostile-input robustness suite**
   (r433, `tests/hostile_indeo3.rs`). Deterministic LCG-driven sweeps
   enforcing the "typed error or success, never a panic" contract over

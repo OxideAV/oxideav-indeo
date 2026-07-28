@@ -441,6 +441,7 @@ mod tests {
                 w: 4,
                 h,
                 leaf,
+                data_cursor: None,
             })
             .collect();
         Cell::Intra {
@@ -603,6 +604,7 @@ mod tests {
             w: 8,
             h: 4,
             disposition: CellDisposition::VqNullCopy,
+            data_cursor: None,
         };
         let plan = PlaneReconstructPlan {
             plane_idx: 0,

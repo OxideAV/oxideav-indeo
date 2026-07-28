@@ -102,6 +102,14 @@ pub struct CellPlanEntry {
     pub h: u32,
     /// How this unit is reconstructed.
     pub disposition: CellDisposition,
+    /// The absolute input-buffer offset of the unit's mode-byte
+    /// stream, for data-bearing units
+    /// ([`VqCell::data_cursor`](super::macroblock::VqCell::data_cursor)):
+    /// byte-exact for the plane's *first* data-bearing unit, a lower
+    /// bound for later ones (the structural walk does not consume
+    /// arena-gated mode bytes). `None` for INTER / VQ_NULL copy /
+    /// VQ_NULL skip units.
+    pub data_cursor: Option<usize>,
 }
 
 /// Per-disposition reconstruction-unit counts for one plane.
@@ -175,6 +183,20 @@ impl PlaneReconstructPlan {
     pub fn is_fully_unblocked(&self) -> bool {
         self.counts.deferred() == 0 && self.counts.total() > 0
     }
+
+    /// The plane's **first data-bearing unit** and its byte-exact
+    /// mode-byte stream anchor (`spec/06 §5.1` / `§5.2`): the entry
+    /// index plus the absolute input-buffer offset where its stream
+    /// begins. Only the first such unit's anchor is exact (the
+    /// structural walk does not consume arena-gated mode bytes, so
+    /// later anchors are lower bounds); this is the seam an
+    /// interleaved reconstruction walk starts from.
+    pub fn first_data_anchor(&self) -> Option<(usize, usize)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .find_map(|(i, e)| e.data_cursor.map(|c| (i, c)))
+    }
 }
 
 /// Spec/03 + spec/04 §3 / §4 — classify a plane's cell tree into a
@@ -200,6 +222,7 @@ pub fn classify_cell_tree(plane_idx: usize, tree: &CellTree) -> PlaneReconstruct
                     w: *w,
                     h: *h,
                     disposition,
+                    data_cursor: None,
                 });
             }
             Cell::Intra { vq_leaves, .. } => {
@@ -217,6 +240,7 @@ pub fn classify_cell_tree(plane_idx: usize, tree: &CellTree) -> PlaneReconstruct
                         w: vq.w,
                         h: vq.h,
                         disposition,
+                        data_cursor: vq.data_cursor,
                     });
                 }
             }
@@ -352,6 +376,7 @@ mod tests {
                 w: 4,
                 h,
                 leaf,
+                data_cursor: None,
             })
             .collect();
         Cell::Intra {
@@ -399,6 +424,49 @@ mod tests {
         assert_eq!(plan.counts.deferred(), 2);
         assert_eq!(plan.entries.len(), 4);
         assert!(!plan.is_fully_unblocked());
+    }
+
+    #[test]
+    fn first_data_anchor_finds_the_first_data_bearing_unit() {
+        // Two VQ_NULL units (no anchor), then a VQ_DATA unit with a
+        // recorded stream anchor, then another data unit — the plan
+        // reports the FIRST anchor only (later ones are lower
+        // bounds; spec/06 §5.1).
+        let mk = |leaf, cursor| VqCell {
+            x: 0,
+            y: 0,
+            w: 4,
+            h: 4,
+            leaf,
+            data_cursor: cursor,
+        };
+        let tree = CellTree {
+            plane_width: 16,
+            plane_height: 4,
+            cells: vec![Cell::Intra {
+                x: 0,
+                y: 0,
+                w: 16,
+                h: 4,
+                vq_leaves: vec![
+                    mk(VqLeaf::Null(VqNull::Copy), None),
+                    mk(VqLeaf::Null(VqNull::Unpacker), Some(9)),
+                    mk(VqLeaf::Data { codebook_index: 1 }, Some(11)),
+                ],
+            }],
+        };
+        let plan = classify_cell_tree(0, &tree);
+        assert_eq!(plan.counts.vq_null_unpacker, 1);
+        assert_eq!(plan.first_data_anchor(), Some((1, 9)));
+        assert_eq!(plan.entries[2].data_cursor, Some(11));
+
+        // A plane with no data-bearing units has no anchor.
+        let tree = CellTree {
+            plane_width: 8,
+            plane_height: 4,
+            cells: vec![intra_cell(0, 0, 8, 4, vec![VqLeaf::Null(VqNull::Copy)])],
+        };
+        assert_eq!(classify_cell_tree(0, &tree).first_data_anchor(), None);
     }
 
     #[test]
