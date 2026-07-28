@@ -27,6 +27,28 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `PlaneExecStats::vq_null_unpacker_deferred`) — deferred alongside
   VQ_DATA because its literal dyads ride the same arena docs-gap.
 
+### Added
+
+- **Indeo 3 stateful cell executor + multi-cell sequence driver**
+  (r433, `indeo3::reconstruct_cell_stateful` / `run_cell_sequence` /
+  `CellRun` / `SequenceStep` / `SequenceReport`). The per-cell
+  mode-byte executor now threads the cross-cell escape state the
+  one-shot form could not see: byte-exact cursor accounting
+  (`CellRun::bytes_consumed`, the net `ebp` advance of `spec/06
+  §1.2`), the `spec/06 §4.6`/`§4.2` next-cell-skip carry (`ecx`
+  bit 16) — a cell ending in `0xF9`/`0xFC` consumes the *next* cell
+  as `CellOutcome::SkippedByCarry` with zero byte reads — and the
+  `spec/06 §4.4` `0xFB` counter, whose full decomposition
+  (`FbCounter`: category-table class, `(counter & 0x1F) + 1` cell
+  count, bit-5 copy-vs-mark disposition) now rides
+  `CellOutcome::Terminated` and drives `run_cell_sequence`'s
+  consumption of the counted following cells
+  (`SequenceStep::SkippedByFb`). The sequence driver walks
+  consecutive cells over one shared mode-byte stream and stops —
+  reporting `deferred` — at the first arena-gated literal (the
+  `spec/04 §7.1` docs-gap), since the gated dyad path length would
+  desynchronise later cells.
+
 ### Changed
 
 - Internal plumbing re-exports (Indeo 3 walker/entropy/MC/strip modules,

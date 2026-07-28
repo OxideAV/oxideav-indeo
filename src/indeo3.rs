@@ -338,8 +338,9 @@ pub use cell_null::{
     COPY_UPPER_ROW_COUNT,
 };
 pub use cell_reconstruct::{
-    reconstruct_cell_static, CellOutcome, CellReconstructError, CellReconstructGeometry,
-    PositionEffect,
+    reconstruct_cell_stateful, reconstruct_cell_static, run_cell_sequence, CellOutcome,
+    CellReconstructError, CellReconstructGeometry, CellRun, PositionEffect, SequenceReport,
+    SequenceStep,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
