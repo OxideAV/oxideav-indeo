@@ -271,6 +271,7 @@ mod cell_loop;
 mod cell_null;
 mod cell_reconstruct;
 mod cell_subarray;
+mod cell_unpack;
 mod codebook_seed;
 mod decoder;
 mod entropy;
@@ -341,6 +342,10 @@ pub use cell_reconstruct::{
     reconstruct_cell_stateful, reconstruct_cell_static, run_cell_sequence, CellOutcome,
     CellReconstructError, CellReconstructGeometry, CellRun, PositionEffect, SequenceReport,
     SequenceStep,
+};
+pub use cell_unpack::{
+    arena_primary_offset, arena_secondary_offset, unpack_cell, CellUnpackError, DyadEmit,
+    UnpackEffect, UnpackOutcome, UnpackRun, CANONICAL_DYAD_HANDLERS,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]

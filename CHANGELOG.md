@@ -29,6 +29,29 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 3 arena-parameterised cell unpacker** (r433,
+  `indeo3::unpack_cell` / `UnpackRun` / `UnpackOutcome` /
+  `CellUnpackError` / `arena_primary_offset` /
+  `arena_secondary_offset`). The full `spec/06 §3` literal-dyad decode
+  path, generic over a caller-supplied `VqArena`: the §3.1/§3.2
+  bit-3-selected jump-table dispatch (fault slots → the binary's
+  error-code-1 as `ModeByteFault`; pinned-but-unstaged handler bodies
+  → a typed `DeferredHandler` frontier with the exact RVA), and — for
+  the canonical dyad handlers `0x10006c14` (table-1 high nibbles
+  `0x0`/`0x3`/`0xA`) and `0x10006c9c` (table-2 `0x0`) — the composite
+  `spec/07 §2.1`/`§3.2` position: static-table predictor-slot seed
+  (bank = high nibble), softSIMD `predictor + primary` add at
+  `arena + (low_nibble << 11) + 4*col + 0x400`, the `spec/06 §3.3`
+  continuation byte re-indexing the band's secondary word at
+  `+ 4*continuation + 0x402` (with the §2.3 step-3 error-code-2 range
+  fault as `DyadRangeFault`), and the four `CellVariant` store shapes
+  through `emit_variant`. Escapes and the `0xF9`/`0xFC` next-cell
+  carry share the stateful executor's protocol. The arena *values*
+  remain the `spec/04 §7.1`/`§5.2` docs-gap — the module is
+  deliberately generic over arena content (tests use synthetic
+  arenas) so the eventual extraction plugs in with no algorithmic
+  change; this closes the algorithmic half of the VQ_DATA gap.
+
 - **Indeo 3 stateful cell executor + multi-cell sequence driver**
   (r433, `indeo3::reconstruct_cell_stateful` / `run_cell_sequence` /
   `CellRun` / `SequenceStep` / `SequenceReport`). The per-cell

@@ -625,6 +625,16 @@ impl VqArena {
         &self.bytes
     }
 
+    /// Mutable access to the raw arena bytes — the seam through which
+    /// a caller (or test) supplies arena content while the `spec/04
+    /// §7.1` / `§5.2` value extraction stays gapped. The layout
+    /// contract is [`arena_primary_offset`](super::arena_primary_offset)
+    /// / [`arena_secondary_offset`](super::arena_secondary_offset)
+    /// (spec/07 §2.1 / §2.3).
+    pub fn bytes_mut(&mut self) -> &mut [u8; ARENA_LEN] {
+        &mut self.bytes
+    }
+
     /// Spec/04 §6.3 — the byte offset of band `i`'s primary table
     /// (`0x800 + 0x800*i`), or `None` for `i >= 16`.
     pub fn band_primary_offset(band: usize) -> Option<usize> {
