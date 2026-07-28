@@ -415,6 +415,55 @@ What is implemented and unit-tested:
   that genuinely *produces strip-buffer pixels from a mode-byte stream*
   (for the static-table-only subset), as opposed to operating on
   caller-supplied deltas.
+- **Stateful cell executor + multi-cell sequence driver** (r433) —
+  `indeo3::reconstruct_cell_stateful` / `run_cell_sequence` thread the
+  cross-cell escape state through the mode-byte executor: byte-exact
+  cursor accounting (`CellRun::bytes_consumed`), the `spec/06 §4.6` /
+  `§4.2` next-cell-skip carry (`ecx` bit 16 — a cell ending in `0xF9`
+  / `0xFC` consumes the *next* cell with zero byte reads), and the
+  `spec/06 §4.4` `0xFB` counter fully decoded (`FbCounter`: category
+  class, `(counter & 0x1F) + 1` cell count, bit-5 copy-vs-mark) with
+  the sequence driver consuming the counted following cells over one
+  shared stream.
+- **Arena-parameterised cell unpacker** (r433) — `indeo3::unpack_cell`
+  closes the **algorithmic half of the VQ_DATA gap**: the full
+  `spec/06 §3` literal-dyad path generic over a caller-supplied
+  `VqArena`. Jump-table dispatch (fault slots → the binary's
+  error-code-1; pinned-but-unstaged handler bodies → a typed
+  `DeferredHandler` frontier with the exact RVA); for the canonical
+  dyad handlers (`0x10006c14` — table-1 high nibbles `0x0`/`0x3`/`0xA`
+  — and `0x10006c9c`) the composite `spec/07 §2.1`/`§3.2` position:
+  static-table predictor seed, softSIMD `predictor + primary` add at
+  `arena + (low_nibble << 11) + 4*col + 0x400`, the `§3.3`
+  continuation byte re-indexing the secondary word at
+  `+ 4*continuation + 0x402` (error-code-2 range fault), and the four
+  `CellVariant` store shapes. The arena *values* stay the `spec/04
+  §7.1`/`§5.2` docs-gap — when the extraction lands the real bytes
+  plug in with no algorithmic change.
+- **VQ_NULL prefix-code fix + unpacker-dispatch leaf** (r433) — the
+  tree walk's VQ_NULL sub-code is now the `spec/04 §4` / `spec/06
+  §1.1` **prefix code** (`1` = one-bit dispatch into the per-byte
+  unpacker, `00` copy, `01` mark) instead of a fixed 2-bit read that
+  faulted on `1x` (the superseded `spec/03 §4.1` wiki reading — a
+  fixed read would also misalign every later tree node). The new
+  `VqNull::Unpacker` leaf classifies as
+  `CellDisposition::VqNullUnpacker`.
+- **Mode-byte stream anchors + stream-driven reconstruction** (r433)
+  — the tree walk records each data-bearing leaf's absolute
+  mode-byte stream offset (`VqCell::data_cursor`; byte-exact for a
+  plane's *first* data-bearing unit), and
+  `exec_plane_plan_with_stream` / `reconstruct_frame_with_stream`
+  drive that first unit — when it is an unpacker-dispatch cell —
+  through the static-table executor with **real bitstream bytes**
+  (static-subset cells resolve; arena-gated literals defer; the
+  binary's typed faults surface as `PlaneExecError::UnpackerCell`).
+- **Hostile-input robustness suite** (r433,
+  `tests/hostile_indeo3.rs`) — LCG-driven no-panic/typed-error
+  sweeps: arbitrary garbage, valid-header random payloads (extreme
+  dims), full truncation + every-bit mutation sweeps, all-splits
+  adversarial trees at 640×480, hostile multi-frame session
+  sequences, and 5000 hostile mode-byte streams through all three
+  executors. All pass with no fixes needed.
 - **Plane-level reconstruction-readiness classifier** —
   `indeo3::classify_cell_tree` / `classify_plane` (`spec/03` §3 / §4 +
   `spec/04` §3 / §4 + `spec/05`) walks a `DecodedPlane`'s cell tree and
@@ -549,7 +598,22 @@ below.
   258-byte `0x1003ed4c` extract (audit/00 §2.2), so the per-record
   layout for `ecx > 0` needs a wider extract. The low-half tables
   (`0x1003f24c` / `0x1003f94c` / `0x1003f950`) are now materialised.
-- The §7.3 "first bit `1`" VQ-data-without-index unpacker dispatch.
+- The non-canonical mode-byte handler bodies (`0x10006c90`
+  single-pixel fill, `0x100072bb` doubled-row, `0x100072c7` /
+  `0x1000771c` / `0x10007710` / `0x10007a9b`, and the table-2
+  `0x5..0x9` unpinned slots) — staged only to the dispatch level
+  (`spec/06 §3.2`); `unpack_cell` defers them with the exact RVA.
+- The per-frame-arena addressing reconciliation: `spec/07 §2.1`
+  (`esi = arena base + 2048 × low nibble`, so band 0's primary read
+  lands in the arena's `+0x000..+0x7ff` codec-init region) vs
+  `spec/04 §6.3` (per-band tables at `+0x800 + 0x800*band`), and
+  §2.1's "the `+0x400` literal is **not** the secondary table" note
+  vs §2.3 step 2 / `spec/04 §2.1`'s half-table naming. The literal
+  instruction arithmetic is implemented as staged; the naming needs
+  a Specifier pass.
+- The `spec/06 §7.1` `0xFB` off-by-one (whether the counted run
+  includes the `0xFB`-bearing cell — the sequence driver adopts
+  "includes" provisionally).
 - The §5.4 YUV→RGB output LUT contents.
 - A staged `IV31` / `IV32` bitstream fixture to drive the full pipeline.
 
@@ -606,6 +670,22 @@ the round-0 scaffold pending docs work.
   (`Complete` / `DeferredArena` / `Terminated`) over a strip pixel
   buffer; `CellReconstructGeometry` / `PositionEffect` /
   `CellReconstructError` complete the surface.
+- `indeo3::reconstruct_cell_stateful` / `run_cell_sequence` — the
+  stateful executor (`CellRun`: byte-exact `bytes_consumed` +
+  next-cell-skip carry) and the multi-cell sequence driver
+  (`SequenceStep` / `SequenceReport`; `0xFB`-counted cells consumed as
+  `SkippedByFb`).
+- `indeo3::unpack_cell` — arena-parameterised mode-byte unpacker
+  (`spec/06 §3` + `spec/07 §2`) over a caller-supplied `VqArena` →
+  `UnpackRun` / `UnpackOutcome` (`DeferredHandler` frontier for
+  unstaged handler bodies); `arena_primary_offset` /
+  `arena_secondary_offset` pin the §2.1 / §2.3 address arithmetic.
+- `indeo3::exec_plane_plan_with_stream` /
+  `reconstruct_frame_with_stream` — the reconstruction pass with the
+  input bitstream attached: the plane's first data-bearing unit
+  (`PlaneReconstructPlan::first_data_anchor`, from
+  `VqCell::data_cursor`) drives the static-table executor with real
+  bytes when it is an unpacker-dispatch cell.
 - `indeo3::assemble_output` / `allocate_strip_buffers` /
   `plane_strip_buffer_lengths` — spec/07 §5.6 / §5.7 output-plane
   assembly over per-plane strip pixel buffers → `OutputFrame` /
