@@ -12,7 +12,7 @@
 //! 1. validates the chroma planes' geometry against the format's
 //!    subsampling (`spec/08 §5.1` — luma `W × H` implies chroma
 //!    `ceil(W/s) × ceil(H/s)`),
-//! 2. converts each plane through the `spec/08 §3.3` bias-and-clamp
+//! 2. converts each plane through the `spec/08 §3.0` saturate-then-bias
 //!    (visiting planes in the `spec/08 §1.3` `U → V → Y` decode order,
 //!    matching the binary's reverse record walk), and
 //! 3. concatenates the planes into the format's host layout

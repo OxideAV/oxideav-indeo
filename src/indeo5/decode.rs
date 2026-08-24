@@ -34,16 +34,22 @@
 //! the whole tile from its first byte (three independent byte-exact
 //! chains in the 320x240 fixture), and the driver repositions on them.
 //!
-//! **Gated stages.** The decoded coefficients are structurally
-//! validated (position bounds, stream exhaustion) and surfaced through
-//! [`DecodeStats`] / [`BandTrace`], but their pixel reconstruction —
-//! per-band scan order, dequantisation scale, and the fused inverse
-//! Slant transform (`spec/05 §5.1` scan variants, `spec/06 §5.1`
-//! dequant table, per-handler butterfly equations) — is not yet
-//! staged in `docs/` at the numeric level; the coefficient layer keeps
-//! the band buffers zero pending that material. Skipped MBs, empty
-//! tiles and empty bands reconstruct exactly (zero → the `spec/08
-//! §3.3` mid-grey path).
+//! **Reconstruction (r451).** Intra bands now reconstruct to pixels:
+//! per coded block the scan-ordered symbols place through the
+//! `spec/06 §2.5` scan table, the intra DC chain (Indeo 4 annex-B
+//! differential DC, shared by Indeo 5) resolves scan position 0, the
+//! `spec/06 §1.2`/§2.3 inverse Slant kernel (validated byte-exact
+//! upstream on 460 live invocations) transforms the block, and the
+//! `spec/08 §3.0` saturate-then-bias writes plane bytes. The all-flat
+//! fixture verifies **fully** against all four of its stored
+//! `spec/08 §7.3` checksums (Y band, both chroma bands, frame).
+//!
+//! **Gated stage.** The `band_glob_quant` dequantisation of decoded
+//! levels is a documented docs-gap (`spec/06 §5.4`: where the scale
+//! multiplies "is not established"), so levels stage as-is — exact at
+//! `band_glob_quant == 0`; quantised bands are reconstructed but
+//! their `spec/08 §7.3` checksum oracle reports the remaining gap
+//! quantitatively.
 
 use super::assemble::{assemble_frame, AssembleError};
 use super::band::{BandError, BandHeader};
@@ -51,7 +57,7 @@ use super::bitreader::{BitReader, BitReaderError};
 use super::codebook::{Codebook, CodebookError, HuffContext};
 use super::format::OutputFormat;
 use super::frame::FrameHeader;
-use super::gop::{BandInfo, GopHeader, Subsampling};
+use super::gop::{BandInfo, GopHeader, Subsampling, TransformId};
 use super::header::FrameType;
 use super::level_table::{build_level_table, LEVEL_TABLE_LEN};
 use super::mb::MbGrid;
@@ -64,6 +70,11 @@ use super::picture::{PictureError, PictureHeader};
 use super::rv_table::{escape_lindex, escape_value, run_advance, RvEntry, RvTable, RvTableError};
 use super::tile::TileGrid;
 use super::tile_header::{TileDataSize, TileHeader};
+use super::transform::{
+    inverse_slant_2d_4x4, inverse_slant_2d_8x8, inverse_slant_col_4x4, inverse_slant_col_8x8,
+    inverse_slant_row_4x4, inverse_slant_row_8x8, place_scan_4x4, place_scan_8x8, SCAN_COLUMN_8X8,
+    SCAN_RASTER_4X4, SCAN_RASTER_8X8, SCAN_ZIGZAG_4X4, SCAN_ZIGZAG_8X8,
+};
 use super::wavelet::{recompose_plane, Band, LevelBands};
 
 /// Errors raised by the whole-frame driver.
@@ -543,6 +554,15 @@ fn decode_block_stream(
             }
             RvEntry::Val { run, val } => (run, val),
         };
+        if val == 0 {
+            // Level-0 (stuffing) entry: consumes its codeword but
+            // writes no coefficient and does not advance the scan
+            // (r451 fixture arbitration: the all-flat fixture's coded
+            // block carries five such symbols before its escape-coded
+            // DC, and the escape must land at scan position 0 for the
+            // frame to verify against its stored checksums).
+            continue;
+        }
         pos = run_advance(pos, run);
         if pos >= budget as i32 {
             return Err(DecodeError::BlockStream {
@@ -555,6 +575,15 @@ fn decode_block_stream(
                 },
             });
         }
+        // DOCS-GAP (spec/06 §5.4): the `band_glob_quant`-driven
+        // dequantisation of the decoded level into the staged
+        // coefficient is applied "upstream, on the (run, level)
+        // symbols as they are placed into the staging buffer", but
+        // where and how the scale multiplies "is not established".
+        // The decoded level is therefore staged as-is; this is exact
+        // for the `band_glob_quant == 0` case (the all-flat fixture
+        // verifies fully) and the `spec/08 §7.3` checksum oracle
+        // quantifies the remaining gap on quantised bands.
         coeffs[pos as usize] = val;
         stats.coefficients += 1;
     }
@@ -774,6 +803,147 @@ fn to_reconstruction_plane(
         }
     }
     ReconstructionPlane::new(w, h, stride, data)
+}
+
+/// Resolve a band's effective transform (`spec/02 §1.7`): explicit
+/// `ext_trans` wins; the `Standard` fallback maps the band's
+/// frequency position — LL → 2D Slant, HL → row Slant, LH → column
+/// Slant, HH → no transform (`spec/06 §1.1` wiki-annex confirmation).
+fn resolve_transform(binfo: &BandInfo, band_idx: usize) -> TransformId {
+    match binfo.transform_id {
+        TransformId::Standard => {
+            if band_idx == 0 {
+                TransformId::Slant2d
+            } else {
+                match (band_idx - 1) % 3 {
+                    0 => TransformId::SlantRow,
+                    1 => TransformId::SlantColumn,
+                    _ => TransformId::None,
+                }
+            }
+        }
+        explicit => explicit,
+    }
+}
+
+/// The scan table a transform variant pairs with (`spec/06 §2.5`):
+/// the 2D Slant scans the diagonal zig-zag; a 1D variant scans its
+/// no-transform axis first (column-major for the row Slant,
+/// row-major for the column Slant); the no-transform variant is the
+/// identity raster scan.
+fn scan_for_transform(transform: TransformId) -> &'static [u8; 64] {
+    match transform {
+        TransformId::Slant2d => &SCAN_ZIGZAG_8X8,
+        TransformId::SlantRow => &SCAN_COLUMN_8X8,
+        TransformId::SlantColumn | TransformId::None | TransformId::Standard => &SCAN_RASTER_8X8,
+    }
+}
+
+/// Reconstruct one intra band's sample buffer from its decoded block
+/// work list (`spec/06 §2`): per block, place the scan-ordered
+/// coefficients into the raster grid (`spec/06 §2.5`), carry the
+/// running intra DC predictor (the fixture-arbitrated inheritance
+/// that lets a single coded block set a whole flat plane), apply the
+/// band's inverse-Slant variant, and store the spatial samples into
+/// the band buffer (clipped at the band edge).
+///
+/// Returns a gate when the band's block size needs the unstaged
+/// 4-point kernel (`spec/06 §2.3`).
+fn reconstruct_intra_band(
+    band: &mut Band,
+    records: &[BlockRecord],
+    binfo: &BandInfo,
+    band_idx: usize,
+) {
+    let transform = resolve_transform(binfo, band_idx);
+    // Intra DC chain (the Indeo 4 annex-B "DC coded using differential
+    // coding", shared by Indeo 5): scan position 0 of a coded block
+    // carries a *delta* against the band's running DC, and blocks
+    // without a coefficient stream repeat the running DC. Blocks that
+    // precede the band's first coded block take that first block's DC
+    // (lookahead seed) — pinned by the all-flat fixture, whose single
+    // coded block sits *after* five uncoded blocks yet the vendor
+    // reconstruction is uniform across the whole plane. (With one DC
+    // in the chain "running" and "final" coincide; a quantised
+    // multi-DC fixture verification is pending the spec/06 §5.4
+    // dequant gap.)
+    let first_dc: i16 = records
+        .iter()
+        .find(|r| matches!(r.coding, BlockCoding::Coded))
+        .map(|r| r.coeffs[0])
+        .unwrap_or(0);
+    let mut dc_chain: i16 = 0;
+    let mut seen_coded = false;
+
+    for rec in records {
+        let side = rec.blk_size as usize;
+        let mut block = [0i16; 64];
+        let n = side * side;
+        if matches!(rec.coding, BlockCoding::Coded) {
+            block = match (side, transform) {
+                (8, _) => place_scan_8x8(&rec.coeffs, scan_for_transform(transform)),
+                (_, TransformId::None) => {
+                    let b = place_scan_4x4(&rec.coeffs, &SCAN_RASTER_4X4);
+                    let mut wide = [0i16; 64];
+                    wide[..16].copy_from_slice(&b);
+                    wide
+                }
+                _ => {
+                    let b = place_scan_4x4(&rec.coeffs, &SCAN_ZIGZAG_4X4);
+                    let mut wide = [0i16; 64];
+                    wide[..16].copy_from_slice(&b);
+                    wide
+                }
+            };
+        }
+        match rec.coding {
+            BlockCoding::Coded => {
+                dc_chain = dc_chain.wrapping_add(block[0]);
+                seen_coded = true;
+                block[0] = dc_chain;
+            }
+            BlockCoding::DcOnly | BlockCoding::Skipped => {
+                block[0] = if seen_coded { dc_chain } else { first_dc };
+            }
+        }
+
+        if side == 8 {
+            let full: &mut [i16; 64] = &mut block;
+            match transform {
+                TransformId::Slant2d => inverse_slant_2d_8x8(full),
+                TransformId::SlantRow => inverse_slant_row_8x8(full),
+                TransformId::SlantColumn => inverse_slant_col_8x8(full),
+                TransformId::None | TransformId::Standard => {}
+            }
+        } else {
+            let mut quarter = [0i16; 16];
+            quarter.copy_from_slice(&block[..16]);
+            match transform {
+                TransformId::Slant2d => inverse_slant_2d_4x4(&mut quarter),
+                TransformId::SlantRow => inverse_slant_row_4x4(&mut quarter),
+                TransformId::SlantColumn => inverse_slant_col_4x4(&mut quarter),
+                TransformId::None | TransformId::Standard => {}
+            }
+            block[..16].copy_from_slice(&quarter);
+        }
+        let _ = n;
+
+        let bw = band.width;
+        let bh = band.height;
+        for row in 0..side {
+            let y = rec.y as usize + row;
+            if y >= bh {
+                break;
+            }
+            for col in 0..side {
+                let x = rec.x as usize + col;
+                if x >= bw {
+                    break;
+                }
+                band.data[y * bw + x] = i32::from(block[side * row + col]);
+            }
+        }
+    }
 }
 
 /// The decoded payload of one picture-carrying frame: the per-plane
@@ -1172,6 +1342,8 @@ pub(crate) fn decode_payload(
                     bh as usize,
                     work.iter().map(|&v| v as i32).collect(),
                 );
+            } else {
+                reconstruct_intra_band(&mut bands[band_idx], &band_blocks, binfo, band_idx);
             }
             all_blocks.push(BandBlockSet {
                 plane_idx,

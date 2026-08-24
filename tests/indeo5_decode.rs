@@ -196,9 +196,10 @@ fn coded_block_stream_decodes_through_default_tables() {
     // A coded MB whose CBP requests one block of AC data, driven
     // through the default block codebook (preset 7) and the default
     // rv-table (slot 8): one (run 0, +1) coefficient then EOB. Under
-    // slot 8, vlc 0 maps to composite 28 = run-0 midpoint = +1, and
-    // vlc 4 is the EOB marker; both ride row 0 of preset 7 (xbits 3):
-    // codewords "0 000" and "0 100" (prefix, MSB-first extras).
+    // slot 8's zero-inclusive interval decode (r451), vlc 0 maps to
+    // composite 28 = the run-0 level-0 stuffing entry, vlc 2 maps to
+    // composite 29 = +1, and vlc 4 is the EOB marker; all ride row 0
+    // of preset 7 (xbits 3): prefix "0" + 3 MSB-first extras.
     let mut w = BitWriter::new();
     intra_cif_header(&mut w);
 
@@ -216,8 +217,8 @@ fn coded_block_stream_decodes_through_default_tables() {
         w.put(1, 1);
     }
     // Phase 2 — block streams: (run 0, +1) then EOB.
-    w.put(0, 1); // vlc 0: prefix "0"
-    w.put(0b000, 3); // extras (MSB-first) = 0
+    w.put(0, 1); // vlc 2: prefix "0"
+    w.put(0b010, 3); // extras (MSB-first) = 010b = 2
     w.put(0, 1); // vlc 4: prefix "0"
     w.put(0b001, 3); // extras (MSB-first) = 100b = 4
     w.align();
@@ -237,10 +238,15 @@ fn coded_block_stream_decodes_through_default_tables() {
     assert_eq!(decoded.stats.coefficients, 1);
     assert_eq!(decoded.stats.escapes, 0);
     assert_eq!(decoded.stats.mbs_skipped, 22 * 18 - 1);
-    // Pixel reconstruction of the coefficient is gated on the
-    // scan/dequant/transform docs-gap: output stays mid-grey.
+    // r451 pixel reconstruction: the +1 DC transforms to a flat +1
+    // block ((1 + 1) >> 1 through the second pass's round-to-nearest
+    // halving), and the intra DC chain propagates it to every
+    // uncoded block of the band — luma 129 across the plane, chroma
+    // untouched at mid-grey.
     let out = decoded.output.expect("output");
-    assert!(out.data.iter().all(|&b| b == 128));
+    let (luma, chroma) = out.data.split_at(352 * 288);
+    assert!(luma.iter().all(|&b| b == 129));
+    assert!(chroma.iter().all(|&b| b == 128));
 }
 
 #[test]

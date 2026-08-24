@@ -57,6 +57,7 @@ mod slant;
 mod tables;
 mod tile;
 mod tile_header;
+mod transform;
 mod verify;
 mod wavelet;
 
@@ -145,8 +146,8 @@ pub use output::OutputError;
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use output::{
-    bias_and_clamp, plane_stride, OutputPlane, ReconstructionPlane, OUTPUT_BIAS, OUTPUT_SHIFT,
-    PLANE_STRIDE_ALIGN,
+    bias_and_clamp, plane_stride, OutputPlane, ReconstructionPlane, OUTPUT_BIAS, OUTPUT_CLAMP_MAX,
+    OUTPUT_CLAMP_MIN, PLANE_STRIDE_ALIGN,
 };
 pub use pack::{HostBuffer, PlanePlacement};
 // internal — exposed for tests/fuzz; not part of the stable API
@@ -183,6 +184,13 @@ pub use slant::{
 pub use tables::{
     dequant_scale, DEQUANT_SCALE_BITS, DEQUANT_SCALE_DEFAULT_BITS, DEQUANT_SCALE_LEN, VLC_END,
     WAVELET_SYNTH_CONSTANTS, WAVELET_SYNTH_ROUND_BIAS,
+};
+pub use transform::{
+    inverse_slant_2d_4x4, inverse_slant_2d_8x8, inverse_slant_4, inverse_slant_4_second_pass,
+    inverse_slant_8, inverse_slant_8_second_pass, inverse_slant_col_4x4, inverse_slant_col_8x8,
+    inverse_slant_row_4x4, inverse_slant_row_8x8, place_scan_4x4, place_scan_8x8, SCAN_COLUMN_8X8,
+    SCAN_RASTER_4X4, SCAN_RASTER_8X8, SCAN_ZIGZAG_4X4, SCAN_ZIGZAG_8X8, SECOND_PASS_DC_BIAS,
+    STAGE1_ROTATE_BIAS, STAGE2_ROTATE_BIAS,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]

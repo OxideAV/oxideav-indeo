@@ -7,23 +7,25 @@
 //! reconstruction buffer** in the codec's internal representation
 //! (`spec/08 §0`, the `[ebx+0x130]` per-plane arena). This module
 //! implements the first output-stage step: the per-plane
-//! signed-to-unsigned conversion the eight per-plane writer kernels
-//! share (`spec/08 §3.3`).
+//! signed-to-unsigned conversion every per-plane writer kernel shares
+//! (`spec/08 §3.0`, instrumentation-established, Extractor round 13).
 //!
-//! The per-pixel arithmetic is the **bias-and-clamp** of `spec/08 §3.3`:
+//! The per-pixel arithmetic is the **saturate-then-bias** of
+//! `spec/08 §3.0`:
 //!
 //! ```text
-//! output_byte = ((signed_coeff + 0x200) >> 2) & 0xff
+//! plane_byte = clamp(band_sample, -128, +127) + 128
 //! ```
 //!
-//! The `+0x200` (+512) is the signed→unsigned bias that recentres the
-//! codec's internal `[-512, +511]` pixel range into a 10-bit unsigned
-//! value; the `>> 2` is the 10-bit→8-bit downshift. There is **no
-//! explicit saturation** (`spec/08 §3.3`): values outside the expected
-//! range wrap into the byte — the encoder is required to keep
-//! coefficients in range (the same encoder-discipline mechanism Indeo 3
-//! uses per `../indeo3/spec/07 §4`). The `& 0xff` truncation is the
-//! only range operation applied.
+//! — a signed 16→8 saturating pack followed by a byte-wise `+0x80`
+//! (the constant held as eight identical bytes at `.data 0x10098360`),
+//! and **nothing else**: no studio-range remap, no gamma, no lookup
+//! table. The all-flat fixture's studio-black `Y = 16` comes from a
+//! band that genuinely holds `-112`, not from a decoder-side mapping.
+//! (`spec/08 §3.3`'s earlier static reading `(coeff + 0x200) >> 2`
+//! presumed a 4×-scaled band domain; §3.0's measured rule supersedes
+//! it, and the §7.3 checksum formulas over the resulting bytes verify
+//! byte-exactly on the staged fixtures.)
 //!
 //! ## Per-plane stride (`spec/08 §1.1`)
 //!
@@ -40,11 +42,16 @@
 /// the plane width padded up to this alignment (`0x20` = 32).
 pub const PLANE_STRIDE_ALIGN: u32 = 0x20;
 
-/// `spec/08 §3.3` — the signed→unsigned recentre bias (`+512`).
-pub const OUTPUT_BIAS: i32 = 0x200;
+/// `spec/08 §3.0` — the signed→unsigned recentre bias (`+128`, held
+/// as eight identical bytes at `.data 0x10098360`).
+pub const OUTPUT_BIAS: i32 = 0x80;
 
-/// `spec/08 §3.3` — the 10-bit→8-bit downshift applied after the bias.
-pub const OUTPUT_SHIFT: u32 = 2;
+/// `spec/08 §3.0` — the saturating-pack bounds: band samples clamp to
+/// the signed 8-bit range before the bias.
+pub const OUTPUT_CLAMP_MIN: i32 = -128;
+
+/// `spec/08 §3.0` — see [`OUTPUT_CLAMP_MIN`].
+pub const OUTPUT_CLAMP_MAX: i32 = 127;
 
 /// `spec/08 §1.1` — pad a plane width up to the 32-byte reconstruction
 /// stride (`(width + 0x1f) & ~0x1f`).
@@ -53,17 +60,21 @@ pub fn plane_stride(width: u32) -> u32 {
     (width + (PLANE_STRIDE_ALIGN - 1)) & !(PLANE_STRIDE_ALIGN - 1)
 }
 
-/// `spec/08 §3.3` — the per-pixel bias-and-clamp: convert one signed
-/// internal reconstruction coefficient to an 8-bit output byte via
-/// `((coeff + 0x200) >> 2) & 0xff`.
+/// `spec/08 §3.0` — the per-pixel band-sample → plane-byte rule
+/// shared by every writer: `clamp(sample, -128, +127) + 128`
+/// (equivalently `clamp(sample + 128, 0, 255)`).
 ///
-/// The shift is a logical right shift; with the `+0x200` bias applied
-/// first, an in-range coefficient (`[-512, +511]`) is non-negative
-/// before the shift so the low-8-bit truncation matches the binary's
-/// `add`/`shr`/byte-store sequence exactly.
+/// This is the instrumentation-established rule (Extractor round 13):
+/// a signed 16→8 saturating pack followed by a byte-wise `+0x80`,
+/// with **no** studio-range remap, gamma step, or lookup table. The
+/// zero band sample maps to mid-grey 128; the all-flat fixture's
+/// studio-black `Y = 16` comes from a band that genuinely holds
+/// `-112`, not from a decoder-side mapping. (The earlier
+/// `spec/08 §3.3` static reading `(coeff + 0x200) >> 2` presumed a
+/// 4×-scaled band domain and is superseded by §3.0's measured rule.)
 #[inline]
 pub fn bias_and_clamp(coeff: i32) -> u8 {
-    (((coeff + OUTPUT_BIAS) >> OUTPUT_SHIFT) & 0xff) as u8
+    (coeff.clamp(OUTPUT_CLAMP_MIN, OUTPUT_CLAMP_MAX) + OUTPUT_BIAS) as u8
 }
 
 /// Errors the output-plane conversion can raise.
@@ -169,7 +180,7 @@ impl ReconstructionPlane {
         self.data[(y * self.stride + x) as usize]
     }
 
-    /// `spec/08 §3.3` — convert this plane to a tightly-packed 8-bit
+    /// `spec/08 §3.0` — convert this plane to a tightly-packed 8-bit
     /// output plane by applying the per-pixel bias-and-clamp to every
     /// visible sample and dropping the right-edge stride padding.
     ///
@@ -195,7 +206,7 @@ impl ReconstructionPlane {
 
 /// A tightly-packed 8-bit output plane (`width * height` bytes,
 /// row-major) — the post-bias-and-clamp result of one reconstruction
-/// plane (`spec/08 §3.3`).
+/// plane (`spec/08 §3.0`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputPlane {
     /// Plane width in pixels.
@@ -231,24 +242,24 @@ mod tests {
 
     #[test]
     fn bias_and_clamp_midrange() {
-        // spec/08 §3.3: (coeff + 0x200) >> 2 & 0xff.
-        // coeff 0 -> (512 >> 2) = 128 (mid grey).
+        // spec/08 §3.0: clamp(sample, -128, 127) + 128.
+        // Sample 0 -> mid grey.
         assert_eq!(bias_and_clamp(0), 128);
-        // coeff -512 (lower bound) -> (0 >> 2) = 0.
-        assert_eq!(bias_and_clamp(-512), 0);
-        // coeff +508 -> (1020 >> 2) = 255.
-        assert_eq!(bias_and_clamp(508), 255);
-        // coeff +4 -> (516 >> 2) = 129.
-        assert_eq!(bias_and_clamp(4), 129);
+        // The all-flat fixture's pinned pair: -112 -> studio black 16.
+        assert_eq!(bias_and_clamp(-112), 16);
+        assert_eq!(bias_and_clamp(-128), 0);
+        assert_eq!(bias_and_clamp(127), 255);
+        assert_eq!(bias_and_clamp(4), 132);
     }
 
     #[test]
-    fn bias_and_clamp_wraps_out_of_range() {
-        // No explicit saturation (spec/08 §3.3): +512 -> (1024>>2)=256
-        // truncates to 0.
-        assert_eq!(bias_and_clamp(512), 0);
-        // A large positive coeff wraps through the &0xff.
-        assert_eq!(bias_and_clamp(516), 1);
+    fn bias_and_clamp_saturates_out_of_range() {
+        // spec/08 §3.0: a signed 16->8 saturating pack — out-of-range
+        // samples clamp, they do not wrap.
+        assert_eq!(bias_and_clamp(512), 255);
+        assert_eq!(bias_and_clamp(-513), 0);
+        assert_eq!(bias_and_clamp(i32::from(i16::MIN)), 0);
+        assert_eq!(bias_and_clamp(i32::from(i16::MAX)), 255);
     }
 
     #[test]
@@ -305,10 +316,10 @@ mod tests {
     fn output_plane_accessor() {
         let p = ReconstructionPlane::new(2, 2, 32, {
             let mut d = vec![0i32; 64];
-            d[0] = -512; // (0,0) -> 0
-            d[1] = 508; // (1,0) -> 255
+            d[0] = -512; // (0,0) -> saturates to 0
+            d[1] = 508; // (1,0) -> saturates to 255
             d[32] = 0; // (0,1) -> 128
-            d[33] = 4; // (1,1) -> 129
+            d[33] = 4; // (1,1) -> 132
             d
         })
         .unwrap();
@@ -316,6 +327,6 @@ mod tests {
         assert_eq!(out.at(0, 0), 0);
         assert_eq!(out.at(1, 0), 255);
         assert_eq!(out.at(0, 1), 128);
-        assert_eq!(out.at(1, 1), 129);
+        assert_eq!(out.at(1, 1), 132);
     }
 }

@@ -127,11 +127,17 @@ impl RvTable {
             let cnt = u32::from(cnt);
             let mid = base + cnt;
             for c in base..(base + 2 * cnt).min(256) {
-                let val = if c >= mid {
-                    (c - mid) as i16 + 1
-                } else {
-                    -((mid - c) as i16)
-                };
+                // r451 fixture arbitration: the interval decode is
+                // zero-INCLUSIVE — `val = c - mid` on both sides, so
+                // the midpoint composite is the level-0 (stuffing)
+                // entry and the positive half tops out at `cnt - 1`.
+                // (The r388 "+1 at the midpoint" reading is withdrawn:
+                // under it the all-flat fixture's five shortest-code
+                // symbols decode as +1 AC coefficients and the frame
+                // cannot reconstruct flat; under the zero-inclusive
+                // read the same frame verifies against all four of its
+                // stored `spec/08 §7.3` checksums.)
+                let val = c as i16 - mid as i16;
                 decode[c as usize] = RvEntry::Val {
                     run: run as u8,
                     val,
@@ -241,28 +247,30 @@ mod tests {
         // Slot 0 counts start [40, 14, ...]: run-0 interval spans
         // composites 2..=81 with midpoint 42, run-1 spans 82..=109
         // with midpoint 96. Staged B: B[0]=42, B[1]=41, B[3]=43,
-        // B[4]=40, B[8]=96, B[9]=95.
+        // B[4]=40, B[8]=96, B[9]=95. Zero-inclusive decode (r451
+        // fixture arbitration): the midpoint composite is the level-0
+        // stuffing entry.
         let t = RvTable::for_band(0, &[]).unwrap();
-        assert_eq!(t.lookup(0), Some(RvEntry::Val { run: 0, val: 1 }));
+        assert_eq!(t.lookup(0), Some(RvEntry::Val { run: 0, val: 0 }));
         assert_eq!(t.lookup(1), Some(RvEntry::Val { run: 0, val: -1 }));
-        assert_eq!(t.lookup(3), Some(RvEntry::Val { run: 0, val: 2 }));
+        assert_eq!(t.lookup(3), Some(RvEntry::Val { run: 0, val: 1 }));
         assert_eq!(t.lookup(4), Some(RvEntry::Val { run: 0, val: -2 }));
-        assert_eq!(t.lookup(8), Some(RvEntry::Val { run: 1, val: 1 }));
+        assert_eq!(t.lookup(8), Some(RvEntry::Val { run: 1, val: 0 }));
         assert_eq!(t.lookup(9), Some(RvEntry::Val { run: 1, val: -1 }));
     }
 
     #[test]
     fn slot4_fixture_y_band_mapping() {
         // The 320x240 fixture's Y band uses rv_tab_sel = 4: EOB rides
-        // the 1-bit codeword (vlc 0), and vlc 1..=4 decode to
-        // (0,+1), (0,-1), (0,+2), (1,+1) — counts [89, 11, ...] put
-        // run 0's midpoint at composite 91, run 1's at 191.
+        // the 1-bit codeword (vlc 0); counts [89, 11, ...] put run
+        // 0's midpoint (its level-0 stuffing entry) at composite 91
+        // and run 1's at 191 (zero-inclusive decode, r451).
         let t = RvTable::for_band(4, &[]).unwrap();
         assert_eq!(t.lookup(0), Some(RvEntry::Eob));
-        assert_eq!(t.lookup(1), Some(RvEntry::Val { run: 0, val: 1 }));
+        assert_eq!(t.lookup(1), Some(RvEntry::Val { run: 0, val: 0 }));
         assert_eq!(t.lookup(2), Some(RvEntry::Val { run: 0, val: -1 }));
-        assert_eq!(t.lookup(3), Some(RvEntry::Val { run: 0, val: 2 }));
-        assert_eq!(t.lookup(4), Some(RvEntry::Val { run: 1, val: 1 }));
+        assert_eq!(t.lookup(3), Some(RvEntry::Val { run: 0, val: 1 }));
+        assert_eq!(t.lookup(4), Some(RvEntry::Val { run: 1, val: 0 }));
     }
 
     #[test]

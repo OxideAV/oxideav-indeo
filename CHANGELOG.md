@@ -6,7 +6,65 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Indeo 5 inverse Slant transform + first fully checksum-verified
+  frame** (r451, `indeo5::transform` + intra band reconstruction in
+  `decode_intra_picture`). The measured `spec/06 §1.2` 8-point
+  butterfly recurrence (validated upstream byte-exactly on all 460
+  live kernel invocations of a real fixture decode) lands as
+  `inverse_slant_8` / `inverse_slant_8_second_pass` /
+  `inverse_slant_2d_8x8` and the single-axis row/column forms, with
+  the three rounding-bias constants
+  (`tables/transform_rounding_10098500.csv`) and the four `spec/06
+  §2.5` scan tables (`SCAN_ZIGZAG_8X8` / `SCAN_COLUMN_8X8` /
+  `SCAN_RASTER_8X8` / `SCAN_ZIGZAG_4X4`, transcribed from
+  `tables/scan_tables_10098528.csv`). A provisional 4-point kernel
+  realises the `spec/06 §2.3` constraint ("no `>>3` stage — only the
+  `(5, 2)` stage and the halving"). Intra bands now reconstruct to
+  pixels: scan placement, the Indeo 4 annex-B differential intra DC
+  chain (delta at scan position 0; uncoded blocks repeat the running
+  DC, with the band's first coded DC seeding earlier blocks), the
+  per-band transform variant (`Standard` resolves LL→2D, HL→row,
+  LH→column, HH→none), and the `spec/08 §3.0` output rule. **The
+  all-flat 240×180 fixture now verifies against all four of its
+  stored `spec/08 §7.3` checksums** (Y band `0x2C00`, both chroma
+  bands `0`, frame `0x1800`) and reproduces the vendor's exact
+  pixels (`Y = 16`, `U = V = 128`) — the first fully
+  pixel-validated IV50 frame.
+
 ### Fixed
+
+- **Indeo 5 rv-table interval decode is zero-inclusive** (r451,
+  `indeo5::RvTable`). The r388 reading placed `+1` at each run
+  interval's midpoint composite; fixture arbitration (the all-flat
+  frame's five shortest-code symbols preceding its escape-coded DC)
+  shows the decode is `val = composite - midpoint` on **both** sides:
+  the midpoint composite is a **level-0 stuffing entry** that
+  consumes its codeword but writes no coefficient and does not
+  advance the scan. Under the withdrawn reading the flat frame
+  decodes five spurious `+1` AC coefficients and cannot reconstruct
+  flat; under the zero-inclusive reading it verifies against all four
+  stored checksums.
+- **Indeo 5 band-sample → plane-byte rule is `spec/08 §3.0`
+  saturate-then-bias** (r451, `indeo5::bias_and_clamp`). The output
+  conversion now implements the instrumentation-established
+  `clamp(sample, -128, +127) + 128` (a signed 16→8 saturating pack
+  plus `+0x80`, no studio-range remap, no LUT), superseding the
+  earlier `spec/08 §3.3` static reading `((coeff + 0x200) >> 2) &
+  0xff`, which presumed a 4×-scaled band domain. `OUTPUT_CLAMP_MIN`
+  / `OUTPUT_CLAMP_MAX` replace `OUTPUT_SHIFT`.
+
+### Known gaps (documented docs-gaps)
+
+- **Indeo 5 `band_glob_quant` dequantisation** (`spec/06 §5.4`:
+  where the quantiser scale multiplies "is not established").
+  Decoded levels stage as-is — exact for `band_glob_quant == 0`
+  bands; the quantised 320×240 fixture reconstructs structurally but
+  its three stored band checksums do not verify yet, which the
+  `spec/08 §7.3` oracle pins quantitatively in the fixture tests.
+
+### Fixed (r433)
 
 - **Indeo 3 VQ_NULL sub-code is a prefix code, not a fixed 2-bit
   field** (r433, `indeo3::decode_plane_tree`). The tree walk read a
