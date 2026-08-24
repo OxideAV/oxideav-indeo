@@ -372,12 +372,12 @@ pub use staging::{
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use entropy::{
-    apply_continuation_xor, continuation_needed, fb_category, fb_category_table, variant_entry_rva,
-    DyadAddress, FbCategory, FbCounter, HighNibbleAction, JumpTable, JumpTableEntry, LiteralMode,
-    ModeByte, ModeByteKind, PositionClass, RleEscape, RowLookahead, ARENA_BAND_STRIDE,
-    CONTINUATION_XOR, LITERAL_MODE_MAX, MAX_ROW_LOOKAHEAD_OFFSET, PRIMARY_TABLE_DISP,
-    RLE_ESCAPE_MIN, SECONDARY_TABLE_DISP, VARIANT_A_ENTRY, VARIANT_B_ENTRY, VARIANT_C_ENTRY,
-    VARIANT_D_ENTRY,
+    apply_continuation_xor, continuation_needed, fb_category, fb_category_table, handler_prologue,
+    variant_entry_rva, CodebookBase, DyadAddress, FbCategory, FbCounter, HighNibbleAction,
+    JumpTable, JumpTableEntry, LiteralMode, ModeByte, ModeByteKind, PositionClass, RleEscape,
+    RowLookahead, ARENA_BAND_STRIDE, CONTINUATION_XOR, LITERAL_MODE_MAX, MAX_ROW_LOOKAHEAD_OFFSET,
+    PRIMARY_TABLE_DISP, RLE_ESCAPE_MIN, SECONDARY_TABLE_DISP, VARIANT_A_ENTRY, VARIANT_B_ENTRY,
+    VARIANT_C_ENTRY, VARIANT_D_ENTRY,
 };
 pub use frame::{
     decode_frame, decode_frame_with_selector, DecodedFrame, DecodedPlane, FrameDecodeError,

@@ -477,7 +477,7 @@ fn exec_unpacker_unit(
                 .count();
             Ok(true)
         }
-        CellOutcome::Terminated { .. } | CellOutcome::SkippedByCarry => {
+        CellOutcome::SkippedByCarry => {
             stats.unpacker_static_units += 1;
             Ok(true)
         }

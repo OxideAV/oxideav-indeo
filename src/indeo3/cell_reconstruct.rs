@@ -117,6 +117,17 @@ pub enum PositionEffect {
         /// Number of `0xb0`-byte row strides skipped.
         rows_skipped: usize,
     },
+    /// An `0xFB` counter run (`spec/06 §4.4` corrected): a bounded
+    /// run of dyad positions, each repeating the pixel row above it
+    /// (category `0x04`) or edge-marked (category `0x08`).
+    FbRun {
+        /// The decoded counter.
+        decoded: FbCounter,
+        /// How many positions the run actually emitted (may be fewer
+        /// than the counter when the cell's rows ran out — the run is
+        /// bounded by the cell as well as the counter).
+        positions: usize,
+    },
 }
 
 /// How a cell's mode-byte walk finished.
@@ -142,20 +153,6 @@ pub enum CellOutcome {
         /// position.
         dword: usize,
         /// The effects emitted before the deferral (row-major).
-        emitted: Vec<PositionEffect>,
-    },
-    /// The walk hit an `0xFB` cell-terminating escape (`spec/06 §4.4`):
-    /// the counter byte was consumed and the cell ends here. Carries the
-    /// raw counter byte, its full `spec/06 §4.4` decomposition (category,
-    /// `(counter & 0x1F) + 1` cell count, copy-vs-mark disposition), and
-    /// the effects emitted before it.
-    Terminated {
-        /// The raw `0xFB` counter byte read at `[ebp + 1]`.
-        counter: u8,
-        /// The `spec/06 §4.4` decomposition of the counter byte (the
-        /// category-table lookup + the wiki-matched bit fields).
-        decoded: FbCounter,
-        /// The effects emitted before the terminator (row-major).
         emitted: Vec<PositionEffect>,
     },
     /// The cell was consumed by a **carried next-cell-skip flag**
@@ -210,6 +207,24 @@ pub enum CellReconstructError {
         /// The strip buffer length.
         buffer_len: usize,
     },
+    /// An `0xFB` counter byte the binary rejects (`spec/06 §4.4`
+    /// corrected: `0x00`, `0x20`, or bits 6..7 set — category `0x00`
+    /// jumps straight to the error-code-1 exit).
+    FbCounterInvalid {
+        /// The rejected counter byte.
+        counter: u8,
+        /// The source-row index (0-based) of the `0xFB` position.
+        row: usize,
+        /// The dyad-pair column index (0-based).
+        dword: usize,
+    },
+    /// An `0xFB` run position's write fell outside the strip buffer.
+    FbRunOutOfBounds {
+        /// The out-of-range write index.
+        write_index: usize,
+        /// The strip buffer length.
+        buffer_len: usize,
+    },
 }
 
 impl core::fmt::Display for CellReconstructError {
@@ -247,6 +262,23 @@ impl core::fmt::Display for CellReconstructError {
             } => write!(
                 f,
                 "spec/07 §3.2: row-band seed at write index {write_index} is outside the \
+                 {buffer_len}-byte strip buffer"
+            ),
+            CellReconstructError::FbCounterInvalid {
+                counter,
+                row,
+                dword,
+            } => write!(
+                f,
+                "spec/06 §4.4: 0xFB counter {counter:#04x} is invalid (error code 1) at \
+                 row {row}, dword {dword}"
+            ),
+            CellReconstructError::FbRunOutOfBounds {
+                write_index,
+                buffer_len,
+            } => write!(
+                f,
+                "spec/06 §4.4: 0xFB run write at index {write_index} is outside the \
                  {buffer_len}-byte strip buffer"
             ),
         }
@@ -454,19 +486,52 @@ pub fn reconstruct_cell_stateful(
                                 next_cell_skip: false,
                             });
                         }
-                        // `0xFB` — counter byte; the cell terminates
-                        // with the §4.4 decomposition surfaced.
+                        // `0xFB` — counter byte; a bounded in-cell
+                        // run of dyad positions (`spec/06 §4.4`
+                        // corrected): repeat-row-above (category
+                        // `0x04`) or edge-mark (category `0x08`),
+                        // stopping at the counter or the cell's end,
+                        // whichever comes first.
                         RleEscape::Fb => {
                             let counter = read_byte(mode_bytes, &mut cursor)?;
-                            return Ok(CellRun {
-                                outcome: CellOutcome::Terminated {
+                            let decoded = FbCounter::decode(counter);
+                            if !decoded.is_valid() {
+                                return Err(CellReconstructError::FbCounterInvalid {
                                     counter,
-                                    decoded: FbCounter::decode(counter),
-                                    emitted: effects,
-                                },
-                                bytes_consumed: cursor,
-                                next_cell_skip: false,
+                                    row,
+                                    dword,
+                                });
+                            }
+                            let run = fb_run(
+                                strip,
+                                geometry,
+                                &mut row,
+                                &mut dword,
+                                &mut row_dst_offset,
+                                1,
+                                decoded,
+                            )
+                            .map_err(|(write_index, buffer_len)| {
+                                CellReconstructError::FbRunOutOfBounds {
+                                    write_index,
+                                    buffer_len,
+                                }
+                            })?;
+                            effects.push(PositionEffect::FbRun {
+                                decoded,
+                                positions: run.positions,
                             });
+                            if run.cell_exhausted {
+                                // §4.4: a counter that outlives the
+                                // cell diverts to the cell-completion
+                                // paths.
+                                return Ok(CellRun {
+                                    outcome: CellOutcome::Complete(effects),
+                                    bytes_consumed: cursor,
+                                    next_cell_skip: false,
+                                });
+                            }
+                            continue;
                         }
                         // `0xFC` — skip the rest of this cell AND the
                         // next (`spec/06 §4.2`): the current cell ends
@@ -532,19 +597,10 @@ pub fn reconstruct_cell_stateful(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SequenceStep {
     /// The cell was driven through the mode-byte executor. Carries the
-    /// full [`CellRun`].
+    /// full [`CellRun`]. (Since the `spec/06 §4.4` round-17
+    /// correction, `0xFB` runs are bounded **in-cell** position runs,
+    /// so no cross-cell `0xFB` step exists any more.)
     Executed(CellRun),
-    /// The cell was consumed by an earlier cell's `0xFB` counter
-    /// (`spec/06 §4.4`): no bytes read. `copy_from_reference` is the
-    /// counter's bit-5 disposition — `true` = the cell takes its data
-    /// from the reference frame, `false` = the cell is marked skipped
-    /// (the `or [eax+0x57], dl` edge-bit set of the category-`0x08`
-    /// handler). The pixel-level effect (reference copy / edge mark)
-    /// is the caller's copy / mark-edge path.
-    SkippedByFb {
-        /// The `0xFB` counter's bit-5 disposition for this cell.
-        copy_from_reference: bool,
-    },
 }
 
 /// The result of driving a run of consecutive cells over one shared
@@ -571,16 +627,12 @@ pub struct SequenceReport {
 /// * the `0xF9` / `0xFC` next-cell-skip carry (`ecx` bit 16, `§4.6`):
 ///   a cell ending in either escape consumes the *next* cell as
 ///   [`CellOutcome::SkippedByCarry`] with no byte reads;
-/// * the `0xFB` counter (`§4.4`): a terminated cell's
-///   `(counter & 0x1F) + 1` count consumes that many cells — the
-///   terminated cell itself plus the following
-///   `cells_to_skip - 1` — as [`SequenceStep::SkippedByFb`] with the
-///   counter's bit-5 copy-vs-mark disposition. (The exact off-by-one
-///   is `spec/06 §7.1`-provisional: this driver adopts the reading
-///   that the `0xFB`-bearing cell is the first of the counted run,
-///   since the escape is read at that cell's own first position.)
 /// * the byte cursor (`§1.2`): each executed cell resumes the stream
-///   exactly where the previous cell's walk left it.
+///   exactly where the previous cell's walk left it. (`0xFB` runs
+///   are in-cell per the `§4.4` round-17 correction — the `§7.1`
+///   off-by-one question is settled as "no off-by-one, and runs
+///   count dyad positions, not cells" — so the driver carries no
+///   cross-cell `0xFB` state.)
 ///
 /// The walk stops early — reporting [`SequenceReport::deferred`] —
 /// when a cell hits the arena-gated literal frontier, since the
@@ -594,31 +646,14 @@ pub fn run_cell_sequence(
     let mut steps = Vec::with_capacity(cells.len());
     let mut cursor = 0usize;
     let mut carry = false;
-    // Cells still owed to a previous 0xFB counter, with its bit-5
-    // disposition.
-    let mut fb_pending: usize = 0;
-    let mut fb_copy = false;
     let mut deferred = false;
 
     for &geometry in cells {
-        if fb_pending > 0 {
-            fb_pending -= 1;
-            steps.push(SequenceStep::SkippedByFb {
-                copy_from_reference: fb_copy,
-            });
-            continue;
-        }
-
         let run = reconstruct_cell_stateful(strip, geometry, &mode_bytes[cursor..], table, carry)?;
         cursor += run.bytes_consumed;
         carry = run.next_cell_skip;
 
         let stop = matches!(run.outcome, CellOutcome::DeferredArena { .. });
-        if let CellOutcome::Terminated { decoded, .. } = &run.outcome {
-            // The terminated cell is the first of the counted run.
-            fb_pending = usize::from(decoded.cells_to_skip).saturating_sub(1);
-            fb_copy = decoded.copy_from_reference;
-        }
         steps.push(SequenceStep::Executed(run));
         if stop {
             deferred = true;
@@ -636,6 +671,88 @@ pub fn run_cell_sequence(
 /// The number of pixels (= bytes) one dyad-pair position covers in the
 /// strip buffer (`spec/07 §2.4`: a dyad-pair DWORD is 4 pixels).
 const PIXELS_PER_DYAD_DWORD: usize = 4;
+
+/// The outcome of one `0xFB` counter run ([`fb_run`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FbRunOutcome {
+    /// Positions actually emitted (bounded by cell and counter).
+    pub positions: usize,
+    /// `true` when the run consumed the cell's last position (the
+    /// §4.4 divert-to-cell-completion case, taken both when the
+    /// counter outlives the cell and when it ends exactly on the
+    /// cell's final position).
+    pub cell_exhausted: bool,
+}
+
+/// Spec/06 §4.4 (corrected) — execute one `0xFB` counter run over a
+/// strip buffer: `run_length` dyad positions from the current
+/// `(row, dword)` position onward, each either repeating the pixel
+/// row above it (category `0x04`) or edge-marking the position's
+/// bytes (category `0x08`, bit 7 set). Positions advance in the
+/// cell's raster order, wrapping rows with `rows_per` output strides
+/// per source row; the run is bounded by the cell's rows as well as
+/// by the counter.
+///
+/// Mutates the caller's position cursor in place; returns the
+/// emitted-position count and whether the cell's rows are exhausted.
+/// Errors with `(write_index, buffer_len)` when a position falls
+/// outside the strip.
+pub(crate) fn fb_run(
+    strip: &mut [u8],
+    geometry: CellReconstructGeometry,
+    row: &mut usize,
+    dword: &mut usize,
+    row_dst_offset: &mut usize,
+    rows_per: usize,
+    decoded: FbCounter,
+) -> Result<FbRunOutcome, (usize, usize)> {
+    let mut remaining = usize::from(decoded.run_length);
+    let mut positions = 0usize;
+
+    while remaining > 0 {
+        if *dword >= geometry.width_dwords {
+            *dword = 0;
+            *row += 1;
+            *row_dst_offset += rows_per * PREDICTOR_ROW_STRIDE;
+        }
+        if *row >= geometry.source_rows {
+            return Ok(FbRunOutcome {
+                positions,
+                cell_exhausted: true,
+            });
+        }
+        let write_index = *row_dst_offset + *dword * PIXELS_PER_DYAD_DWORD;
+        let end = write_index + PIXELS_PER_DYAD_DWORD;
+        if end > strip.len() {
+            return Err((write_index, strip.len()));
+        }
+        if decoded.repeats_row_above {
+            // Category 0x04 — copy the row-above DWORD (a repeat of
+            // the predictor row, `spec/06 §4.4`).
+            let Some(src) = write_index.checked_sub(PREDICTOR_ROW_STRIDE) else {
+                return Err((write_index, strip.len()));
+            };
+            strip.copy_within(src..src + PIXELS_PER_DYAD_DWORD, write_index);
+        } else {
+            // Category 0x08 — edge-mark the position (bit 7 set on
+            // each pixel byte, the `or [eax+0x57], dl` family).
+            for b in &mut strip[write_index..end] {
+                *b |= 0x80;
+            }
+        }
+        *dword += 1;
+        remaining -= 1;
+        positions += 1;
+    }
+
+    // Counter exhausted: the run ends in-cell unless it consumed the
+    // final position of the final row.
+    let exhausted = *row + 1 >= geometry.source_rows && *dword >= geometry.width_dwords;
+    Ok(FbRunOutcome {
+        positions,
+        cell_exhausted: exhausted,
+    })
+}
 
 /// Read one byte from the mode-byte stream, advancing the cursor.
 fn read_byte(bytes: &[u8], cursor: &mut usize) -> Result<u8, CellReconstructError> {
@@ -807,28 +924,68 @@ mod tests {
     }
 
     #[test]
-    fn fb_reads_counter_and_terminates() {
+    fn fb_runs_edge_mark_positions_in_cell() {
         let table = DyadDeltaTable::load();
         let top = STRIDE;
         let mut strip = vec![0u8; STRIDE * 8];
-        // 0xFB is accepted at the cell-first position; it reads a counter.
-        let bytes = [0xFBu8, 0x25];
+        // §4.4 corrected: 0xFB 0x25 = a 5-position edge-mark run —
+        // bounded in-cell, marking bit 7 across the run's DWORDs.
+        // Cell: 2 dwords wide x 4 rows; the run covers rows 0..2 and
+        // half of row 2.
+        let bytes = [0xFBu8, 0x25, 0xFD];
         let outcome = reconstruct_cell_static(&mut strip, geom(2, 4, top), &bytes, &table).unwrap();
         match outcome {
-            CellOutcome::Terminated {
-                counter,
-                decoded,
-                emitted,
-            } => {
-                assert_eq!(counter, 0x25);
-                // §4.4 — 0x25: bit 5 set → mark-skipped, count
-                // (0x25 & 0x1F) + 1 = 6.
-                assert_eq!(decoded.cells_to_skip, 6);
-                assert!(!decoded.copy_from_reference);
-                assert!(decoded.reserved_bits_zero);
-                assert!(emitted.is_empty());
+            CellOutcome::Complete(effects) => {
+                assert!(matches!(
+                    effects[0],
+                    PositionEffect::FbRun {
+                        positions: 5,
+                        decoded: FbCounter {
+                            repeats_row_above: false,
+                            ..
+                        }
+                    }
+                ));
             }
-            other => panic!("expected Terminated, got {other:?}"),
+            other => panic!("expected Complete, got {other:?}"),
+        }
+        // The five run positions carry the bit-7 marker.
+        for (row, dword) in [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0)] {
+            let idx = top + row * STRIDE + dword * 4;
+            assert!(
+                strip[idx..idx + 4].iter().all(|&b| b & 0x80 != 0),
+                "row {row} dword {dword} not marked"
+            );
+        }
+        // The sixth position (row 2, dword 1) is untouched.
+        let idx = top + 2 * STRIDE + 4;
+        assert!(strip[idx..idx + 4].iter().all(|&b| b & 0x80 == 0));
+    }
+
+    #[test]
+    fn fb_copy_run_repeats_row_above_and_invalid_counter_faults() {
+        let table = DyadDeltaTable::load();
+        let top = STRIDE;
+        let mut strip = vec![0u8; STRIDE * 8];
+        // Seed the row above the cell with a recognisable pattern.
+        for (i, b) in strip[0..8].iter_mut().enumerate() {
+            *b = 0x10 + i as u8;
+        }
+        // 0xFB 0x02 = a 2-position repeat-row-above run at the cell
+        // start, then 0xFD skips the rest.
+        let bytes = [0xFBu8, 0x02, 0xFD];
+        let outcome = reconstruct_cell_static(&mut strip, geom(2, 4, top), &bytes, &table).unwrap();
+        assert!(matches!(outcome, CellOutcome::Complete(_)));
+        assert_eq!(&strip[top..top + 8], &strip[0..8].to_vec()[..]);
+
+        // Counters 0x00 / 0x20 / 0x40.. are the binary's error return.
+        for bad in [0x00u8, 0x20, 0x40, 0xC0] {
+            let err = reconstruct_cell_static(&mut strip, geom(2, 4, top), &[0xFB, bad], &table)
+                .unwrap_err();
+            assert!(matches!(
+                err,
+                CellReconstructError::FbCounterInvalid { counter, .. } if counter == bad
+            ));
         }
     }
 
@@ -883,62 +1040,50 @@ mod tests {
         assert_eq!(report.steps.len(), 3);
         assert_eq!(report.bytes_consumed, 2);
         assert!(!report.deferred);
-        match &report.steps[1] {
-            SequenceStep::Executed(run) => {
-                assert_eq!(run.outcome, CellOutcome::SkippedByCarry);
-                assert_eq!(run.bytes_consumed, 0);
-            }
-            other => panic!("expected carried skip, got {other:?}"),
-        }
-        match &report.steps[2] {
-            SequenceStep::Executed(run) => {
-                assert!(matches!(run.outcome, CellOutcome::Complete(_)));
-                assert_eq!(run.bytes_consumed, 1);
-            }
-            other => panic!("expected executed cell, got {other:?}"),
-        }
+        let SequenceStep::Executed(run) = &report.steps[1];
+        assert_eq!(run.outcome, CellOutcome::SkippedByCarry);
+        assert_eq!(run.bytes_consumed, 0);
+        let SequenceStep::Executed(run) = &report.steps[2];
+        assert!(matches!(run.outcome, CellOutcome::Complete(_)));
+        assert_eq!(run.bytes_consumed, 1);
     }
 
     #[test]
-    fn sequence_fb_counter_consumes_following_cells() {
+    fn sequence_fb_run_stays_in_cell() {
         let table = DyadDeltaTable::load();
         let top = STRIDE;
-        let mut strip = vec![0u8; STRIDE * 12];
-        // Cell 0 terminates with 0xFB counter 0x02: (0x02 & 0x1F) + 1
-        // = 3 cells total — cell 0 itself plus cells 1 and 2, with
-        // bit 5 clear → copy-from-reference. Cell 3 then executes.
+        let mut strip = vec![0u8; STRIDE * 8];
+        // §4.4 corrected: a 0xFB run is bounded in-cell, so the
+        // sequence driver carries no cross-cell 0xFB state. Cell 0's
+        // counter 0x02 (2-position repeat run) fills the 1x1 cell's
+        // single position and completes it; cells 1..=3 execute
+        // normally from the stream.
         let cells = [
             geom(1, 1, top),
             geom(1, 1, top),
             geom(1, 1, top),
             geom(1, 1, top),
         ];
-        let bytes = [0xFBu8, 0x02, 0x00];
+        let bytes = [0xFBu8, 0x02, 0x00, 0x00, 0x00];
         let report = run_cell_sequence(&mut strip, &cells, &bytes, &table).unwrap();
         assert_eq!(report.steps.len(), 4);
-        assert_eq!(report.bytes_consumed, 3);
+        assert_eq!(report.bytes_consumed, 5);
         assert!(matches!(
-            report.steps[0],
+            &report.steps[0],
             SequenceStep::Executed(CellRun {
-                outcome: CellOutcome::Terminated { .. },
+                outcome: CellOutcome::Complete(effects),
                 ..
-            })
+            }) if matches!(effects[0], PositionEffect::FbRun { positions: 1, .. })
         ));
-        for step in &report.steps[1..3] {
-            assert_eq!(
-                *step,
-                SequenceStep::SkippedByFb {
-                    copy_from_reference: true
-                }
-            );
+        for step in &report.steps[1..] {
+            assert!(matches!(
+                step,
+                SequenceStep::Executed(CellRun {
+                    outcome: CellOutcome::Complete(_),
+                    ..
+                })
+            ));
         }
-        assert!(matches!(
-            report.steps[3],
-            SequenceStep::Executed(CellRun {
-                outcome: CellOutcome::Complete(_),
-                ..
-            })
-        ));
     }
 
     #[test]

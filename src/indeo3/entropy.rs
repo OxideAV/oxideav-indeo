@@ -233,10 +233,11 @@ impl JumpTable {
                 0x2 => JumpTableEntry::Fault,
                 0x3 => JumpTableEntry::Handler(0x1000_72c7),
                 0x4 => JumpTableEntry::Handler(0x1000_72bb),
-                // §3.2 records the second table's `0x5..=0x9` row as
                 // "various"; the per-entry targets are not enumerated
                 // at the bitstream level, so we do not invent them.
-                0x5..=0x9 => JumpTableEntry::Unspecified,
+                // Corrected (round 17): both tables carry the fault
+                // target at every one of these five slots.
+                0x5..=0x9 => JumpTableEntry::Fault,
                 0xA => JumpTableEntry::Handler(0x1000_7a9b),
                 0xB => JumpTableEntry::Handler(0x1000_771c),
                 0xC => JumpTableEntry::Handler(0x1000_7710),
@@ -265,11 +266,6 @@ pub enum JumpTableEntry {
     /// forbidden from emitting a mode byte that indexes here for the
     /// variant-A flavour.
     Fault,
-    /// Spec/06 §3.2 records the second table's `0x5..=0x9` entries as
-    /// "various" without enumerating their targets. The dispatch is
-    /// not pinned at the bitstream level; resolving it is an Extractor
-    /// task over the `0x10006c50` table image.
-    Unspecified,
 }
 
 impl JumpTableEntry {
@@ -667,16 +663,19 @@ impl RowLookahead {
 /// counter byte.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FbCategory {
-    /// Category `0x00` — counter `0x00` (single copy-skip) or the
-    /// reserved range `0x40..=0xFF` (effectively a no-op in the
-    /// binary's state machine; §4.4). Handler `0x10006d34`.
+    /// Category `0x00` — counters `0x00`, `0x20`, `0x40..=0xFF`.
+    /// **Invalid** (corrected, round 17): the handler at
+    /// `0x10006d34` jumps directly to the plane decoder's error exit
+    /// at `0x1000854b`, which returns error code 1 — the binary does
+    /// not tolerate these counters.
     Zero,
-    /// Category `0x04` — counter `0x01..=0x1F` (low range, bit 5
-    /// clear): copy-from-reference for `(counter & 0x1F) + 1` cells.
-    /// Handler `0x10006d39`.
+    /// Category `0x04` — counter `0x01..=0x1F` (bit 5 clear): a run
+    /// of `counter` dyad positions, each repeating the pixel row
+    /// above it. Handler `0x10006d39`.
     Copy,
-    /// Category `0x08` — counter `0x21..=0x3F` (bit 5 set): the cells
-    /// are marked skipped. Handler `0x10006d97`.
+    /// Category `0x08` — counter `0x21..=0x3F` (bit 5 set): a run of
+    /// `counter - 0x20` dyad positions, each edge-marked (bit 7 set)
+    /// rather than written. Handler `0x10006d97`.
     MarkSkipped,
 }
 
@@ -744,30 +743,37 @@ pub fn fb_category(counter: u8) -> FbCategory {
     }
 }
 
-/// Spec/06 §4.4 — the decomposition of a `0xFB` counter byte.
+/// Spec/06 §4.4 (corrected, round 17) — the decomposition of a
+/// `0xFB` counter byte.
 ///
-/// Per the wiki's bit-structure (matched to the §4.4 category table):
+/// * bits 0..4 (`counter & 0x1F`) — the **run length in emitted dyad
+///   positions**, `1..=31`, with **no off-by-one**: each category's
+///   handler decrements a saved copy of the counter and leaves the
+///   run on the first negative result.
+/// * bit 5 (`counter & 0x20`) — the disposition: clear = each
+///   position repeats the pixel row above it (category `0x04`), set
+///   = each position is edge-marked instead of written (category
+///   `0x08`, which strips bit 5 by subtracting `0x20` first).
+/// * bits 6..7 — **must be zero**: a counter of `0x40..=0xFF` maps to
+///   category `0x00` and is rejected (the binary does not tolerate
+///   it), as are the zero-run-length counters `0x00` / `0x20`.
 ///
-/// * bits 0..4 (`counter & 0x1F`) — the number of cells to skip,
-///   interpreted as `(counter & 0x1F) + 1` (§4.4; a counter of 0 is
-///   the single-cell case).
-/// * bit 5 (`counter & 0x20`) — the disposition: clear = copy from
-///   reference, set = mark skipped (§4.4).
-/// * bits 6..7 — reserved; the binary tolerates non-zero high bits by
-///   treating the counter as category 0, but the normative encoding
-///   requires them to be 0 (§4.4).
+/// Both runs are bounded by the cell as well as by the counter: a
+/// counter that has not reached zero when the cell's rows are
+/// exhausted diverts to the shared cell-completion paths rather than
+/// returning to the per-cell mode-byte loop (§4.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FbCounter {
     /// The raw counter byte.
     pub byte: u8,
-    /// `(counter & 0x1F) + 1` — the number of cells the escape skips.
-    pub cells_to_skip: u8,
-    /// `counter & 0x20 == 0` — copy from reference (true) vs mark
-    /// skipped (false).
-    pub copy_from_reference: bool,
-    /// Whether the reserved high bits (6..7) are zero (normative
-    /// encoding).
-    pub reserved_bits_zero: bool,
+    /// `counter & 0x1F` — the run length in emitted dyad positions
+    /// (exact; the earlier `+1` reading is withdrawn). Zero only for
+    /// the invalid counters `0x00` / `0x20`.
+    pub run_length: u8,
+    /// `counter & 0x20 == 0` — each run position repeats the row
+    /// above (`true`, category `0x04`) versus is edge-marked
+    /// (`false`, category `0x08`).
+    pub repeats_row_above: bool,
     /// The category the §4.4 table maps this counter to.
     pub category: FbCategory,
 }
@@ -777,12 +783,57 @@ impl FbCounter {
     pub fn decode(byte: u8) -> Self {
         FbCounter {
             byte,
-            cells_to_skip: (byte & 0x1F) + 1,
-            copy_from_reference: byte & 0x20 == 0,
-            reserved_bits_zero: byte & 0xC0 == 0,
+            run_length: byte & 0x1F,
+            repeats_row_above: byte & 0x20 == 0,
             category: fb_category(byte),
         }
     }
+
+    /// `false` for the counters the binary rejects (`0x00`, `0x20`,
+    /// and anything with bits 6..7 set — all category `0x00`, the
+    /// plane decoder's error-code-1 return).
+    pub fn is_valid(self) -> bool {
+        self.category != FbCategory::Zero
+    }
+}
+
+/// Spec/06 §3.2 (round 17) — which codebook base a mode-byte
+/// handler's prologue selects for the cell: the per-frame arena band
+/// (`spec/04 §1.2`) or the `cb_offset`-biased staging-image pointer
+/// held in the arena's `+0x8000` slot. This is the choice `spec/04
+/// §2.1` describes as `base + offset` versus `static_base + offset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodebookBase {
+    /// The per-frame arena band selected by the mode byte's low
+    /// nibble.
+    ArenaBand,
+    /// The `cb_offset`-biased codebook staging image
+    /// ([`super::StagingImage`]).
+    StagingImage,
+}
+
+/// Spec/06 §3.2 (round 17) — the non-canonical handler prologues.
+/// The seven non-fault targets that are not the canonical dyad path
+/// are not distinct unpackers: each is a short prologue that (1)
+/// charges the cell's row budget (high nibbles `0x0`/`0x1` charge
+/// one row; `0x3`/`0x4`/`0xA`/`0xB`/`0xC` charge two) and (2)
+/// selects the codebook base, before joining a shared body. Returns
+/// `(row_charge, base)` for a pinned prologue RVA, `None` for RVAs
+/// outside the table. (The shared bodies themselves remain unstaged;
+/// the `0x72xx` bodies additionally require a cell-shape state bit
+/// clear and the `0x77xx` bodies require it set, and `0x10007a9b`
+/// sets a further state bit of its own.)
+pub fn handler_prologue(rva: u32) -> Option<(u8, CodebookBase)> {
+    Some(match rva {
+        0x1000_6c90 => (1, CodebookBase::ArenaBand),
+        0x1000_6c9c => (1, CodebookBase::StagingImage),
+        0x1000_72bb => (2, CodebookBase::ArenaBand),
+        0x1000_72c7 => (2, CodebookBase::StagingImage),
+        0x1000_7710 => (2, CodebookBase::ArenaBand),
+        0x1000_771c => (2, CodebookBase::StagingImage),
+        0x1000_7a9b => (2, CodebookBase::StagingImage),
+        _ => return None,
+    })
 }
 
 /// Spec/06 §3.4 — the per-cell unpacker entry RVA for a cell-shape
@@ -890,10 +941,10 @@ mod tests {
         assert_eq!(t.entry(0x2), Fault);
         assert_eq!(t.entry(0x3), Handler(0x1000_72c7));
         assert_eq!(t.entry(0x4), Handler(0x1000_72bb));
-        // §3.2 records 0x5..=0x9 as "various" for the second table —
-        // not enumerated, so not invented.
+        // Corrected (round 17): the second table's 0x5..=0x9 slots
+        // carry the fault target too — "various" is withdrawn.
         for hn in 0x5..=0x9 {
-            assert_eq!(t.entry(hn), Unspecified, "second[{hn:#x}]");
+            assert_eq!(t.entry(hn), Fault, "second[{hn:#x}]");
         }
         assert_eq!(t.entry(0xA), Handler(0x1000_7a9b));
         assert_eq!(t.entry(0xB), Handler(0x1000_771c));
@@ -959,13 +1010,11 @@ mod tests {
     fn jump_table_entry_accessors() {
         assert!(JumpTableEntry::Fault.is_fault());
         assert!(!JumpTableEntry::Handler(0x1000_6c14).is_fault());
-        assert!(!JumpTableEntry::Unspecified.is_fault());
         assert_eq!(
             JumpTableEntry::Handler(0x1000_6c14).handler_rva(),
             Some(0x1000_6c14)
         );
         assert_eq!(JumpTableEntry::Fault.handler_rva(), None);
-        assert_eq!(JumpTableEntry::Unspecified.handler_rva(), None);
     }
 
     #[test]
@@ -1129,29 +1178,49 @@ mod tests {
 
     #[test]
     fn fb_counter_decode() {
-        // 0x03: 3 + 1 = ... wait, (0x03 & 0x1F) + 1 = 4 cells, copy.
+        // §4.4 corrected: run length is counter & 0x1F exactly — no
+        // off-by-one. 0x03 -> a 3-position repeat-row-above run.
         let c = FbCounter::decode(0x03);
-        assert_eq!(c.cells_to_skip, 4);
-        assert!(c.copy_from_reference);
-        assert!(c.reserved_bits_zero);
+        assert_eq!(c.run_length, 3);
+        assert!(c.repeats_row_above);
+        assert!(c.is_valid());
         assert_eq!(c.category, FbCategory::Copy);
 
-        // 0x25: (0x25 & 0x1F) + 1 = 6, bit 5 set → mark skipped.
+        // 0x25: bit 5 set -> a 5-position edge-mark run.
         let c = FbCounter::decode(0x25);
-        assert_eq!(c.cells_to_skip, 6);
-        assert!(!c.copy_from_reference);
+        assert_eq!(c.run_length, 5);
+        assert!(!c.repeats_row_above);
+        assert!(c.is_valid());
         assert_eq!(c.category, FbCategory::MarkSkipped);
 
-        // 0x00: single cell, copy.
+        // 0x00 / 0x20: zero run length — rejected (category 0x00 is
+        // the plane decoder's error return).
         let c = FbCounter::decode(0x00);
-        assert_eq!(c.cells_to_skip, 1);
-        assert!(c.copy_from_reference);
+        assert_eq!(c.run_length, 0);
+        assert!(!c.is_valid());
         assert_eq!(c.category, FbCategory::Zero);
+        assert!(!FbCounter::decode(0x20).is_valid());
 
-        // 0xC0: reserved high bits set.
+        // 0xC0: bits 6..7 set — rejected, not tolerated (§4.4
+        // corrected).
         let c = FbCounter::decode(0xC0);
-        assert!(!c.reserved_bits_zero);
+        assert!(!c.is_valid());
         assert_eq!(c.category, FbCategory::Zero);
+    }
+
+    #[test]
+    fn handler_prologues_match_spec_3_2() {
+        use CodebookBase::*;
+        assert_eq!(handler_prologue(0x1000_6c90), Some((1, ArenaBand)));
+        assert_eq!(handler_prologue(0x1000_6c9c), Some((1, StagingImage)));
+        assert_eq!(handler_prologue(0x1000_72bb), Some((2, ArenaBand)));
+        assert_eq!(handler_prologue(0x1000_72c7), Some((2, StagingImage)));
+        assert_eq!(handler_prologue(0x1000_7710), Some((2, ArenaBand)));
+        assert_eq!(handler_prologue(0x1000_771c), Some((2, StagingImage)));
+        assert_eq!(handler_prologue(0x1000_7a9b), Some((2, StagingImage)));
+        // The canonical dyad path and fault target are not prologues.
+        assert_eq!(handler_prologue(0x1000_6c14), None);
+        assert_eq!(handler_prologue(0x1000_7a96), None);
     }
 
     #[test]

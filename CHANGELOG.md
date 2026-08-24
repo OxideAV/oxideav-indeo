@@ -57,6 +57,23 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Indeo 3 `0xFB` runs are bounded in-cell position runs** (r451,
+  `spec/06 §4.4` round-17 correction; `indeo3::FbCounter` +
+  both mode-byte executors). The run length is `counter & 0x1F`
+  exactly — the `+1` reading is withdrawn — and the run counts
+  emitted **dyad positions**, not cells: category `0x04` repeats the
+  pixel row above at each position, category `0x08` edge-marks it,
+  and both runs are bounded by the cell (a counter that outlives the
+  cell diverts to cell completion). Category `0x00` (counters `0x00`
+  / `0x20` / bits 6..7 set) is the binary's hard error return, not a
+  tolerated no-op — surfaced as `FbCounterInvalid`. The executors'
+  `Terminated` outcomes and the sequence driver's cross-cell
+  `SkippedByFb` state are removed (the `spec/06 §7.1` off-by-one
+  question is settled). The second jump table's `0x5..=0x9` slots
+  are faults in both tables (`JumpTableEntry::Unspecified` removed),
+  and the seven non-canonical handlers are now surfaced as staged
+  prologues (`indeo3::handler_prologue`: row charge 1 or 2 +
+  arena-band vs staging-image codebook base per `spec/06 §3.2`).
 - **Indeo 5 rv-table interval decode is zero-inclusive** (r451,
   `indeo5::RvTable`). The r388 reading placed `+1` at each run
   interval's midpoint composite; fixture arbitration (the all-flat

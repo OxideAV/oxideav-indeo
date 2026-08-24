@@ -75,7 +75,7 @@
 //! naming to a Specifier reconciliation (reported as a docs gap).
 
 use super::cell_emit::rows_per_source_row;
-use super::cell_reconstruct::{CellReconstructGeometry, PositionEffect};
+use super::cell_reconstruct::{fb_run, CellReconstructGeometry, PositionEffect};
 use super::entropy::{
     FbCounter, LiteralMode, ModeByte, ModeByteKind, PositionClass, RleEscape, PRIMARY_TABLE_DISP,
     SECONDARY_TABLE_DISP,
@@ -145,15 +145,6 @@ pub enum UnpackOutcome {
         /// The dyad-pair column index (0-based).
         dword: usize,
         /// The effects emitted before the deferral.
-        emitted: Vec<UnpackEffect>,
-    },
-    /// `0xFB` terminated the cell (`spec/06 §4.4`), counter decoded.
-    Terminated {
-        /// The raw counter byte.
-        counter: u8,
-        /// The `spec/06 §4.4` decomposition.
-        decoded: FbCounter,
-        /// The effects emitted before the terminator.
         emitted: Vec<UnpackEffect>,
     },
     /// Consumed by a carried next-cell-skip flag (`spec/06 §4.6`).
@@ -234,7 +225,17 @@ pub enum CellUnpackError {
         /// The strip length.
         buffer_len: usize,
     },
-    /// An arena read fell outside the `0x8800`-byte arena — cannot
+    /// An `0xFB` counter byte the binary rejects (`spec/06 §4.4`
+    /// corrected: `0x00`, `0x20`, or bits 6..7 set).
+    FbCounterInvalid {
+        /// The rejected counter byte.
+        counter: u8,
+        /// Source-row index.
+        row: usize,
+        /// Dyad-column index.
+        dword: usize,
+    },
+    /// An arena read fell outside the `0x8020`-byte arena — cannot
     /// happen for a well-formed [`VqArena`] (the address arithmetic is
     /// bounded by construction) but surfaced rather than panicking.
     ArenaReadOutOfBounds {
@@ -302,9 +303,18 @@ impl core::fmt::Display for CellUnpackError {
                 "spec/07 §2.2: variant store end {write_end} exceeds the {buffer_len}-byte \
                  strip buffer"
             ),
+            CellUnpackError::FbCounterInvalid {
+                counter,
+                row,
+                dword,
+            } => write!(
+                f,
+                "spec/06 §4.4: 0xFB counter {counter:#04x} is invalid (error code 1) at \
+                 row {row}, dword {dword}"
+            ),
             CellUnpackError::ArenaReadOutOfBounds { offset } => write!(
                 f,
-                "spec/07 §2.1: arena read at offset {offset:#x} outside the 0x8800-byte arena"
+                "spec/07 §2.1: arena read at offset {offset:#x} outside the 0x8020-byte arena"
             ),
         }
     }
@@ -542,17 +552,47 @@ pub fn unpack_cell(
                                 next_cell_skip: false,
                             });
                         }
+                        // `0xFB` — a bounded in-cell run of dyad
+                        // positions (`spec/06 §4.4` corrected):
+                        // repeat-row-above or edge-mark, stopping at
+                        // the counter or the cell's end.
                         RleEscape::Fb => {
                             let counter = read_byte(mode_bytes, &mut cursor)?;
-                            return Ok(UnpackRun {
-                                outcome: UnpackOutcome::Terminated {
+                            let decoded = FbCounter::decode(counter);
+                            if !decoded.is_valid() {
+                                return Err(CellUnpackError::FbCounterInvalid {
                                     counter,
-                                    decoded: FbCounter::decode(counter),
-                                    emitted: effects,
-                                },
-                                bytes_consumed: cursor,
-                                next_cell_skip: false,
-                            });
+                                    row,
+                                    dword,
+                                });
+                            }
+                            let run = fb_run(
+                                strip,
+                                geometry,
+                                &mut row,
+                                &mut dword,
+                                &mut row_dst_offset,
+                                rows_per,
+                                decoded,
+                            )
+                            .map_err(|(write_index, buffer_len)| {
+                                CellUnpackError::StoreOutOfBounds {
+                                    write_end: write_index + 4,
+                                    buffer_len,
+                                }
+                            })?;
+                            effects.push(UnpackEffect::Static(PositionEffect::FbRun {
+                                decoded,
+                                positions: run.positions,
+                            }));
+                            if run.cell_exhausted {
+                                return Ok(UnpackRun {
+                                    outcome: UnpackOutcome::Complete(effects),
+                                    bytes_consumed: cursor,
+                                    next_cell_skip: false,
+                                });
+                            }
+                            continue;
                         }
                         RleEscape::Fc | RleEscape::F9 => {
                             return Ok(UnpackRun {
@@ -938,7 +978,9 @@ mod tests {
         .unwrap();
         assert_eq!(run.outcome, UnpackOutcome::SkippedByCarry);
         assert_eq!(run.bytes_consumed, 0);
-        // 0xFB terminates with the decoded counter.
+        // §4.4 corrected: 0xFB runs in-cell. A 3-position repeat run
+        // over a 1-dword x 2-row cell exhausts the cell (2 positions
+        // emitted, counter bounded by the cell) and completes it.
         let run = unpack_cell(
             &mut strip,
             geom(1, 2, top),
@@ -950,12 +992,30 @@ mod tests {
         )
         .unwrap();
         match run.outcome {
-            UnpackOutcome::Terminated { decoded, .. } => {
-                assert_eq!(decoded.cells_to_skip, 4);
-                assert!(decoded.copy_from_reference);
+            UnpackOutcome::Complete(effects) => {
+                assert!(matches!(
+                    effects[0],
+                    UnpackEffect::Static(PositionEffect::FbRun { positions: 2, .. })
+                ));
             }
-            other => panic!("expected Terminated, got {other:?}"),
+            other => panic!("expected Complete, got {other:?}"),
         }
+        assert_eq!(run.bytes_consumed, 2);
+        // Invalid counters are the binary's error return.
+        let err = unpack_cell(
+            &mut strip,
+            geom(1, 2, top),
+            CellVariant::Plain,
+            &[0xFB, 0x20],
+            &table,
+            &arena,
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            CellUnpackError::FbCounterInvalid { counter: 0x20, .. }
+        ));
     }
 
     #[test]
