@@ -20,3 +20,28 @@ Both frames are `YVU9`, `decomp_levels = 0` (one band per plane),
 single-tile-per-band. The 240x180 frame is a black frame (the vendor
 decoder reproduces `Y=16, U=V=128` for it); the 320x240 frame carries
 ~1100 coded blocks across its three bands.
+
+## `iv32-160x120-all-intra/` / `iv32-176x144-4frame-intra-period/`
+
+Real `IV32` (Indeo 3) coded access units with black-box reference
+decodes, vendored from the clean-room docs staging at
+`docs/video/indeo/indeo3/fixtures/` (r451; staged 2026-07-31 from the
+public multimedia sample archive, MD5-verified against the archive's
+own manifest — full provenance in each fixture's `notes.md` there).
+
+Each directory carries `samples.bin` (the coded access units,
+byte-exact from the source container), `samples-index.csv`
+(`frame,offset,size` rows), and `expected.yuv` (the reference decode,
+planar **4:1:0** `yuv410p`, 8 frames at coded size).
+
+| Fixture | Coded | Frames | Focus |
+| ------- | ----- | -----: | ----- |
+| `iv32-160x120-all-intra` | 160×120 | 8 | every frame intra |
+| `iv32-176x144-4frame-intra-period` | 176×144 | 8 | frames 0/4 intra, rest inter |
+
+| File | SHA-256 |
+| ---- | ------- |
+| `iv32-160x120-all-intra/samples.bin` | `da5d7a6147f85a12be6edcf5d973f7a3d156a740ef5d06a1b19be197f667b0be` |
+| `iv32-160x120-all-intra/expected.yuv` | `3d8ca7a27542ed8d2d4c7a174265a1ef0f47519a5108d69e7a9ed158c2395dab` |
+| `iv32-176x144-4frame-intra-period/samples.bin` | `a95f388c8886a6cf1dec8609ed6e4ab3e0fdc6b38f0c3dfe1fd3977acb072807` |
+| `iv32-176x144-4frame-intra-period/expected.yuv` | `d95603969ef93dc8ee97baf437f189a741409c2cb48b5493a0e5c185ac26beb3` |

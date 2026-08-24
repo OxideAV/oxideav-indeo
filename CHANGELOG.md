@@ -8,6 +8,31 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 3 real `IV32` fixtures + the first real-stream pixel
+  decode** (r451, `tests/indeo3_fixtures.rs` +
+  `indeo3::StagingImage::row_delta` / `RowDeltaOutcome`). The two
+  staged real-bitstream corpora (all-intra 160×120 and 4-frame-intra-
+  period 176×144, each with a black-box reference decode) are
+  vendored, and every access unit of both parses through the spec/01
+  + spec/02 header stack (dimensions, plane preludes, per-frame
+  `alt_quant[]`/`cb_offset`, MV counts matching the container's
+  intra/inter typing). Fixture arbitration then produced the crate's
+  **first byte-exact real-stream pixels**: the first luma cell's
+  stream `[6c 6c] [d3] [FD]` drives the staging-image row-delta
+  arithmetic (`pred + word[+0x400 + 4·byte]`, bit-31 continuation
+  through `+0x402`, `0xFD` = null-delta predictor propagation) to
+  the reference decode's exact 24×16 pixels — 384 luma pixels
+  byte-exact, pinned as a test.
+
+### Changed
+
+- **Indeo 3 strip boundary predictor is `0x40`, not `0x00`** (r451,
+  `TOP_OF_STRIP_PREDICTOR`). Fixture-arbitrated: the real fixture's
+  chroma planes reconstruct as neutral 128 (internal `0x40`) through
+  repeat-row-above chains from the boundary, and the luma top row is
+  byte-exactly `0x40 + staged-delta`. Resolves spec/07 §7.4's open
+  question against the provisional zero-fill reading.
+
 - **Indeo 3 codebook staging image — the VQ value gate opens** (r451,
   `indeo3::StagingImage` + the settled `indeo3::CodebookSeedArea`).
   The round-16 reconciliation settles the `.data 0x1004d26a` seed-area

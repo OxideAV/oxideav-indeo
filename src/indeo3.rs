@@ -366,8 +366,8 @@ pub use decoder::{DecodedOutput, DecoderError, Indeo3Decoder};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use staging::{
-    StagingImage, STAGING_ALT_SET_OFFSET, STAGING_BLOCK_COUNT, STAGING_BLOCK_STRIDE,
-    STAGING_IMAGE_LEN, STAGING_SUB_TABLE_LEN,
+    RowDeltaOutcome, StagingImage, STAGING_ALT_SET_OFFSET, STAGING_BLOCK_COUNT,
+    STAGING_BLOCK_STRIDE, STAGING_IMAGE_LEN, STAGING_SUB_TABLE_LEN,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]

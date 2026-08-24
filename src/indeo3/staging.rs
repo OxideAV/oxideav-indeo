@@ -166,6 +166,79 @@ impl StagingImage {
         }
         self.word_at(q * STAGING_BLOCK_STRIDE + 4 * idx)
     }
+
+    /// The fixture-arbitrated per-row delta application (r451): one
+    /// stream byte (plus an optional continuation byte) turns a
+    /// predictor DWORD into an output DWORD through staging block
+    /// `q`'s sub-tables, with the exact `spec/07 §2.1`/`§2.3`
+    /// softSIMD arithmetic:
+    ///
+    /// 1. `sum = pred + word[+0x400 + 4·byte]` (32-bit wrapping).
+    /// 2. Bit 31 clear → `sum` is the output (one-byte form).
+    /// 3. Bit 31 set → a continuation byte is required:
+    ///    `sum ^= 0x80008000`, then the 16-bit word at
+    ///    `+0x402 + 4·continuation` is added to the low half only;
+    ///    a still-set bit 31 is the binary's error-code-2 range
+    ///    fault.
+    ///
+    /// **Byte-exact against the real IV32 fixture**: with the strip
+    /// boundary predictor `0x40404040`, block 0 and the stream bytes
+    /// `[6c 6c]` produce `0x0A0A0A0A` (the reference decode's exact
+    /// top row, output `20`), and the follow-up byte `[d3]` produces
+    /// `0x08080808` (output `16`) — see `tests/indeo3_fixtures.rs`.
+    pub fn row_delta(
+        &self,
+        block: usize,
+        byte: u8,
+        continuation: Option<u8>,
+        pred: u32,
+    ) -> Option<RowDeltaOutcome> {
+        if block >= STAGING_BLOCK_COUNT {
+            return None;
+        }
+        let base = block * STAGING_BLOCK_STRIDE + STAGING_SUB_TABLE_LEN;
+        let delta = self.word_at(base + 4 * usize::from(byte))?;
+        let sum = pred.wrapping_add(delta);
+        if sum & 0x8000_0000 == 0 {
+            return Some(RowDeltaOutcome::Complete {
+                value: sum,
+                used_continuation: false,
+            });
+        }
+        let Some(cont) = continuation else {
+            return Some(RowDeltaOutcome::NeedsContinuation);
+        };
+        let x = sum ^ 0x8000_8000;
+        let off = base + 4 * usize::from(cont) + 2;
+        let s16 = u16::from_le_bytes([*self.bytes.get(off)?, *self.bytes.get(off + 1)?]);
+        let lo = (x as u16).wrapping_add(s16);
+        let out = (x & 0xffff_0000) | u32::from(lo);
+        if out & 0x8000_0000 != 0 {
+            return Some(RowDeltaOutcome::RangeFault);
+        }
+        Some(RowDeltaOutcome::Complete {
+            value: out,
+            used_continuation: true,
+        })
+    }
+}
+
+/// The outcome of one [`StagingImage::row_delta`] application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowDeltaOutcome {
+    /// The output DWORD.
+    Complete {
+        /// The `pred + delta` result (post-continuation when used).
+        value: u32,
+        /// `true` when the two-byte form ran (`spec/06 §3.3`).
+        used_continuation: bool,
+    },
+    /// Bit 31 set after the primary add and no continuation byte was
+    /// supplied — the caller must consume the next stream byte and
+    /// retry (`spec/06 §3.3`).
+    NeedsContinuation,
+    /// The `spec/07 §2.3` step-3 range fault (error code 2).
+    RangeFault,
 }
 
 #[cfg(test)]

@@ -216,7 +216,7 @@ pub struct CellEmitStats {
 ///
 /// When the row-above slot falls before the start of the buffer (the
 /// §1.3 top-of-strip case), every predictor byte is the constant
-/// [`TOP_OF_STRIP_PREDICTOR`] (`0x00`). When the slot is in-buffer the
+/// [`TOP_OF_STRIP_PREDICTOR`] (`0x40`). When the slot is in-buffer the
 /// four predictor bytes are read little-endian, matching the binary's
 /// `mov eax, [edi - 0xb0]` DWORD load.
 fn predictor_dword(buffer: &[u8], write_offset: usize) -> u32 {
@@ -447,9 +447,10 @@ mod tests {
     }
 
     #[test]
-    fn top_of_strip_predictor_is_zero_seed() {
+    fn top_of_strip_predictor_is_mid_range_seed() {
         // A cell at the very top of the strip (top_left_offset 0) reads
-        // the §1.3 constant-0 predictor for row 0.
+        // the fixture-arbitrated 0x40 boundary predictor for row 0
+        // (r451; spec/07 §7.4 resolved).
         let mut buf = vec![0u8; STRIDE * 4];
         let g = CellEmitGeometry {
             width_dwords: 1,
@@ -459,8 +460,9 @@ mod tests {
         };
         let delta = d(pack_predictor([0x20, 0x22, 0x24, 0x26]), 0);
         emit_cell_chain(&mut buf, g, &[delta]).unwrap();
-        // Predictor was 0x00000000; emit_variant with the zero predictor:
-        let expected = emit_variant(CellVariant::WithEdge, 0, delta.primary, delta.secondary);
+        // Predictor was the 0x40 boundary seed:
+        let seed = pack_predictor([TOP_OF_STRIP_PREDICTOR; 4]);
+        let expected = emit_variant(CellVariant::WithEdge, seed, delta.primary, delta.secondary);
         let row0 = pack_predictor([buf[0], buf[1], buf[2], buf[3]]);
         assert_eq!(row0, expected.rows.as_slice()[0]);
     }
@@ -531,8 +533,9 @@ mod tests {
         emit_cell_chain(&mut buf, g, &[left, right]).unwrap();
 
         // Left dyad lands at bytes 0..4, right at bytes 4..8 (same row).
-        let exp_left = emit_variant(CellVariant::WithEdge, 0, left.primary, left.secondary);
-        let exp_right = emit_variant(CellVariant::WithEdge, 0, right.primary, right.secondary);
+        let seed = pack_predictor([TOP_OF_STRIP_PREDICTOR; 4]);
+        let exp_left = emit_variant(CellVariant::WithEdge, seed, left.primary, left.secondary);
+        let exp_right = emit_variant(CellVariant::WithEdge, seed, right.primary, right.secondary);
         assert_eq!(
             pack_predictor([buf[0], buf[1], buf[2], buf[3]]),
             exp_left.rows.as_slice()[0]

@@ -22,7 +22,7 @@
 //! * §1.3 / §9 — the top-of-strip predictor seed. Cells whose
 //!   row-above slot falls outside the strip read the zero-initialised
 //!   padding, so the top-of-strip predictor is the constant
-//!   [`TOP_OF_STRIP_PREDICTOR`] (`0x00`).
+//!   [`TOP_OF_STRIP_PREDICTOR`] (`0x40`, fixture-arbitrated r451).
 //! * §2.1 / §2.3 — the softSIMD dyad-pair add. [`apply_dyad_pair`]
 //!   computes `predictor + primary_delta` as a byte-parallel DWORD
 //!   add, detects the 16-bit-half overflow sentinel (`jns` on the
@@ -87,12 +87,18 @@ use super::{CellVariant, CONTINUATION_XOR};
 /// (176) bytes. The predictor for `[edi]` is at `[edi - 0xb0]`.
 pub const PREDICTOR_ROW_STRIDE: usize = 0xb0;
 
-/// Spec/07 §1.3 / §9 — the top-of-strip predictor seed. The strip
-/// allocator zero-fills the buffer (codec-init zero-fill at
-/// `IR32_32.DLL!0x10004013`), so a cell whose row-above slot falls in
-/// the pre-allocated padding reads the constant `0x00` (pixel value 0
-/// in the internal 7-bit range, i.e. black).
-pub const TOP_OF_STRIP_PREDICTOR: u8 = 0x00;
+/// Spec/07 §1.3 / §7.4 — the top-of-strip predictor seed,
+/// **fixture-arbitrated to `0x40`** (r451, overturning the
+/// provisional zero-fill reading): the real all-intra IV32 fixture's
+/// chroma planes reconstruct as uniform neutral `128` (internal
+/// `0x40`) through repeat-row-above chains from the boundary, and its
+/// luma top row is byte-exactly `0x40 + delta` for the first cell's
+/// staged codebook delta (`0x40 - 54 = 10` → output `20`, the
+/// reference decode's exact first-row value). The strip buffer is
+/// therefore seeded with the internal 7-bit mid-range value `0x40`,
+/// not zero — spec/07 §7.4's open question resolves to "the encoder
+/// assumes a mid-range boundary".
+pub const TOP_OF_STRIP_PREDICTOR: u8 = 0x40;
 
 /// Spec/07 §4.2 — the internal pixel range is 7 bits per byte
 /// (`0..=0x7f`). Bit 7 of every pixel byte is reserved as the
@@ -448,7 +454,7 @@ mod tests {
     fn predictor_stride_and_seed_constants() {
         assert_eq!(PREDICTOR_ROW_STRIDE, 0xb0);
         assert_eq!(PREDICTOR_ROW_STRIDE, 176);
-        assert_eq!(TOP_OF_STRIP_PREDICTOR, 0x00);
+        assert_eq!(TOP_OF_STRIP_PREDICTOR, 0x40);
         assert_eq!(PIXEL_VALUE_MAX, 0x7f);
         assert_eq!(EDGE_MARKER_BIT, 0x80);
         assert_eq!(HALF_SENTINEL_MASK, 0x8000_8000);
