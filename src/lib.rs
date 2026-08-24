@@ -17,18 +17,23 @@
 //! repeat-previous output (spec/07 §6.3), and the reference-bank
 //! ping-pong (spec/07 §6.1 / spec/05 §4.2).
 //!
-//! ## What remains gated
+//! ## Where the codebook gate stands (r451)
 //!
-//! Per-cell **VQ_DATA** pixel synthesis (the dyad codebook lookup) needs
-//! the codebook-bank per-entry values built at codec-init by
-//! `IR32_32.DLL!0x100060de` — these are all-zero on disk and the exact
-//! per-entry recipe for several of them is an Extractor docs-gap
-//! (`spec/04 §7.1`, audit-corrected). **INTER** cells additionally need
-//! a prior decoded reference frame's pixels. So a real frame currently
-//! reconstructs its VQ_NULL regions and leaves the VQ_DATA / INTER
-//! regions black; the multi-frame decoder still sequences, holds, and
-//! re-emits frames correctly. See `crates/oxideav-indeo/README.md` for
-//! the precise remaining-gap list.
+//! The formerly-gating codebook values are now material: the settled
+//! seed grammar builds the codec-init **staging image**
+//! ([`indeo3::StagingImage`], verified word-for-word against the
+//! staged ground truth) and the per-frame `alt_quant[]` overlay fills
+//! a real [`indeo3::VqArena`]. Driven over the vendored real `IV32`
+//! fixture corpus, the fixture-arbitrated row-stream executor
+//! ([`indeo3::decode_cell_rows`]) reproduces the black-box reference
+//! decode byte-exactly outside the picture's re-coded detail region
+//! (10 404 pixels pinned in `tests/indeo3_fixtures.rs`). What still
+//! gates a full-frame decode is the **cell sequencing**: the
+//! cell-geometry bank tables (`IR32_32.DLL!0x100038f0`) that place
+//! cells without interleaved tree codes are explicitly undocumented
+//! in the staged spec (`spec/04 §5.3`/`§7.9`) — the primary open
+//! docs ask. See `crates/oxideav-indeo/README.md` for the precise
+//! gap list.
 //!
 //! Spec coverage in `docs/video/indeo/indeo3/spec/`:
 //!

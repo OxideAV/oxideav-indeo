@@ -199,19 +199,31 @@ On top of the whole-frame walk, the decoded coefficients are now
   black `educ` frame verify (real content neutral 128), the luma band
   does not (real content `Y=16`), pinning the exact transform frontier.
 
-What is **not** yet implemented for Indeo 5: pixel reconstruction of
-the decoded coefficients — the 8-point inverse Slant butterfly
-equations are **not staged in `docs/`** at the numeric level (`spec/06`
-records the handler taxonomy, the SWAR masks, and the extracted synth
-constants, but explicitly leaves the per-handler butterfly arithmetic
-as un-transcribed immediates inside the DLL, which is a black-box-only
-binary), and the vendor's output color conversion (studio-range
-`Y=16`/neutral `128` for zero signal, via the docs-gapped RGB LUT) is
-likewise unstaged. Coded-block regions therefore reconstruct as the
-`spec/08 §3.3` mid-grey zero state while their entropy streams are
-fully decoded, validated, and now checksummed; the per-tile
-MV-inheritance fast path (spec/07 §3.4/§3.5 — needs the per-band
-`0x3604`/`0x3664` tables) also remains gated. Indeo 5 is decode-only.
+**r451 — intra frames reconstruct to pixels.** The Extractor round-13
+staging landed the measured `spec/06 §1.2` 8-point inverse Slant
+butterfly (validated upstream byte-exactly on all 460 live kernel
+invocations of a real fixture decode), the four `§2.5` scan tables,
+and the `spec/08 §3.0` saturate-then-bias output rule
+(`clamp(sample, −128, +127) + 128`, superseding §3.3's 4×-domain
+reading). The crate now implements the full intra
+coefficient→pixel path (`indeo5::transform` + the intra band
+reconstruction in `decode_intra_picture`): scan placement, the
+Indeo 4 annex-B differential intra DC chain, the per-band transform
+variant (LL→2D, HL→row, LH→column, HH→none; a provisional 4-point
+kernel realises the §2.3 constraint), and the §3.0 output rule.
+Fixture arbitration also corrected the rv-table interval decode to
+**zero-inclusive** (`val = composite − midpoint`; the midpoint is a
+level-0 stuffing entry that writes nothing and does not advance the
+scan). **The all-flat 240×180 fixture now verifies against all four
+of its stored `spec/08 §7.3` checksums** (Y band `0x2C00`, both
+chroma bands `0`, frame `0x1800`) and reproduces the vendor's exact
+pixels (`Y = 16`, `U = V = 128`) — the first fully pixel-validated
+IV50 frame. The quantised 320×240 fixture reconstructs structurally;
+its three stored band checksums stay pinned mismatches until the one
+remaining numeric gap closes: **the `band_glob_quant`
+dequantisation** (`spec/06 §5.4`: where the scale multiplies "is not
+established"). The per-tile MV-inheritance fast path (spec/07
+§3.4/§3.5) also remains gated. Indeo 5 is decode-only.
 
 Indeo 5 is now **wired into the codec registry** (`indeo5::register`,
 called from the crate-level `register`): the `IV50` FourCC routes to
@@ -569,55 +581,60 @@ pixel buffers) and stop at their documented chapter boundary, because
 the cell-state dispatch they need is gated on the codebook-bank values
 below.
 
-### Remaining gaps to a real-bitstream decode
+### r451 — real `IV32` fixtures, the codebook gate opens, first pixels
 
-- The VQ codebook-bank per-entry values (the `+0x000` / `+0x100` /
-  `+0x200` / `+0x300` / `+0x700` banks the cell unpackers index into) —
-  pending an extraction round. **This is the single blocker for
-  pixel output**: the end-to-end `decode_frame` driver resolves every
-  present plane's cell tree but cannot synthesise pixels without these
-  LUTs, and they are zero on disk (built at codec-init by
-  `IR32_32.DLL!0x100060de`).
-- The **per-frame VQ arena values** — the §6 `alt_quant[]` overlay is
-  implemented (`VqArena::apply_alt_quant`) and its raw seed source is
-  now parsed (`CodebookSeedArea`, §5.2), but the §5.2 codec-init walk
-  that materialises the overlay's `static_seed` window is blocked by a
-  **spec-vs-audit contradiction** on the `.data + 0x1004d26a` block
-  format: `spec/04 §5.2` reads it as count-prefixed blocks (leading
-  `0xc3` ⇒ a 391-byte first block), while `audit/00 §2.3 / §6.5` walks
-  the same bytes as zero-gap-delimited records (record 1 = 92 B at
-  offset 3) and states the leading `0xc3` is **not** a length prefix.
-  The two readings are mutually incompatible, so the per-band →
-  arena-offset assignment is undetermined. Resolving this needs a
-  Specifier/Auditor pass reconciling §5.2 with the audit's empirical
-  record structure (and ideally a wider extract past the 4 KB window,
-  audit/00 §6.2).
-- The §5.1 **high-half**-stream cell-state dispatch tables
-  (`0x1003f44c` / `0x1003fd4c` / `0x1003fd50`) sourced from seed offset
-  `+0x100`: only the single in-bounds pair is determinable from the
-  258-byte `0x1003ed4c` extract (audit/00 §2.2), so the per-record
-  layout for `ecx > 0` needs a wider extract. The low-half tables
-  (`0x1003f24c` / `0x1003f94c` / `0x1003f950`) are now materialised.
-- The non-canonical mode-byte handler bodies (`0x10006c90`
-  single-pixel fill, `0x100072bb` doubled-row, `0x100072c7` /
-  `0x1000771c` / `0x10007710` / `0x10007a9b`, and the table-2
-  `0x5..0x9` unpinned slots) — staged only to the dispatch level
-  (`spec/06 §3.2`); `unpack_cell` defers them with the exact RVA.
-- The per-frame-arena addressing reconciliation: `spec/07 §2.1`
-  (`esi = arena base + 2048 × low nibble`, so band 0's primary read
-  lands in the arena's `+0x000..+0x7ff` codec-init region) vs
-  `spec/04 §6.3` (per-band tables at `+0x800 + 0x800*band`), and
-  §2.1's "the `+0x400` literal is **not** the secondary table" note
-  vs §2.3 step 2 / `spec/04 §2.1`'s half-table naming. The literal
-  instruction arithmetic is implemented as staged; the naming needs
-  a Specifier pass.
-- The `spec/06 §7.1` `0xFB` off-by-one (whether the counted run
-  includes the `0xFB`-bearing cell — the sequence driver adopts
-  "includes" provisionally).
-- The §5.4 YUV→RGB output LUT contents.
-- A staged `IV31` / `IV32` bitstream fixture to drive the full pipeline.
+The round-16/17 docs staging settled the two blockers the earlier
+rounds reported, and the staged real-bitstream corpus turned the
+remaining questions into fixture arbitration:
 
-Indeo 2 / 4 / 5 have only wiki-snapshot documentation under
+- **The codebook staging image is material** (`indeo3::StagingImage`):
+  the settled `.data 0x1004d26a` seed grammar (unsigned count +
+  signed trailing expand byte; 24 blocks / 2601 pairs / 5251 bytes,
+  vendored in full) feeds the codec-init derivation (`spec/04 §5.2`:
+  prefill, seeded words, `d²` ordered-pair expansion, byte-replicated
+  table set), reproducing the staged ground truth for **all 24×256×4
+  words with zero mismatches**. `VqArena` uses the corrected `§6.3`
+  addressing (band `i` at `+0x800·i`, 0x8020-byte allocation) and
+  `apply_alt_quant` overlays real staging blocks.
+- **Real fixtures decode to pixels** (`tests/indeo3_fixtures.rs`,
+  `indeo3::decode_cell_rows` / `StagingImage::row_delta`): every
+  access unit of both staged `IV32` corpora parses through the
+  header stack, and the fixture-arbitrated row-stream executor —
+  literal bytes as entry indexes with the one/two-byte softSIMD row
+  delta, null-delta escape runs as predictor propagation, doubled
+  cells storing `(avg, cur)` row pairs, the strip boundary predictor
+  corrected to `0x40` — reproduces the reference decode
+  **byte-exactly everywhere outside the picture's re-coded detail
+  region** over the first five of the plane's eight base columns
+  (10 404 / 12 480 pixels exact, per-column counts pinned).
+- **`spec/06` round-17 corrections**: `0xFB` runs are bounded
+  in-cell null-delta runs (`counter & 0x1F`, no off-by-one; category
+  `0x00` is a hard error), the second jump table's `0x5..=0x9` slots
+  are faults, and the seven non-canonical handlers are staged
+  prologues (`indeo3::handler_prologue`: row charge + arena-band vs
+  staging-image base).
+
+### Remaining gaps to a full real-bitstream decode
+
+- **The cell-geometry banks / cell sequencing** — the fixture shows
+  the 160×120 luma plane decomposing into eight full-height base
+  columns (24 px plain / 16 px doubled, alternating) consumed in
+  raster order with **no interleaved tree codes**, with the
+  detail-bearing columns further subdivided by an overlay mechanism.
+  This sequencing is driven by the cell-geometry bank tables
+  populated by `IR32_32.DLL!0x100038f0`, which `spec/04 §5.3`
+  explicitly leaves undocumented (`§7.9`, `§7.2`). **This is the
+  primary open docs ask.**
+- The intra-frame contents of the packed VQ-entry table at
+  `inner_instance[0..0x3ff]` (`spec/04 §7.5`) — the VQ_DATA leaf's
+  codebook-index byte resolves through it.
+- The variant-B/C/D mode-byte dispatch tables (`spec/06 §4.1`,
+  staged at the RVA level only) and the non-canonical handler shared
+  bodies.
+- The §5.4 YUV→RGB output LUT contents (RGB output only; the
+  IF09/YVU path needs no conversion).
+
+Indeo 2 / 4 have only wiki-snapshot documentation under
 `docs/video/indeo/indeoN/wiki/` (no formal `spec/`), so they remain at
 the round-0 scaffold pending docs work.
 
