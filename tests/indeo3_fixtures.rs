@@ -232,3 +232,96 @@ fn fixture_frames_never_panic_the_structural_decoder() {
         }
     }
 }
+
+#[test]
+fn five_plane_columns_decode_byte_exact_against_reference() {
+    // The fixture-arbitrated big result (r451): the 160×120 luma
+    // plane decomposes into eight full-height base columns — 24 px
+    // plain and 16 px doubled, alternating — consumed in raster
+    // order with no interleaved tree codes (the cell sequencing the
+    // undocumented geometry banks drive). Decoding the first frame's
+    // luma stream through the row-stream executor reproduces the
+    // reference decode byte-exactly across the first five base
+    // columns EXCEPT where the picture's detail region (the cube,
+    // rows ~30..101) is re-coded by the subdivision/overlay mechanism
+    // the staged docs do not yet pin — the reported docs-gap. The
+    // exact per-column match counts are pinned below so any
+    // refinement shows up as a diff.
+    use oxideav_indeo::indeo3::{decode_cell_rows, expand_doubled_rows};
+
+    let frames = frames(INTRA_BIN, INTRA_IDX);
+    let frame = frames[0];
+    let header = FrameHeader::parse(frame).expect("header");
+    let pl = PictureLayer::parse(&header, frame).expect("picture layer");
+    let PlanePresence::Present(y) = &pl.planes[0] else {
+        panic!("Y absent")
+    };
+    // Payload: 2 bytes of tree codes + the codebook-index byte, then
+    // the first cell's mode-byte stream.
+    let payload = &frame[y.bitstream_offset..];
+    let stream = &payload[3..];
+
+    let staging = StagingImage::build(&CodebookSeedArea::load());
+    let expected_y = &INTRA_YUV[..160 * 120];
+
+    // Columns: (x, width, doubled). The first five decode cleanly;
+    // their coded-row counts are 120 (plain) / 60 (doubled).
+    let columns = [
+        (0usize, 24usize, false),
+        (24, 16, true),
+        (40, 24, false),
+        (64, 16, true),
+        (80, 24, false),
+    ];
+
+    let mut cursor = 0usize;
+    let mut exact = 0usize;
+    for &(x, w, doubled) in &columns {
+        let coded_rows = if doubled { 60 } else { 120 };
+        let boundary = vec![0x40u8; w];
+        let run = decode_cell_rows(&staging, 0, &boundary, &stream[cursor..], w, coded_rows)
+            .unwrap_or_else(|e| panic!("column at x={x}: {e}"));
+        cursor += run.bytes_consumed;
+        let out_rows = if doubled {
+            expand_doubled_rows(&run.rows)
+        } else {
+            run.rows.clone()
+        };
+        assert_eq!(out_rows.len(), 120, "column at x={x}");
+        let mut col_exact = 0usize;
+        for (row_idx, row) in out_rows.iter().enumerate() {
+            for (col_idx, &b) in row.iter().enumerate() {
+                let got = (b & 0x7f) << 1;
+                let want = expected_y[row_idx * 160 + x + col_idx];
+                if got == want {
+                    col_exact += 1;
+                }
+                // Outside the detail region every pixel is byte-exact.
+                if !(30..=101).contains(&row_idx) {
+                    assert_eq!(
+                        got,
+                        want,
+                        "pixel ({}, {row_idx}) diverges outside the detail region",
+                        x + col_idx
+                    );
+                }
+            }
+        }
+        // Pinned per-column match counts (frame 0): flip upward when
+        // the subdivision/overlay mechanism lands.
+        let expected_exact = match x {
+            0 => 2644,
+            24 => 1361,
+            40 => 2503,
+            64 => 1488,
+            80 => 2408,
+            _ => unreachable!(),
+        };
+        assert_eq!(col_exact, expected_exact, "column at x={x}");
+        exact += col_exact;
+    }
+    assert_eq!(exact, 10404);
+    // Each of the five columns' streams is byte-exactly the 4-byte
+    // [6c 6c] [d3] [FD] pattern the reference encoder emitted.
+    assert_eq!(cursor, 20);
+}

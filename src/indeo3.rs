@@ -300,6 +300,7 @@ mod plane_execute;
 mod plane_reconstruct;
 mod reconstruct;
 mod registry;
+mod row_stream;
 mod staging;
 mod strip_context;
 mod strip_edge;
@@ -363,6 +364,9 @@ pub use codebook_seed::{
     SEED_AREA_LEN, SEED_AREA_VMA, SEED_BLOCK_COUNT, SEED_PAIR_TOTAL, SEED_WORD_BIAS,
 };
 pub use decoder::{DecodedOutput, DecoderError, Indeo3Decoder};
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
+pub use row_stream::{decode_cell_rows, expand_doubled_rows, CellRowsRun, Row, RowStreamError};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use staging::{

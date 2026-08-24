@@ -8,6 +8,23 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 3 row-stream cell executor — 10 404 fixture pixels exact**
+  (r451, `indeo3::decode_cell_rows` / `expand_doubled_rows` /
+  `RowStreamError`). Continued fixture arbitration recovers the
+  value-level cell semantics: literal bytes are entry indexes whose
+  one/two-byte row delta applies across the whole row (per-DWORD
+  predictor adds); `0xFD`/`0xFE`/`0xFF`/`0xFB`/`0xFC` are null-delta
+  row runs (predictor propagation); doubled cells store `(avg, cur)`
+  output row pairs (the reference's odd rows are byte-exact
+  averages). The 160×120 luma plane decomposes into eight
+  full-height base columns (24 px plain / 16 px doubled,
+  alternating) consumed in raster order with no interleaved tree
+  codes; decoding the first five columns reproduces the reference
+  byte-exactly everywhere outside the picture's re-coded detail
+  region (10 404 / 12 480 pixels, counts pinned). The cell
+  sequencing / detail-overlay mechanism rides the undocumented
+  cell-geometry banks (`IR32_32.DLL!0x100038f0`, spec/04 §5.3/§7.9)
+  — the round's primary docs-gap ask.
 - **Indeo 3 real `IV32` fixtures + the first real-stream pixel
   decode** (r451, `tests/indeo3_fixtures.rs` +
   `indeo3::StagingImage::row_delta` / `RowDeltaOutcome`). The two
