@@ -300,6 +300,7 @@ mod plane_execute;
 mod plane_reconstruct;
 mod reconstruct;
 mod registry;
+mod staging;
 mod strip_context;
 mod strip_edge;
 mod vq;
@@ -358,10 +359,16 @@ pub use cell_subarray::{
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use codebook_seed::{
-    CodebookSeedArea, SeedBlock, SeedPair, BLOCK_DEST_ADVANCE, BLOCK_TERMINATOR, SEED_AREA_VMA,
-    SEED_SIGN_BIAS,
+    CodebookSeedArea, SeedAreaError, SeedBlock, SeedPair, BLOCK_DEST_ADVANCE, BLOCK_TERMINATOR,
+    SEED_AREA_LEN, SEED_AREA_VMA, SEED_BLOCK_COUNT, SEED_PAIR_TOTAL, SEED_WORD_BIAS,
 };
 pub use decoder::{DecodedOutput, DecoderError, Indeo3Decoder};
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
+pub use staging::{
+    StagingImage, STAGING_ALT_SET_OFFSET, STAGING_BLOCK_COUNT, STAGING_BLOCK_STRIDE,
+    STAGING_IMAGE_LEN, STAGING_SUB_TABLE_LEN,
+};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use entropy::{
@@ -552,5 +559,5 @@ pub use vq::{
     apply_row_band_seed, seed_dispatch_entries, CellVariant, CodebookEntry, RowBandSeed, SeedEntry,
     VqArena, VqNullRuntime, ARENA_BANDS_OFFSET, ARENA_BAND_COUNT, ARENA_BAND_LEN, ARENA_HALF_LEN,
     ARENA_LEN, DYAD_BANK15_VALID_ROWS, DYAD_BANK_COUNT, DYAD_BANK_STRIDE, DYAD_TABLE_LEN,
-    PRIMARY_STRIDE, SECONDARY_STRIDE, SEED_DISPATCH_RECORDS, SEED_PAIR_COUNT, SEED_TABLE_LEN,
+    SEED_DISPATCH_RECORDS, SEED_PAIR_COUNT, SEED_TABLE_LEN, STAGING_SELECT_STRIDE,
 };

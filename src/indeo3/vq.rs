@@ -87,16 +87,21 @@ pub const DYAD_BANK15_VALID_ROWS: usize = 65;
 /// the heap block is `0x8020` bytes with the `cb_offset`-biased
 /// base-pointer slot read at `[arena + 0x8000]`, which is
 /// incompatible with a 16-band region running to `0x8800` (band 15's
-/// secondary half at `0x8000..0x8400` would overlap the base slot).
-/// We model the §6 overlay (the routine this round implements), so
-/// the band region is `0x800..0x8800` (16 bands) and the
-/// `cb_offset`-biased static base is returned by
-/// [`VqArena::apply_alt_quant`] rather than stashed in-arena.
-pub const ARENA_LEN: usize = 0x8800;
+/// The corrected layout (round 17, `tables/03-vq-staging-words.meta`)
+/// is exactly the binary's 0x8020-byte allocation: the 32 KB band
+/// region at `+0x0000..+0x7fff` (16 bands × 2 KB, band `i` at
+/// `+0x800·i`), the `+0x8000` staging-pointer slot and the register
+/// stash in the 0x20-byte tail. We model the band region in-buffer;
+/// the `cb_offset`-biased staging base the binary stashes at
+/// `+0x8000` is returned by [`VqArena::apply_alt_quant`].
+pub const ARENA_LEN: usize = 0x8020;
 
-/// Spec/04 §1.2 / §6.3 — the per-band codebook region starts at
-/// `arena + 0x800` and is 16 bands × 2 KB.
-pub const ARENA_BANDS_OFFSET: usize = 0x800;
+/// Spec/04 §1.2 / §6.3 (corrected, Extractor round 17) — the
+/// per-band codebook region starts at the **arena base** (band `i`
+/// at `+0x800·i`, no leading skip; the earlier `+0x800` bands offset
+/// is withdrawn as arithmetically impossible — it would put band 15
+/// past the 0x8020-byte allocation).
+pub const ARENA_BANDS_OFFSET: usize = 0;
 
 /// Spec/04 §1.2 — there are 16 per-band codebook sub-tables (one per
 /// `alt_quant[]` byte).
@@ -110,12 +115,10 @@ pub const ARENA_BAND_LEN: usize = 0x800;
 /// (256 codebook DWORDs).
 pub const ARENA_HALF_LEN: usize = 0x400;
 
-/// Spec/04 §6.1 — primary sub-tables are packed in the static seed
-/// area at stride 128 (the overlapping layout of §6.2).
-pub const PRIMARY_STRIDE: usize = 128;
-
-/// Spec/04 §6.1 — secondary sub-tables are packed at stride 2048.
-pub const SECONDARY_STRIDE: usize = 2048;
+/// Spec/04 §6.2 (corrected) — both `alt_quant[]` nibbles index the
+/// staging image's blocks at the same 0x800-byte stride (the earlier
+/// stride-128 "overlapping primary" reading is withdrawn).
+pub const STAGING_SELECT_STRIDE: usize = 0x800;
 
 /// Spec/04 §5.1 — the static seed table is 258 bytes (129 byte-pairs;
 /// pairs 0..127 from offsets 0..255, pair 128 from offsets 256..257).
@@ -644,74 +647,64 @@ impl VqArena {
         Some(ARENA_BANDS_OFFSET + ARENA_BAND_LEN * band)
     }
 
-    /// Spec/04 §6.3 — the byte offset of band `i`'s secondary table
-    /// (`0x800 + 0x800*i + 0x400`), or `None` for `i >= 16`.
+    /// Spec/04 §6.3 (corrected) — the byte offset of band `i`'s
+    /// secondary table (`0x800·i + 0x400`), or `None` for `i >= 16`.
     pub fn band_secondary_offset(band: usize) -> Option<usize> {
         Self::band_primary_offset(band).map(|p| p + ARENA_HALF_LEN)
     }
 
-    /// Spec/04 §6 — rebuild the per-band codebook tables from a
-    /// static seed window according to `alt_quant[16]` and the
-    /// `cb_offset` bias.
+    /// Spec/04 §6 (corrected, Extractor rounds 16/17) — rebuild the
+    /// per-band codebook tables from the codec-init **staging image**
+    /// ([`super::StagingImage`], `spec/04 §5.2`) according to
+    /// `alt_quant[16]` and the `cb_offset` bias.
     ///
-    /// `static_seed` is the materialised static codebook seed window
-    /// (the `*(0x1004d25a)` base in the reference; spec/04 §5.2
-    /// builds it from the variable-length block table at
-    /// `.data + 0x1004d26a`, which is Extractor territory — see the
-    /// module docs / report DOCS-GAP). The overlay applies the
-    /// global `cb_offset << 11` bias once (§6.3), then per band:
+    /// The overlay applies the global staging-window bias once
+    /// (`staging + cb_offset · 0x800`, §6.3), then per band `i`:
     ///
-    /// * `alt_quant[band] == 0` → skip the band (leave its previous
-    ///   contents; §6.1).
-    /// * else copy 1 KB from `seed_base + high_nibble*128` into the
-    ///   primary half and 1 KB from `seed_base + low_nibble*2048`
-    ///   into the secondary half (§6.1 / §6.2). The reference's
-    ///   `[src+0x3fc] != [dst+0x3fc]` dirty-check is a copy-elision
-    ///   optimisation with no semantic effect, so we copy
-    ///   unconditionally.
+    /// * `alt_quant[i] == 0` → skip the band (it keeps its previous
+    ///   contents; `0x00` is the only encoding that skips, §6.2).
+    /// * else copy 1 KB from staging block `(q >> 4) + cb_offset`
+    ///   into the band's primary half (`+0x800·i`) and 1 KB from
+    ///   staging block `(q & 0x0f) + cb_offset` into its secondary
+    ///   half (`+0x800·i + 0x400`). Both nibbles index the same
+    ///   block array at the same 0x800 stride (§6.2 corrected), and
+    ///   only a block's `+0x000` sub-table is ever a copy source.
     ///
-    /// Returns the biased seed base offset (`cb_offset << 11`) the
-    /// reference stashes at `arena + 0x8000` (§6.1), or an error if a
-    /// requested source window would read past `static_seed`.
+    /// The binary's `[src+0x3fc] != [dst+0x3fc]` dirty-check is a
+    /// copy-elision optimisation with no semantic effect, so we copy
+    /// unconditionally. Returns the biased staging offset
+    /// (`cb_offset << 11`) the reference stashes at `arena + 0x8000`
+    /// (§1.2), or an error if a selected block falls outside the
+    /// staging image (the routine performs no bounds check; encoders
+    /// must keep `nibble + cb_offset` within the 24 blocks, §6.2).
     pub fn apply_alt_quant(
         &mut self,
-        static_seed: &[u8],
+        staging: &super::StagingImage,
         alt_quant: &[u8; ARENA_BAND_COUNT],
         cb_offset: i8,
     ) -> Result<i64, VqError> {
-        // Spec/04 §6.1: `esi += cb_offset << 11` — the static seed
-        // window is biased once, before the per-band loop. The bias
-        // is a signed byte scaled by 2048.
+        // §6.3: the window shift is applied once, before the per-band
+        // loop — a signed whole-block bias.
         let bias = (cb_offset as i64) << 11;
 
         for (band, &q) in alt_quant.iter().enumerate() {
             if q == 0 {
-                // §6.1 — skip both primary + secondary halves.
+                // §6.2 — leave both halves as the previous frame left
+                // them.
                 continue;
             }
             let (primary_idx, secondary_idx) = nibble_split(q);
 
-            // Primary table (high nibble; stride 128).
-            let p_src = bias + (primary_idx as i64) * (PRIMARY_STRIDE as i64);
             let p_dst = Self::band_primary_offset(band).expect("band < 16");
-            copy_seed_window(
-                static_seed,
-                p_src,
-                &mut self.bytes[..],
-                p_dst,
-                ARENA_HALF_LEN,
-                band,
-            )?;
+            copy_staging_block(staging, bias, primary_idx, &mut self.bytes[..], p_dst, band)?;
 
-            // Secondary table (low nibble; stride 2048).
-            let s_src = bias + (secondary_idx as i64) * (SECONDARY_STRIDE as i64);
             let s_dst = Self::band_secondary_offset(band).expect("band < 16");
-            copy_seed_window(
-                static_seed,
-                s_src,
+            copy_staging_block(
+                staging,
+                bias,
+                secondary_idx,
                 &mut self.bytes[..],
                 s_dst,
-                ARENA_HALF_LEN,
                 band,
             )?;
         }
@@ -720,48 +713,43 @@ impl VqArena {
     }
 }
 
+/// Copy one staging block's `+0x000` sub-table (1 KB) into an arena
+/// half, range-checking the biased source window (`spec/04 §6.1`).
+fn copy_staging_block(
+    staging: &super::StagingImage,
+    bias: i64,
+    nibble: u8,
+    arena: &mut [u8],
+    dst_off: usize,
+    band: usize,
+) -> Result<(), VqError> {
+    let src_off = bias + (i64::from(nibble)) * (STAGING_SELECT_STRIDE as i64);
+    if src_off < 0 {
+        return Err(VqError::SeedWindowOutOfRange {
+            band,
+            src_offset: src_off,
+            seed_len: staging.as_bytes().len(),
+        });
+    }
+    let start = src_off as usize;
+    let end = start + ARENA_HALF_LEN;
+    let Some(src) = staging.as_bytes().get(start..end) else {
+        return Err(VqError::SeedWindowOutOfRange {
+            band,
+            src_offset: src_off,
+            seed_len: staging.as_bytes().len(),
+        });
+    };
+    arena[dst_off..dst_off + ARENA_HALF_LEN].copy_from_slice(src);
+    Ok(())
+}
+
 /// Spec/04 §6.2 — split an `alt_quant[]` byte into (primary, secondary)
 /// nibble indices (high nibble = primary, low nibble = secondary).
 /// Mirrors `header::alt_quant_indices` but is kept local to the VQ
 /// module to make the §6 overlay self-describing.
 fn nibble_split(byte: u8) -> (u8, u8) {
     ((byte & 0xf0) >> 4, byte & 0x0f)
-}
-
-/// Copy a 1 KB window from the static seed into the arena, range-
-/// checking the source offset.
-fn copy_seed_window(
-    seed: &[u8],
-    src_off: i64,
-    arena: &mut [u8],
-    dst_off: usize,
-    len: usize,
-    band: usize,
-) -> Result<(), VqError> {
-    if src_off < 0 {
-        return Err(VqError::SeedWindowOutOfRange {
-            band,
-            src_offset: src_off,
-            seed_len: seed.len(),
-        });
-    }
-    let start = src_off as usize;
-    let end = start
-        .checked_add(len)
-        .ok_or(VqError::SeedWindowOutOfRange {
-            band,
-            src_offset: src_off,
-            seed_len: seed.len(),
-        })?;
-    if end > seed.len() {
-        return Err(VqError::SeedWindowOutOfRange {
-            band,
-            src_offset: src_off,
-            seed_len: seed.len(),
-        });
-    }
-    arena[dst_off..dst_off + len].copy_from_slice(&seed[start..end]);
-    Ok(())
 }
 
 /// Spec/04 §4 — the runtime VQ_NULL sub-bit interpretation.
@@ -1007,63 +995,57 @@ mod tests {
     }
 
     #[test]
-    fn arena_band_offsets_match_6_3() {
-        assert_eq!(VqArena::band_primary_offset(0), Some(0x800));
-        assert_eq!(VqArena::band_secondary_offset(0), Some(0xc00));
-        assert_eq!(VqArena::band_primary_offset(1), Some(0x1000));
-        assert_eq!(VqArena::band_primary_offset(15), Some(0x800 + 0x800 * 15));
-        assert_eq!(
-            VqArena::band_secondary_offset(15),
-            Some(0x800 + 0x800 * 15 + 0x400)
-        );
+    fn arena_band_offsets_match_corrected_6_3() {
+        // Round-17 correction: band i at arena + 0x800*i, no leading
+        // skip.
+        assert_eq!(VqArena::band_primary_offset(0), Some(0));
+        assert_eq!(VqArena::band_secondary_offset(0), Some(0x400));
+        assert_eq!(VqArena::band_primary_offset(1), Some(0x800));
+        assert_eq!(VqArena::band_primary_offset(15), Some(0x800 * 15));
+        assert_eq!(VqArena::band_secondary_offset(15), Some(0x800 * 15 + 0x400));
         assert_eq!(VqArena::band_primary_offset(16), None);
         assert_eq!(VqArena::band_secondary_offset(16), None);
-        // The last band's secondary table ends exactly at 0x8800
-        // (the §6 overlay's full output span).
+        // The band region ends exactly at 0x8000; the 0x20-byte tail
+        // holds the +0x8000 pointer slot and register stash (§1.2).
         assert_eq!(
             VqArena::band_secondary_offset(15).unwrap() + ARENA_HALF_LEN,
-            ARENA_LEN
+            0x8000
         );
-        assert_eq!(ARENA_LEN, 0x8800);
+        assert_eq!(ARENA_LEN, 0x8020);
+    }
+
+    fn staging() -> super::super::StagingImage {
+        super::super::StagingImage::build(&super::super::CodebookSeedArea::load())
     }
 
     #[test]
     fn alt_quant_overlay_copies_primary_and_secondary() {
-        // Build a static seed window large enough for the largest
-        // secondary index (15 * 2048 + 1024 = 31744 bytes).
-        let seed_len = 15 * SECONDARY_STRIDE + ARENA_HALF_LEN;
-        let mut seed = vec![0u8; seed_len];
-        // Distinct marker bytes so we can verify which window landed.
-        for (i, b) in seed.iter_mut().enumerate() {
-            *b = (i % 251) as u8;
-        }
+        let img = staging();
         let mut arena = VqArena::new();
         let mut alt = [0u8; 16];
-        // Band 0 uses primary index 2 (high nibble) and secondary
-        // index 1 (low nibble): byte 0x21.
+        // Band 0 uses staging block 2 (high nibble) for its primary
+        // half and block 1 (low nibble) for its secondary: byte 0x21.
         alt[0] = 0x21;
-        let bias = arena.apply_alt_quant(&seed, &alt, 0).unwrap();
+        let bias = arena.apply_alt_quant(&img, &alt, 0).unwrap();
         assert_eq!(bias, 0);
-        // Primary half of band 0 == seed[2*128 .. 2*128+1024].
+        // Primary half of band 0 == staging block 2's +0x000
+        // sub-table (only a block's +0x000 half is ever a source).
         let p_dst = VqArena::band_primary_offset(0).unwrap();
-        let p_src = 2 * PRIMARY_STRIDE;
         assert_eq!(
             &arena.as_bytes()[p_dst..p_dst + ARENA_HALF_LEN],
-            &seed[p_src..p_src + ARENA_HALF_LEN]
+            &img.as_bytes()[2 * STAGING_SELECT_STRIDE..2 * STAGING_SELECT_STRIDE + ARENA_HALF_LEN]
         );
-        // Secondary half of band 0 == seed[1*2048 .. 1*2048+1024].
+        // Secondary half == staging block 1's +0x000 sub-table.
         let s_dst = VqArena::band_secondary_offset(0).unwrap();
-        let s_src = SECONDARY_STRIDE;
         assert_eq!(
             &arena.as_bytes()[s_dst..s_dst + ARENA_HALF_LEN],
-            &seed[s_src..s_src + ARENA_HALF_LEN]
+            &img.as_bytes()[STAGING_SELECT_STRIDE..STAGING_SELECT_STRIDE + ARENA_HALF_LEN]
         );
     }
 
     #[test]
     fn alt_quant_zero_band_is_skipped() {
-        let seed_len = 15 * SECONDARY_STRIDE + ARENA_HALF_LEN;
-        let seed = vec![0xAB; seed_len];
+        let img = staging();
         let mut arena = VqArena::new();
         // Pre-mark band 1's region so we can detect an unwanted write.
         let p1 = VqArena::band_primary_offset(1).unwrap();
@@ -1072,8 +1054,8 @@ mod tests {
         }
         let mut alt = [0u8; 16];
         alt[0] = 0x11; // band 0 active
-                       // band 1 stays 0 → skipped.
-        arena.apply_alt_quant(&seed, &alt, 0).unwrap();
+                       // band 1 stays 0 -> skipped.
+        arena.apply_alt_quant(&img, &alt, 0).unwrap();
         // Band 1 untouched (still 0x55).
         assert!(arena.as_bytes()[p1..p1 + ARENA_BAND_LEN]
             .iter()
@@ -1082,57 +1064,49 @@ mod tests {
 
     #[test]
     fn alt_quant_cb_offset_bias_applied_once() {
-        // cb_offset = 1 → bias = 2048. A seed window must be large
-        // enough to satisfy bias + 15*2048 + 1024.
-        let seed_len = (1 << 11) + 15 * SECONDARY_STRIDE + ARENA_HALF_LEN;
-        let mut seed = vec![0u8; seed_len];
-        for (i, b) in seed.iter_mut().enumerate() {
-            *b = (i % 241) as u8;
-        }
+        // cb_offset = 8 shifts the window by 8 whole blocks: nibble
+        // pair (1, 0) then addresses blocks 9 and 8 (§6.2).
+        let img = staging();
         let mut arena = VqArena::new();
         let mut alt = [0u8; 16];
-        alt[0] = 0x10; // primary index 1, secondary index 0
-        let bias = arena.apply_alt_quant(&seed, &alt, 1).unwrap();
-        assert_eq!(bias, 2048);
-        // Primary src = bias + 1*128.
+        alt[0] = 0x10;
+        let bias = arena.apply_alt_quant(&img, &alt, 8).unwrap();
+        assert_eq!(bias, 8 << 11);
         let p_dst = VqArena::band_primary_offset(0).unwrap();
-        let p_src = 2048 + PRIMARY_STRIDE;
+        let p_src = 9 * STAGING_SELECT_STRIDE;
         assert_eq!(
             &arena.as_bytes()[p_dst..p_dst + ARENA_HALF_LEN],
-            &seed[p_src..p_src + ARENA_HALF_LEN]
+            &img.as_bytes()[p_src..p_src + ARENA_HALF_LEN]
+        );
+        let s_dst = VqArena::band_secondary_offset(0).unwrap();
+        let s_src = 8 * STAGING_SELECT_STRIDE;
+        assert_eq!(
+            &arena.as_bytes()[s_dst..s_dst + ARENA_HALF_LEN],
+            &img.as_bytes()[s_src..s_src + ARENA_HALF_LEN]
         );
     }
 
     #[test]
-    fn alt_quant_out_of_range_seed_errors() {
-        // Tiny seed → the secondary window for a high low-nibble
-        // overruns.
-        let seed = vec![0u8; 100];
+    fn alt_quant_out_of_range_staging_window_errors() {
+        // §6.2: a cb_offset that pushes nibble + cb_offset outside the
+        // 24 staging blocks addresses outside the image; the binary
+        // performs no bounds check, we surface a typed error. Block
+        // index 15 + cb_offset 33 = block 48 -> byte 0x18000, past the
+        // image end.
+        let img = staging();
         let mut arena = VqArena::new();
         let mut alt = [0u8; 16];
-        alt[0] = 0x0f; // secondary index 15 → src 15*2048 way past 100
-        let err = arena.apply_alt_quant(&seed, &alt, 0).unwrap_err();
+        alt[0] = 0x0f;
+        let err = arena.apply_alt_quant(&img, &alt, 33).unwrap_err();
         match err {
             VqError::SeedWindowOutOfRange { band, .. } => assert_eq!(band, 0),
         }
-    }
-
-    #[test]
-    fn alt_quant_negative_cb_offset_underflow_errors() {
-        // cb_offset = -1 → bias = -2048; a band whose source offset
-        // stays negative must error rather than panic.
-        let seed = vec![0u8; 4096];
-        let mut arena = VqArena::new();
-        let mut alt = [0u8; 16];
-        alt[0] = 0x10; // primary index 1 → src = -2048 + 128 < 0
-        let err = arena.apply_alt_quant(&seed, &alt, -1).unwrap_err();
+        // A negative bias below block 0 likewise errors.
+        let mut alt2 = [0u8; 16];
+        alt2[0] = 0x11;
+        let err = arena.apply_alt_quant(&img, &alt2, -2).unwrap_err();
         match err {
-            VqError::SeedWindowOutOfRange {
-                band, src_offset, ..
-            } => {
-                assert_eq!(band, 0);
-                assert!(src_offset < 0);
-            }
+            VqError::SeedWindowOutOfRange { band, .. } => assert_eq!(band, 0),
         }
     }
 

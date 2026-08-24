@@ -8,6 +8,28 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 3 codebook staging image — the VQ value gate opens** (r451,
+  `indeo3::StagingImage` + the settled `indeo3::CodebookSeedArea`).
+  The round-16 reconciliation settles the `.data 0x1004d26a` seed-area
+  grammar (count byte is UNSIGNED; a signed trailing `expand_byte`
+  closes each block: 24 blocks, 2601 pairs, 5251 bytes — the full
+  area is now vendored, superseding the 4 KB window), and the
+  round-17 derivation lands the codec-init staging-image build
+  (`spec/04 §5.2`): offset prefill, §5.2.2 seeded words
+  (`((b·256+a)+0x8000)&0xFFFF << 16` + the `(b,b,a,a)` borrow-add
+  replication), and the §5.2.3 `d²` ordered-pair expansion with the
+  sign-of-`E` transposition. The Rust builder reproduces the staged
+  `tables/03-vq-staging-words.csv` ground truth for **all 24×256×4
+  words with zero mismatches** (FNV-1a digest + spot rows pinned in
+  tests). `VqArena` adopts the corrected §6.3 addressing (band `i` at
+  `+0x800·i` from the arena base, `ARENA_LEN` 0x8020) and
+  `apply_alt_quant` now copies real staging blocks (both nibbles at
+  the 0x800 stride, `cb_offset` block bias) — the spec/04 §7.1
+  "codebook values" gate that blocked Indeo 3 pixel output is now
+  material, not a docs-gap. (`SeedPair::primary_dword`'s per-byte
+  0x80 bias is superseded by the arithmetic §5.2.2 word;
+  `SEED_SIGN_BIAS`/`PRIMARY_STRIDE`/`SECONDARY_STRIDE` are replaced
+  by `SEED_WORD_BIAS`/`STAGING_SELECT_STRIDE`.)
 - **Indeo 5 inverse Slant transform + first fully checksum-verified
   frame** (r451, `indeo5::transform` + intra band reconstruction in
   `decode_intra_picture`). The measured `spec/06 §1.2` 8-point
