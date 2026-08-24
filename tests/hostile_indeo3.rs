@@ -377,3 +377,26 @@ fn hostile_streams_with_planted_arena_content_never_panic() {
         }
     }
 }
+
+#[test]
+fn hostile_row_stream_never_panics() {
+    // LCG-driven sweep over the r451 row-stream executor: arbitrary
+    // streams, geometries and staging blocks must produce typed
+    // results only.
+    use oxideav_indeo::indeo3::{decode_cell_rows, CodebookSeedArea, StagingImage};
+    let staging = StagingImage::build(&CodebookSeedArea::load());
+    let mut lcg = 0x1234_5678u32;
+    let mut next = move || {
+        lcg = lcg.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        lcg
+    };
+    for _ in 0..2000 {
+        let len = (next() % 64) as usize;
+        let stream: Vec<u8> = (0..len).map(|_| (next() >> 13) as u8).collect();
+        let width = 4 * (1 + (next() % 10) as usize);
+        let rows = 1 + (next() % 40) as usize;
+        let block = (next() % 32) as usize;
+        let boundary = vec![(next() >> 9) as u8 & 0x7f; width];
+        let _ = decode_cell_rows(&staging, block, &boundary, &stream, width, rows);
+    }
+}
