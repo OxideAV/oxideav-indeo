@@ -6,6 +6,144 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.2](https://github.com/OxideAV/oxideav-indeo/compare/v0.0.1...v0.0.2) - 2026-09-18
+
+### Other
+
+- README status rewrite, fuzz targets + workflow, three hostile-input fixes
+- stateful picture decoder + motion compensation — both IV32 fixtures pixel-exact on all 16 frames; registry bridge emits real pictures
+- cell decoder over the geometry banks — every intra frame of both IV32 fixtures pixel-exact (all three planes)
+- cell-geometry banks — regenerate the walker's five sub-tables from the picture size (spec/04 §5.3), 4 080 / 4 080 staged entries
+- byte-exact YUY2 host output — cosited truncating 2x chroma interpolation; chroma chains are V then U
+- byte-aligned tile phases + table dequantisation + DC chain — 320x240 fixture luma pixel-exact, all 8 stored checksums verify
+- quantiser tables — base matrices, per-level scales, regenerated bank + reconstruction law (spec/05 §2.3, spec/06 §5)
+- hostile-input sweep over the row-stream executor
+- r451 status refresh — indeo5 checksum-verified frame, indeo3 fixture arbitration + gap list
+- fixture-arbitrated row-stream cell executor — 10404 real-stream pixels exact
+- real IV32 fixtures — first byte-exact real-stream pixels
+- spec/06 round-17 entropy corrections — in-cell 0xFB runs, both-table faults, handler prologues
+- settled seed grammar + codebook staging image + corrected arena addressing
+- inverse Slant kernel + intra band reconstruction — first fully checksum-verified IV50 frame
+- README — r433 rollup (prefix-code VQ_NULL, stateful/arena executors, stream anchors, hostile suite)
+- stream-driven reconstruction of unpacker-dispatch cells via the anchor seam
+- record mode-byte stream anchors on data-bearing VQ leaves
+- hostile-input robustness suite — garbage / truncation / mutation / adversarial-tree sweeps
+- arena-parameterised cell unpacker — full literal-dyad path over caller-supplied arena
+- stateful cell executor — cross-cell escape carry, 0xFB counter decode, sequence driver
+- VQ_NULL sub-code is a prefix code — land the spec/06 §5.2 unpacker-dispatch leaf
+- doc(hidden) the internal re-export surface (semver-checks noise reduction)
+- README — r411 coefficient work list + spec/08 §7 checksum oracle; refine transform gap
+- thread the spec/08 §7 reconstruction oracle through the session path
+- byte-string literals in FRMH magic test (clippy byte_char_slices)
+- per-band coefficient work list + spec/08 §7 reconstruction-checksum oracle
+- wire IV50 into the codec registry + oxideav_core::Decoder bridge
+- add CI / crates.io / docs.rs / MIT-license badges
+- session-level fixture decode + truncation/corruption no-panic sweeps
+- round 388 README + CHANGELOG rollup — fixture-arbitrated entropy layer
+- vendor the two staged IV50 INTRA fixtures + end-to-end structural decode tests
+- fixture-arbitrated entropy layer — prefix-form codebooks, static rv-tables, split tile phases
+- round 385 README + CHANGELOG rollup
+- multi-frame session decoder (INTRA / INTER-structural / NULL-repeat)
+- whole-frame INTRA decode driver -> first IV50 pixels through assemble_frame
+- spec/06 §1/§2 SWAR Slant-butterfly primitives + page-0 handler map
+- spec/05 §2/§4.2 rv-table mechanism (parallel arrays, patches, escape)
+- spec/03 §4 per-MB header (skip flag, qdelta, MV deltas, CBP)
+- spec/03 §3 per-tile macroblock grid
+- spec/03 §2 per-tile data-size header (value24..value27)
+- spec/07 §1/§4 reference-frame buffer-slot rotation
+- spec/07 §5 MC coefficient-fetch kernels (4 modes, residual add)
+- spec/07 §2/§3 motion vectors (packed layout, half-pel, predictor)
+- spec/08 whole-frame output assembly + README round rollup
+- vendor extracted static data tables (vlcEnd, synth, dequant scale)
+- spec/08 §6.3/§8 decoder finalisation (return codes, ref rotation)
+- spec/08 §7 frame/band checksum parse-and-store (no verify)
+- spec/08 §5.3/§6.2 planar host-buffer packing
+- spec/08 §2.2/§2.3/§5.3 output-format dispatch (FOURCC routing)
+- spec/08 §1.1/§1.3 plane record set + U->V->Y iteration order
+- spec/08 §3.5/§5 chroma subsampling + box-filter upsample
+- spec/08 §3.3 output-stage bias-and-clamp per-plane converter
+- document the entropy + transform primitives + docs-gaps in README
+- per-band tile geometry (spec/02 §4.1/§4.2)
+- multi-level plane wavelet recomposition (spec/06 §3.4/§4.1)
+- per-cell saturation clipping table (spec/06 §5.3)
+- CDF 5/3 (LeGall) wavelet recomposition (spec/06 §3/§4)
+- level zig-zag-folded signed-byte table (spec/04 §3.4)
+- canonical-Huffman codebooks (spec/04 §1/§3.2/§4.3) + preset Kraft-anomaly report
+- document the IV50 decode bootstrap in README + CHANGELOG
+- picture-header front door — thread picture-start + GOP + frame header by frame type
+- band header parser (spec/02 §3) — band_flags, empty exit, rv_corr, blk_huff, glob_quant
+- frame header parser (spec/02 §1.9 + §2) — GOP trailer, frame_flags, conditional fields, mb_huff_desc
+- GOP header parser (spec/02 §1) — flags, decomp levels, dimensions, band_info, transparency
+- bootstrap decode stack — LSB-first bitreader + file header + pic-size tables
+- one-shot direct decode (decode_video_frame) + README framework section
+- registry tag-disambiguation probe (spec/01 §2.1 check_sum)
+- oxideav-core codec-registry integration (IV31/IV32 Decoder bridge)
+- refresh stale crate-level lib.rs doc header
+- decoder output convenience — to_output_frame / to_yuv_frame passthroughs
+- stateful multi-frame decoder (session + reconstruction + repeat-previous)
+- multi-frame decode session (inter-frame state machine, spec/01 §3 + spec/07 §6)
+- README Status — VQ_NULL subset now reconstructs whole-frame; VQ_DATA/INTER gated
+- end-to-end reconstruction integration test (decode -> reconstruct -> output)
+- bridge reconstructed strips to OutputFrame (to_output_frame, spec/07 §4.3 upshift)
+- frame-level reconstruction pass (reconstruct_frame over spec/07 §1.5/§5.2)
+- whole-plane reconstruction executor (exec_plane_plan over spec/07 §1.4/§4.4/§5.1)
+- plane-level reconstruction-readiness classifier + VQ_NULL drive
+- static-table-only per-cell mode-byte reconstruction executor
+- document full-resolution YUV frame producer (README + CHANGELOG)
+- end-to-end YUV pipeline integration test (decode → assemble_yuv)
+- full-resolution YUV frame producer (spec/07 §5.5 chroma upsample over §5.7 assembly)
+- README — row-band handler + §5.2 seed parser; pin arena gap
+- spec/07 §3.1/§3.2 static-dyad row-band-advance handler
+- spec/04 §5.2 per-frame codebook seed-area block parser
+- end-to-end integration tests + README pipeline rewrite
+- output-plane assembly driver (assemble_output)
+- end-to-end structural frame-decode driver (decode_frame)
+- spec/04 §5.1 cell-state dispatch-table materialisation (low-half seed stream)
+- spec/07 §6 frame finalisation — saved frame_flags/frame_number slots, continuity check, return codes
+- spec/07 §5.5 4:1:0 → output chroma box-upsampler
+- CHANGELOG — correct r319 new-test count (10, not 12)
+- spec/07 §5.3 output-format dispatch decision (sub_4190 var_24 selection)
+- spec/06 §1.2/§3.3 per-row continuation-byte lookahead offset
+- refresh to current status, drop per-round changelog cruft
+- spec/06 §3.2 mode-byte jump-table per-entry dispatch
+- r305 §4 VQ_NULL `01` mark-edge executor (spec/04 §4 + spec/07 §4.2/§4.4)
+- spec/07 §1.4 VQ_NULL copy-upper executor (cross-ref spec/04 §4)
+- §1.2 in-cell predictor chain row-driver (spec/07 §1.2/§2.4 + spec/06 §6.3/§6.4)
+- spec/05 §5.1+§5.2+§7.2 / spec/03 §5.5 MC cell-copy executor + boundary fix-up
+- spec/07 §4.3+§5.6+§5.7 output-buffer write — 1-bit upshift + IF09 strip-to-frame assembly
+- spec/02 §6.2 per-frame plane-iteration terminator + reconstruction handoff
+- spec/02 §9 typed plane-data byte map
+- drop release-plz.toml — use release-plz defaults across the workspace
+- spec/03 §5.4 end-of-strip edge fix-up byte-copy executor
+- cell_geometry preamble — fence pseudo-code blocks as text to bypass doctest parse
+- spec/05 §7.3 reverse-decomposition surface — typed (x, y, w, h) recovery from dst_addr
+- spec/02 §6 picture-layer plan → 7-arg per-plane decode-call bridge
+- spec/02 §4+§5+§6 picture-layer → strip-context decode-plan bridge
+- spec/05 §5.6 MC fetcher → VQ residual chapter boundary surface
+- spec/05 §5.5 chroma-plane scaling surface
+- spec/05 §4.4 "no explicit boundary check" surface
+- spec/05 §4.3 source-pointer plumbing — per-plane decoder → cell-state dispatcher stack-frame hand-off
+- spec/05 §4.1 strip pixel-buffer arena geometry
+- spec/05 §4.2 frame_flags bit 9 ping-pong bank selection
+- spec/05 §5.4 / §7.2 cell-position decoding entry — MC fetcher dst/src address composition chain
+- spec/05 §5.1 / §5.2 / §5.3 motion-compensation cell-copy inner-loop kernel
+- spec/05 §2.2 / §2.3 / §3.3 / §3.4 packed-MV bit-layout decode + four-way MC dispatch
+- spec/05 §1 per-plane packed-MV table layout + INTER-leaf indexing
+- spec/03 §5.4 strip-edge fix-up parameter surface
+- spec/03 §5.1 / §5.3 / §5.5 per-cell sub-array wiring
+- spec/04 §3.3 outer per-cell row/column loop preamble
+- spec/02 §4-§7 strip-context array + per-plane decode-call signature
+- spec/07 §2.2 four cell-shape variant inner-loop emission kernels
+- release v0.0.1 ([#3](https://github.com/OxideAV/oxideav-indeo/pull/3))
+- spec/07 output-reconstruction kernel (predictor + softSIMD dyad add)
+- round 5 — byte-level entropy (spec/06)
+- round 4 — VQ codebook materialisation (spec/04)
+- CHANGELOG — correct round-3 test count to 15
+- round 3 — macroblock-layer binary-tree walk (spec/03)
+- round 2 — picture-layer plane-prelude parser
+- round 1 — frame-header + bitstream-header parser
+- Round 0 — clean-room rebuild scaffold (orphan master)
+
 ### Added
 
 - **Fuzz targets + three hostile-input fixes** (r459, `fuzz/`,
