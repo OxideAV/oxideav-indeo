@@ -8,6 +8,58 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 — the 320×240 fixture decodes luma pixel-exact and all
+  eight stored checksums verify** (r459, `tests/indeo5_pixels.rs`,
+  `tests/indeo5_fixtures.rs`). Four fixture-arbitrated corrections
+  close the r451 dequant frontier together:
+  - *Byte-aligned tile phases.* Inside a coded tile the MB-header
+    phase starts on the byte boundary after the tile header and the
+    coded-block-stream phase on the byte boundary after the last MB
+    header (`spec/03 §4.1`'s "enters the per-block coefficient decode
+    at the next byte alignment"). Reading the phases unaligned shifted
+    every CBP one macroblock late and every block stream one
+    alignment gap early — the r388/r451 parse still exhausted the
+    bands only because the gaps happen to be all-zero. Aligned, every
+    band of both fixtures consumes exactly its `band_data_size` (the
+    "3–8 unconsumed tail bytes" are gone), the flat frame is one
+    escape-coded DC on block (0,0), and the 320×240 luma tile's 1 200
+    blocks match the vendor sample-for-sample.
+  - *rv-table level layout.* Each run interval holds its negative
+    magnitudes below the midpoint and its positive ones from it up —
+    there is no level-0 entry (the r451 "zero-inclusive stuffing"
+    reading was an artefact of the misaligned flat-fixture parse; the
+    r388 layout is restored, `indeo5::RvTable`). The nine
+    `rv_tab_corr` swap pairs of the fixture's Y band (`spec/05 §2.4`)
+    are pinned symbol by symbol.
+  - *Quantisation reversal by table* (`indeo5::quant`, below), with
+    the class-1 step matrices and `q_mb = band_glob_quant + qdelta`.
+  - *DC chain.* The DC of a coded block is the previous block's DC
+    (decode order, zero seed) plus its dequantised position-0 level;
+    DC-only blocks repeat it — 658 / 658 coded luma blocks pin the
+    predictor (left / top neighbours fit 469 / 367). The r451
+    lookahead seed is gone: the flat fixture's coded block is (0,0).
+  Measured: 320×240 luma **76 800 / 76 800** pixel-exact (was 248),
+  Y/V/U/frame checksums `0xEE60`/`0x4BE4`/`0xCF31`/`0xC975` all
+  `Match` (was 0/4); the 240×180 frame stays 100 % exact with all
+  four checksums (now without the lookahead). Chroma pixels are
+  verified through the band checksums only — the vendor's packed
+  `YUY2` view carries interpolated 4:2:2 chroma whose upsampling
+  filter is not yet modelled.
+- **Indeo 5 quantiser tables** (r459, `indeo5::quant`:
+  `QUANT_BASE`, `QUANT_SCALE`, `quant_matrix`, `recon_value`,
+  `dequant_level`, `quant_group`). The Extractor-15 / Validator-16
+  staging (`tables/quant_base_1008cf00`, `quant_scale_1008d200`,
+  `quant_matrices_1007b000`, `recon_lut_formula`; `spec/05 §2.3`,
+  `spec/06 §5`) is transcribed: the 12 base matrices and 288
+  per-level scales regenerate the runtime `.sdata 0x1007b000` bank
+  (`clamp((base · scale) >> 8, 1, 255)`, 4×4 group spread onto
+  8-byte rows) — cross-checked against the vendored live image in
+  `tests/indeo5_quant_tables.rs` (288 / 288 matrices) — and a level
+  `±k` at step `b` reconstructs to `±(k·b + ⌊b/2⌋ − (b & 1, b > 1))`.
+  The 8×8 group follows the band transform (0 = 2D, 2 = row, 3 =
+  column, 4 = none); group 1 and the class bit have no established
+  selector (the fixtures use group 0 / class 1) and quantisers above
+  23 saturate — all reported as docs asks.
 - **Indeo 3 row-stream cell executor — 10 404 fixture pixels exact**
   (r451, `indeo3::decode_cell_rows` / `expand_doubled_rows` /
   `RowStreamError`). Continued fixture arbitration recovers the

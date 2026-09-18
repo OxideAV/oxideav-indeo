@@ -127,6 +127,7 @@ fn all_skipped_mbs_decode_to_mid_grey() {
     plain_band_header(&mut w, 12);
     w.put(0, 1); // tile value24 = 0 (carries data)
     w.put(0, 1); // value25 = 0 -> implicit size
+    w.align(); // the MB-header phase starts byte-aligned (r459)
     for _ in 0..(22 * 18) {
         w.put(1, 1); // mb_coded = 1 -> skipped
     }
@@ -137,6 +138,7 @@ fn all_skipped_mbs_decode_to_mid_grey() {
         plain_band_header(&mut w, 12);
         w.put(0, 1);
         w.put(0, 1);
+        w.align();
         for _ in 0..(6 * 5) {
             w.put(1, 1);
         }
@@ -171,6 +173,7 @@ fn coded_mb_without_ac_reconstructs() {
     plain_band_header(&mut w, 12);
     w.put(0, 1); // value24
     w.put(0, 1); // value25 -> implicit
+    w.align(); // MB-header phase (r459)
     w.put(0, 1); // MB 0: coded
     w.put(0b0000, 4); // CBP: all four blocks DC-only
     for _ in 1..(22 * 18) {
@@ -195,11 +198,12 @@ fn coded_mb_without_ac_reconstructs() {
 fn coded_block_stream_decodes_through_default_tables() {
     // A coded MB whose CBP requests one block of AC data, driven
     // through the default block codebook (preset 7) and the default
-    // rv-table (slot 8): one (run 0, +1) coefficient then EOB. Under
-    // slot 8's zero-inclusive interval decode (r451), vlc 0 maps to
-    // composite 28 = the run-0 level-0 stuffing entry, vlc 2 maps to
-    // composite 29 = +1, and vlc 4 is the EOB marker; all ride row 0
-    // of preset 7 (xbits 3): prefix "0" + 3 MSB-first extras.
+    // rv-table (slot 8): one (run 0, +1) coefficient then EOB. Slot
+    // 8's run-0 interval has its midpoint (+1) at composite 28 = vlc
+    // 0 (r459 layout: no level-0 entry; vlc 2 → composite 29 = +2),
+    // and vlc 4 is the EOB marker; all ride row 0 of preset 7 (xbits
+    // 3): prefix "0" + 3 MSB-first extras. The two phases of the
+    // tile each start byte-aligned (r459).
     let mut w = BitWriter::new();
     intra_cif_header(&mut w);
 
@@ -210,15 +214,17 @@ fn coded_block_stream_decodes_through_default_tables() {
     w.put(0, 1); // value24
     w.put(1, 1); // value25 = 1 -> explicit
     w.put(56, 8); // value26: whole tile = 56 bytes
-                  // Phase 1 — MB headers: MB 0 coded (CBP block 0), rest skipped.
+    w.align();
+    // Phase 1 — MB headers: MB 0 coded (CBP block 0), rest skipped.
     w.put(0, 1);
     w.put(0b0001, 4);
     for _ in 1..(22 * 18) {
         w.put(1, 1);
     }
+    w.align();
     // Phase 2 — block streams: (run 0, +1) then EOB.
-    w.put(0, 1); // vlc 2: prefix "0"
-    w.put(0b010, 3); // extras (MSB-first) = 010b = 2
+    w.put(0, 1); // vlc 0: prefix "0"
+    w.put(0b000, 3); // extras (MSB-first) = 000b = 0
     w.put(0, 1); // vlc 4: prefix "0"
     w.put(0b001, 3); // extras (MSB-first) = 100b = 4
     w.align();
@@ -261,6 +267,7 @@ fn truncated_coefficient_stream_is_an_error() {
     plain_band_header(&mut w, 12);
     w.put(0, 1); // value24
     w.put(0, 1); // value25 -> implicit
+    w.align();
     w.put(0, 1); // MB 0: coded
     w.put(0b1111, 4); // CBP: AC data follows
     let bitstream = w.finish();

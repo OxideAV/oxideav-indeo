@@ -67,6 +67,7 @@ use super::mv::{resolve_mv, Mv, MvPredictor, MvResolution};
 use super::output::{plane_stride, OutputError, ReconstructionPlane};
 use super::pack::HostBuffer;
 use super::picture::{PictureError, PictureHeader};
+use super::quant::{dequant_level, BandQuant};
 use super::rv_table::{escape_lindex, escape_value, run_advance, RvEntry, RvTable, RvTableError};
 use super::tile::TileGrid;
 use super::tile_header::{TileDataSize, TileHeader};
@@ -517,10 +518,10 @@ pub struct BlockRecord {
 /// Decode one coded block's `(run, val)` coefficient stream
 /// (`spec/05` + the wiki "Block data" annex): symbols through the
 /// block codebook, `(run, val)` through the rv-table, `pos += run + 1`
-/// scan advance from `pos = -1`, EOB-terminated. The decoded values
-/// are structurally validated; their placement (scan order) and
-/// dequantisation ride the reported spec/05 §5.1 / spec/06 §5.1
-/// docs-gaps, so they are counted but not yet reconstructed.
+/// scan advance from `pos = -1`, EOB-terminated. Every symbol carries
+/// a non-zero level (the composite space has no level-0 entry — the
+/// r451 "stuffing" reading is withdrawn, see [`super::RvTable`]);
+/// placement and dequantisation happen in `reconstruct_intra_band`.
 fn decode_block_stream(
     r: &mut BitReader<'_>,
     blk_cb: &Codebook,
@@ -554,15 +555,6 @@ fn decode_block_stream(
             }
             RvEntry::Val { run, val } => (run, val),
         };
-        if val == 0 {
-            // Level-0 (stuffing) entry: consumes its codeword but
-            // writes no coefficient and does not advance the scan
-            // (r451 fixture arbitration: the all-flat fixture's coded
-            // block carries five such symbols before its escape-coded
-            // DC, and the escape must land at scan position 0 for the
-            // frame to verify against its stored checksums).
-            continue;
-        }
         pos = run_advance(pos, run);
         if pos >= budget as i32 {
             return Err(DecodeError::BlockStream {
@@ -575,15 +567,9 @@ fn decode_block_stream(
                 },
             });
         }
-        // DOCS-GAP (spec/06 §5.4): the `band_glob_quant`-driven
-        // dequantisation of the decoded level into the staged
-        // coefficient is applied "upstream, on the (run, level)
-        // symbols as they are placed into the staging buffer", but
-        // where and how the scale multiplies "is not established".
-        // The decoded level is therefore staged as-is; this is exact
-        // for the `band_glob_quant == 0` case (the all-flat fixture
-        // verifies fully) and the `spec/08 §7.3` checksum oracle
-        // quantifies the remaining gap on quantised bands.
+        // The level stays quantised here; `reconstruct_intra_band`
+        // reverses the quantiser by table once the block's raster
+        // slot (and so its step) is known (spec/05 §2.3, spec/06 §5.4).
         coeffs[pos as usize] = val;
         stats.coefficients += 1;
     }
@@ -609,7 +595,9 @@ fn walk_tile_intra(
     sink: &mut dyn FnMut(BlockRecord),
 ) -> Result<(), DecodeError> {
     let (plane_idx, band_idx, tile_idx) = at;
-    // Phase 1 — MB headers.
+    // Phase 1 — MB headers, from the byte boundary after the tile
+    // header (spec/03 §2.1 / §4.1 byte-alignment; r459).
+    r.align()?;
     let mut records: Vec<(MbHeader, super::mb::Macroblock)> = Vec::new();
     for mb in grid.iter() {
         let header =
@@ -625,7 +613,10 @@ fn walk_tile_intra(
         }
         records.push((header, mb));
     }
-    // Phase 2 — coded-block coefficient streams.
+    // Phase 2 — coded-block coefficient streams, from the next byte
+    // boundary (spec/03 §4.1: the block kernel is entered "at the next
+    // byte alignment"; r459 fixture arbitration — see the module docs).
+    r.align()?;
     for (header, mb) in &records {
         let quant = header
             .qdelta
@@ -696,8 +687,10 @@ fn walk_tile_inter(
 ) -> Result<(), DecodeError> {
     let (plane_idx, band_idx, tile_idx) = at;
 
-    // Phase 1 — MB headers (with MVs); spec/07 §3.3 zero-MV predictor
-    // reset at tile entry.
+    // Phase 1 — MB headers (with MVs), from the byte boundary after
+    // the tile header; spec/07 §3.3 zero-MV predictor reset at tile
+    // entry.
+    r.align()?;
     let mut predictor = MvPredictor::new();
     let mut records: Vec<MbRecord> = Vec::new();
     for mb in grid.iter() {
@@ -766,7 +759,8 @@ fn walk_tile_inter(
         }
     }
 
-    // Phase 2 — coded-block coefficient streams.
+    // Phase 2 — coded-block coefficient streams, byte-aligned.
+    r.align()?;
     for rec in &records {
         if rec.header.skipped {
             continue;
@@ -856,24 +850,20 @@ fn reconstruct_intra_band(
     band_idx: usize,
 ) {
     let transform = resolve_transform(binfo, band_idx);
+    let mut bq = BandQuant::new(binfo.blk_size, transform);
     // Intra DC chain (the Indeo 4 annex-B "DC coded using differential
     // coding", shared by Indeo 5): scan position 0 of a coded block
-    // carries a *delta* against the band's running DC, and blocks
-    // without a coefficient stream repeat the running DC. Blocks that
-    // precede the band's first coded block take that first block's DC
-    // (lookahead seed) — pinned by the all-flat fixture, whose single
-    // coded block sits *after* five uncoded blocks yet the vendor
-    // reconstruction is uniform across the whole plane. (With one DC
-    // in the chain "running" and "final" coincide; a quantised
-    // multi-DC fixture verification is pending the spec/06 §5.4
-    // dequant gap.)
-    let first_dc: i16 = records
-        .iter()
-        .find(|r| matches!(r.coding, BlockCoding::Coded))
-        .map(|r| r.coeffs[0])
-        .unwrap_or(0);
+    // carries a *delta* against the running DC of the previous block
+    // in decode order (dequantised at the DC step), and blocks without
+    // a coefficient stream repeat the running DC. The chain starts at
+    // zero: the first block of a band carries its DC as a large
+    // (typically escape-coded) delta — `lidx` 216 / 42 / 257 on the
+    // 320×240 fixture's three bands, 448 on the flat fixture's single
+    // coded block, which is its block (0,0). The 320×240 fixture pins
+    // the predictor on 658 / 658 coded luma blocks (r459: previous
+    // block in decode order; the left- and top-neighbour readings fit
+    // 469 and 367).
     let mut dc_chain: i16 = 0;
-    let mut seen_coded = false;
 
     for rec in records {
         let side = rec.blk_size as usize;
@@ -895,15 +885,34 @@ fn reconstruct_intra_band(
                     wide
                 }
             };
+            // spec/05 §2.3 / spec/06 §5.4 — quantisation reversal by
+            // table: every placed level becomes ±r(|level|, b) with
+            // the step b = bank[g][c][q_mb][raster slot].
+            let steps = bq.steps(rec.quant);
+            if side == 8 {
+                for (slot, level) in block.iter_mut().enumerate() {
+                    *level = dequant_level(*level, steps[slot]);
+                }
+            } else {
+                // The 4×4 group's matrices sit on 8-byte rows
+                // (`tables/quant_matrices_1007b000` final form), so a
+                // 4-stride raster slot addresses row `slot >> 2` at
+                // stride 8. (Both fixtures' chroma bands verify their
+                // stored checksums under this and under a 4-stride
+                // read; the pixel oracle does not reach chroma yet.)
+                for (slot, level) in block.iter_mut().enumerate().take(16) {
+                    let idx = (slot >> 2) * 8 + (slot & 3);
+                    *level = dequant_level(*level, steps[idx]);
+                }
+            }
         }
         match rec.coding {
             BlockCoding::Coded => {
                 dc_chain = dc_chain.wrapping_add(block[0]);
-                seen_coded = true;
                 block[0] = dc_chain;
             }
             BlockCoding::DcOnly | BlockCoding::Skipped => {
-                block[0] = if seen_coded { dc_chain } else { first_dc };
+                block[0] = dc_chain;
             }
         }
 

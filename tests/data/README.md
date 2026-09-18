@@ -19,7 +19,23 @@ in each fixture's `notes.md` under the docs staging directory.
 Both frames are `YVU9`, `decomp_levels = 0` (one band per plane),
 single-tile-per-band. The 240x180 frame is a black frame (the vendor
 decoder reproduces `Y=16, U=V=128` for it); the 320x240 frame carries
-~1100 coded blocks across its three bands.
+1 105 coded blocks across its three bands.
+
+`*.expected.yuy2` are the fixtures' staged `expected.yuv` reference
+decodes (the vendor decoder's packed `YUY2` host buffer, `Y0 U Y1 V`
+per 4-byte unit, `width*height*2` bytes; chroma at 4:2:2 as the
+vendor's own writer upsamples it). Luma is compared sample-for-sample
+in `tests/indeo5_pixels.rs`.
+
+| File | Bytes | SHA-256 |
+| ---- | ----- | ------- |
+| `intra-240x180-educ.expected.yuy2` | 86400 | `2ff24b741d9577e1b8b22d88b3a67902842347b2e878a094249fdf3904f3ec45` |
+| `intra-320x240-indeo5.expected.yuy2` | 153600 | `e531aa42393bcaf455616e87c2bcf003f90991248963e5e9804d5878bd20fdff` |
+
+`iv50-quant-matrices-1007b000.csv` is the staged regenerated runtime
+quantiser bank (`docs/video/indeo/indeo5/tables/quant_matrices_1007b000.csv`,
+Extractor round 15, live-verified in Validator round 16), the oracle
+for `tests/indeo5_quant_tables.rs`.
 
 ## `iv32-160x120-all-intra/` / `iv32-176x144-4frame-intra-period/`
 

@@ -448,6 +448,7 @@ mod tests {
         w.align();
         w.put(0, 1); // tile value24
         w.put(0, 1); // value25 -> implicit
+        w.align(); // MB-header phase starts byte-aligned (r459)
         for _ in 0..(2 * 2) {
             w.put(1, 1); // 32x32 tile, mb 16 -> 4 MBs, all skipped
         }
@@ -500,7 +501,8 @@ mod tests {
         w.align();
         w.put(0, 1); // tile value24
         w.put(0, 1); // value25 -> implicit
-                     // MB-header phase: MBs 0..254 skipped.
+        w.align(); // MB-header phase starts byte-aligned (r459)
+                   // MB-header phase: MBs 0..254 skipped.
         for _ in 0..255 {
             w.put(1, 1);
         }
@@ -576,6 +578,7 @@ mod tests {
         w.align();
         w.put(0, 1); // tile: implicit size, coded
         w.put(0, 1);
+        w.align(); // MB-header phase starts byte-aligned (r459)
         for _ in 0..4 {
             w.put(1, 1); // all 4 MBs skipped
         }
