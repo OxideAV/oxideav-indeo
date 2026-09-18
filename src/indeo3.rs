@@ -283,6 +283,7 @@ mod frame_output;
 mod frame_reconstruct;
 mod frame_session;
 mod frame_yuv;
+mod geometry_bank;
 mod header;
 mod macroblock;
 mod mc_address;
@@ -427,6 +428,9 @@ pub use frame_reconstruct::{
 };
 pub use frame_session::{AdmittedFrame, DecodeSession, FrameAdmission, SessionError};
 pub use frame_yuv::{assemble_yuv, upsample_frame, YuvError, YuvFrame, YuvPlane};
+pub use geometry_bank::{
+    chroma_plane_dims, split_extent, GeometryBank, PlaneBanks, UNDER_FOUR_CODE, UNDER_FOUR_YPOS,
+};
 pub use header::{
     alt_quant_indices, BitstreamHeader, FrameFlags, FrameHeader, FrameHeaderPreamble, HeaderError,
     BITSTREAM_HEADER_LEN, COMBINED_HEADER_LEN, FLAG_YVU9_8BIT, FRAME_HEADER_LEN, MAGIC_FRMH,

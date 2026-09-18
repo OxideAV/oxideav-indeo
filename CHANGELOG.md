@@ -8,6 +8,23 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 3 cell-geometry banks regenerated** (r459,
+  `indeo3::PlaneBanks` / `GeometryBank` / `split_extent` /
+  `chroma_plane_dims`, `tests/indeo3_geometry_banks.rs`). The r451
+  primary docs ask is answered by the Extractor-18 / Validator-19
+  staging (`spec/04 §1.1`/`§5.3`, `spec/03 §4.2`): the five
+  sub-tables the tree walker indexes by its vertical / horizontal
+  heap indices — cell height / 4, width / 4, strip slot, top-row and
+  left-column byte offsets — are a pure function of the picture size,
+  built by the populator's split rule (`p > 8: first = 8·⌊(p+8)/16⌋`,
+  else `second = ⌊p/2⌋`), strip-level seeding, in-place running-sum
+  positions (an under-four node's override feeds the next index; the
+  sum resets only on exact equality with the strip width / plane byte
+  height) and the wide-picture slot clamp. The crate's generator
+  reproduces the staged populator output for all 4 080 entries (four
+  geometries × four banks × indices 1..255), including the 400×300
+  three-strip case; the vendor's live banks were measured equal to
+  that table for both fixture geometries.
 - **Indeo 5 `YUY2` host output byte-exact + chroma chain order fixed**
   (r459, `indeo5::pack_yuy2` / `upsample_chroma_2x`,
   `tests/indeo5_pixels.rs`). The vendor's packed 4:2:2 view of a
