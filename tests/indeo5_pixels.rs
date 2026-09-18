@@ -6,7 +6,7 @@
 //! the packed view are the vendor's upsampled planes and are covered
 //! by the `spec/08 §7` band checksums instead.
 
-use oxideav_indeo::indeo5::{decode_intra_picture, BlockCoding, ChecksumStatus};
+use oxideav_indeo::indeo5::{decode_intra_picture, pack_yuy2, BlockCoding, ChecksumStatus};
 
 const INDEO5: &[u8] = include_bytes!("data/intra-320x240-indeo5.iv50");
 const INDEO5_YUY2: &[u8] = include_bytes!("data/intra-320x240-indeo5.expected.yuy2");
@@ -96,4 +96,30 @@ fn indeo5_320x240_chroma_verifies_by_checksum() {
     // the sandbox measured on this fixture.
     assert_eq!(d.bands[1].blocks[0].coeffs[0], -21);
     assert_eq!(d.bands[2].blocks[0].coeffs[0], 129);
+}
+
+#[test]
+fn indeo5_320x240_yuy2_host_buffer_byte_exact() {
+    // r459: the vendor's whole 153 600-byte YUY2 host buffer — luma
+    // plus the cosited, truncating 2x chroma interpolation of the
+    // native 4:1:0 planes, row-duplicated to 4:2:2 — reproduces
+    // byte-for-byte.
+    let d = decode_intra_picture(INDEO5).expect("decode");
+    let out = d.output.as_ref().expect("output");
+    let packed = pack_yuy2(out, 320, 240).expect("yuy2");
+    assert_eq!(packed.len(), INDEO5_YUY2.len());
+    let mismatches = packed
+        .iter()
+        .zip(INDEO5_YUY2)
+        .filter(|(a, b)| a != b)
+        .count();
+    assert_eq!(mismatches, 0);
+}
+
+#[test]
+fn educ_240x180_yuy2_host_buffer_byte_exact() {
+    let d = decode_intra_picture(EDUC).expect("decode");
+    let out = d.output.as_ref().expect("output");
+    let packed = pack_yuy2(out, 240, 180).expect("yuy2");
+    assert_eq!(packed, EDUC_YUY2);
 }

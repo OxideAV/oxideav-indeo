@@ -8,6 +8,22 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 5 `YUY2` host output byte-exact + chroma chain order fixed**
+  (r459, `indeo5::pack_yuy2` / `upsample_chroma_2x`,
+  `tests/indeo5_pixels.rs`). The vendor's packed 4:2:2 view of a
+  4:1:0 picture is modelled from the fixture: each chroma plane is
+  doubled by a cosited separable interpolation — native samples at
+  even positions, the truncating average `(a + b) >> 1` at odd ones,
+  horizontal pass first, edges replicated — and written twice per row
+  pair. The 320×240 fixture's whole **153 600-byte** reference host
+  buffer and the 240×180 fixture's 86 400 bytes now reproduce
+  byte-for-byte (the vertical-first order, the four-tap `>> 2` and
+  every round-half-up variant mismatch 98–2 000 samples). The same
+  oracle pins the chroma chain order: the first coded chroma chain is
+  **V**, the second **U** (`YVU9` order, the `spec/03 §2.4` fixture
+  erratum) — the decoder had assembled and checksummed them the other
+  way round, so the registry bridge's `VideoFrame` U/V planes were
+  swapped; `DecodedPicture.bands[1]` is now the V band.
 - **Indeo 5 — the 320×240 fixture decodes luma pixel-exact and all
   eight stored checksums verify** (r459, `tests/indeo5_pixels.rs`,
   `tests/indeo5_fixtures.rs`). Four fixture-arbitrated corrections

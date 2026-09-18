@@ -92,8 +92,8 @@ pub enum DecodeError {
     },
     /// Fault in a band header.
     Band {
-        /// Plane index (0 = Y; 1..2 = the chroma band chains,
-        /// `spec/02 §4.4`).
+        /// Plane index (0 = Y; 1 = the V chain, 2 = the U chain —
+        /// `YVU9` coded order, `spec/02 §4.4`).
         plane_idx: usize,
         /// Band index within the plane.
         band_idx: usize,
@@ -293,7 +293,7 @@ pub enum FrontierReason {
 /// skipped past via an explicit size field).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DecodeFrontier {
-    /// Plane index (0 = Y; 1..2 = the chroma chains).
+    /// Plane index (0 = Y; 1 = V chain, 2 = U chain).
     pub plane_idx: usize,
     /// Band index within the plane.
     pub band_idx: usize,
@@ -356,7 +356,7 @@ pub struct BandTrace {
 /// consumes, and the `spec/08 §7` reconstruction oracle for the band.
 #[derive(Debug, Clone)]
 pub struct BandReconstruction {
-    /// Plane index (0 = Y; 1..2 = the chroma chains).
+    /// Plane index (0 = Y; 1 = V chain, 2 = U chain).
     pub plane_idx: usize,
     /// Band index within the plane.
     pub band_idx: usize,
@@ -1020,8 +1020,8 @@ pub fn decode_intra_picture(bitstream: &[u8]) -> Result<DecodedPicture, DecodeEr
     let format = output_format(gop);
     let output = assemble_frame(
         &payload.recon[0],
-        &payload.recon[2],
         &payload.recon[1],
+        &payload.recon[2],
         format,
     )?;
 
@@ -1061,11 +1061,14 @@ pub(crate) fn reconstruction_checksums(
         .map(|set| {
             // For a 0-level plane the band is the plane, so its
             // reconstructed pixels are the whole plane's bytes; the
-            // band checksum is over `pixel - 128`.
+            // band checksum is over `pixel - 128`. The chroma chains
+            // are coded V first, then U (`YVU9` order; r459 — the
+            // vendor's packed `YUY2` output carries the first chain's
+            // samples in its V byte).
             let pixels = match set.plane_idx {
                 0 => luma,
-                1 => cu,
-                _ => cv,
+                1 => cv,
+                _ => cu,
             };
             let checksum =
                 super::ChecksumStatus::compare(set.stored_checksum, super::band_checksum(pixels));

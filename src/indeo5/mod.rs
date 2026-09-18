@@ -61,6 +61,7 @@ mod tile_header;
 mod transform;
 mod verify;
 mod wavelet;
+mod yuy2;
 
 pub use assemble::AssembleError;
 // internal — exposed for tests/fuzz; not part of the stable API
@@ -156,6 +157,7 @@ pub use pack::{HostBuffer, PlanePlacement};
 pub use pack::pack_planar;
 pub use picture::{PictureError, PictureHeader};
 pub use planes::PlaneRole;
+pub use yuy2::{pack_yuy2, upsample_chroma_2x};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use planes::{num_bands, FramePlanes, OUTPUT_ITERATION_ORDER, PLANE_RECORD_ORDER};

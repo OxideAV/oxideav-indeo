@@ -191,8 +191,8 @@ impl Indeo5Decoder {
                 let format = output_format(&gop);
                 let output = assemble_frame(
                     &payload.recon[0],
-                    &payload.recon[2],
                     &payload.recon[1],
+                    &payload.recon[2],
                     format,
                 )?;
                 let dimensions = (gop.width, gop.height);
@@ -224,8 +224,8 @@ impl Indeo5Decoder {
                 let format = output_format(&gop);
                 let output = assemble_frame(
                     &payload.recon[0],
-                    &payload.recon[2],
                     &payload.recon[1],
+                    &payload.recon[2],
                     format,
                 )?;
                 let dimensions = (gop.width, gop.height);
