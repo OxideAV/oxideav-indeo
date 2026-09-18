@@ -265,6 +265,7 @@
 //! doc-comments below cite the chapter named in each module.
 
 mod bank_select;
+mod cell_decoder;
 mod cell_emit;
 mod cell_geometry;
 mod cell_loop;
@@ -308,6 +309,7 @@ mod strip_edge;
 mod vq;
 
 pub use bank_select::Bank;
+pub use cell_decoder::{decode_plane, CellDecodeError, PlaneBuffers, PlaneContext, PlaneStats};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use bank_select::{McBankAssignment, BANK_INVERSION_DELTA};

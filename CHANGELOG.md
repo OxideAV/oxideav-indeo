@@ -8,6 +8,36 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 3 — every intra frame of both `IV32` fixtures decodes
+  pixel-exact** (r459, `indeo3::decode_plane` / `PlaneBuffers` /
+  `PlaneContext` / `PlaneStats`, `tests/indeo3_cells.rs`): 8 / 8 frames
+  of the 160×120 all-intra corpus and both intra frames of the
+  176×144 corpus (two luma strips), all three planes, 100 %. The new
+  plane decoder replaces the r451 row-stream executor's model
+  (10 404 / 12 480 luma pixels of one frame) with the Specifier-20
+  re-cut of `spec/03`/`04`/`06`/`07` plus fixture arbitration:
+  - the binary tree is walked with the vertical / horizontal heap
+    indices and each leaf positioned through the geometry banks
+    (full-strip or last-strip by the leaf's strip slot); the tree
+    bits and the byte-level reads share one cursor whose bit
+    accumulator keeps the last tree byte's leftover bits across a
+    cell's byte stream;
+  - a VQ_DATA (or VQ_NULL `1`) cell is one mode byte then a stream of
+    codes per 4×4 block (family A) or 8×8 block (family E), row-group
+    major, four codes per block, with the `spec/06 §4` escapes at
+    their block positions (`0xFB` runs count blocks, the current one
+    included) and the band-nibble-≥ 8 LUT rewrite of the row above;
+  - a code's word is applied dyad by dyad: the raw `pred + word` bit
+    31 decides the two-byte form (the continuation byte supplies the
+    low lane), and each pixel takes its delta **rounded toward zero
+    to even** (`p + d − sign(d)·(d & 1)` — 404 / 404 luma samples;
+    the plain add misses 64 — mechanism not in the spec, reported);
+  - family E doubles each decoded row horizontally and stores it as a
+    row pair `(avg(row above, row), row)`, repeating instead of
+    averaging only at the strip top.
+  Motion compensation (`spec/05`) is implemented per the packed
+  byte-offset formula but not yet validated (the inter frames are the
+  next unit); families C / D are reported, not guessed.
 - **Indeo 3 cell-geometry banks regenerated** (r459,
   `indeo3::PlaneBanks` / `GeometryBank` / `split_extent` /
   `chroma_plane_dims`, `tests/indeo3_geometry_banks.rs`). The r451
