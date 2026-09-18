@@ -100,6 +100,7 @@ pub use codebook::{
 pub use decode::{
     decode_intra_picture, BandReconstruction, BandTrace, BlockCoding, BlockRecord,
     BlockStreamFault, DecodeError, DecodeFrontier, DecodeStats, DecodedPicture, FrontierReason,
+    MAX_PICTURE_PIXELS,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]

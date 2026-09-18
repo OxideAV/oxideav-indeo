@@ -8,6 +8,21 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Fuzz targets + three hostile-input fixes** (r459, `fuzz/`,
+  `.github/workflows/fuzz.yml`): `indeo5_intra` (one-shot INTRA),
+  `indeo5_session` (frame sequences through `Indeo5Decoder`) and
+  `indeo3_picture` (frame sequences through `Indeo3PictureDecoder`),
+  seeded with the fixtures; each ran ≥ 240 s clean in the foreground
+  after fixing what they found: an Indeo 5 custom-dimension header
+  (8191×8191) that allocated gigabytes of band buffers (now
+  `DecodeError::PictureTooLarge` past `MAX_PICTURE_PIXELS`, 4096²), a
+  multi-level Indeo 5 plane whose recomposed low-low band and the next
+  level's ceil-sized triple differed by one sample (the recompose now
+  fits them), an Indeo 3 header outside the `spec/01 §3.6` envelope
+  (now `PictureDecodeError::BadDimensions`) and a plane payload of
+  endless splits that overflowed the heap index (now
+  `CellDecodeError::TreeTooDeep` past 255). The package excludes
+  `/tests` and `/fuzz`.
 - **Indeo 3 — both `IV32` fixtures decode pixel-exact on all 16 frames;
   the registry bridge now emits real pictures** (r459,
   `indeo3::Indeo3PictureDecoder` / `DecodedPicture`,

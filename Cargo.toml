@@ -12,7 +12,7 @@ readme = "README.md"
 homepage = "https://github.com/OxideAV/oxideav-indeo"
 keywords = ["multimedia", "video", "indeo", "rt21", "codec"]
 categories = ["multimedia::encoding", "multimedia::video"]
-exclude = ["/tests"]
+exclude = ["/tests", "/fuzz"]
 
 [dependencies]
 oxideav-core = "0.1"

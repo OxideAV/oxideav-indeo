@@ -327,6 +327,11 @@ impl<'a, 'b> Walker<'a, 'b> {
 
     /// `spec/03 §3` MC tree over node `(cl, ch)`.
     fn walk_mc(&mut self, cl: u32, ch: u32) -> Result<(), CellDecodeError> {
+        if cl > 255 || ch > 255 {
+            // The banks are 256 entries deep; a deeper split is a
+            // stream error (and bounds the recursion).
+            return Err(CellDecodeError::TreeTooDeep);
+        }
         let b0 = self.r.bit()?;
         if b0 == 0 {
             let b1 = self.r.bit()?;
@@ -361,6 +366,9 @@ impl<'a, 'b> Walker<'a, 'b> {
         ch: u32,
         mv: Option<MotionVector>,
     ) -> Result<(), CellDecodeError> {
+        if cl > 255 || ch > 255 {
+            return Err(CellDecodeError::TreeTooDeep);
+        }
         let b0 = self.r.bit()?;
         if b0 == 0 {
             let b1 = self.r.bit()?;

@@ -137,6 +137,21 @@ pub struct Band {
 }
 
 impl Band {
+    /// The band cropped / zero-padded to `width × height`.
+    pub fn resized(&self, width: usize, height: usize) -> Band {
+        let mut data = vec![0i32; width * height];
+        for y in 0..height.min(self.height) {
+            let n = width.min(self.width);
+            data[y * width..y * width + n]
+                .copy_from_slice(&self.data[y * self.width..y * self.width + n]);
+        }
+        Band {
+            width,
+            height,
+            data,
+        }
+    }
+
     /// Construct a band from explicit dimensions + data (panics on a
     /// length mismatch — a programming error in the caller).
     pub fn new(width: usize, height: usize, data: Vec<i32>) -> Self {
@@ -170,9 +185,15 @@ impl Band {
 pub fn recompose_level(ll: &Band, hl: &Band, lh: &Band, hh: &Band) -> Band {
     let bw = ll.width;
     let bh = ll.height;
-    debug_assert_eq!((hl.width, hl.height), (bw, bh));
-    debug_assert_eq!((lh.width, lh.height), (bw, bh));
-    debug_assert_eq!((hh.width, hh.height), (bw, bh));
+    // The three high-frequency bands share the low-low band's geometry
+    // (`recompose_plane` fits them); a caller-supplied mismatch is
+    // fitted the same way rather than trusted.
+    let fit =
+        |b: &Band| -> Option<Band> { ((b.width, b.height) != (bw, bh)).then(|| b.resized(bw, bh)) };
+    let (hl_f, lh_f, hh_f) = (fit(hl), fit(lh), fit(hh));
+    let hl = hl_f.as_ref().unwrap_or(hl);
+    let lh = lh_f.as_ref().unwrap_or(lh);
+    let hh = hh_f.as_ref().unwrap_or(hh);
 
     let full_w = bw * 2;
     let full_h = bh * 2;
@@ -246,8 +267,14 @@ pub struct LevelBands {
 pub fn recompose_plane(ll: &Band, levels: &[LevelBands]) -> Band {
     let mut current = ll.clone();
     // §3.4 bottom-up: combine the running low-low band with each level's
-    // three high-frequency bands, innermost level first.
+    // three high-frequency bands, innermost level first. A recomposed
+    // low-low band is twice its input's size, which for a plane whose
+    // dimensions are not multiples of `2^levels` can differ by one from
+    // the next level's `ceil`-sized triple: fit it to the triple.
     for level in levels {
+        if (current.width, current.height) != (level.hl.width, level.hl.height) {
+            current = current.resized(level.hl.width, level.hl.height);
+        }
         current = recompose_level(&current, &level.hl, &level.lh, &level.hh);
     }
     current

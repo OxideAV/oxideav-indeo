@@ -21,7 +21,7 @@
 use super::cell_decoder::{decode_plane, CellDecodeError, PlaneBuffers, PlaneContext, PlaneStats};
 use super::codebook_seed::CodebookSeedArea;
 use super::frame_session::{AdmittedFrame, DecodeSession, FrameAdmission, SessionError};
-use super::header::{FrameHeader, HeaderError};
+use super::header::{FrameHeader, HeaderError, MAX_HEIGHT, MAX_WIDTH, MIN_DIMENSION};
 use super::picture_layer::{PictureLayer, PictureLayerError, PlanePresence};
 use super::staging::StagingImage;
 use super::vq::{DyadDeltaTable, VqArena, VqError};
@@ -46,6 +46,14 @@ pub enum PictureDecodeError {
         /// The underlying error.
         error: CellDecodeError,
     },
+    /// The header's picture size is outside the codec's envelope
+    /// (`spec/01 §3.6`: `MIN_DIMENSION..=MAX_WIDTH` × `..=MAX_HEIGHT`).
+    BadDimensions {
+        /// The header's width.
+        width: u16,
+        /// The header's height.
+        height: u16,
+    },
     /// The picture size changed between frames without a session reset.
     SizeChanged {
         /// The session's picture size.
@@ -65,6 +73,10 @@ impl core::fmt::Display for PictureDecodeError {
             PictureDecodeError::Plane { plane_idx, error } => {
                 write!(f, "indeo3 picture decoder: plane {plane_idx}: {error}")
             }
+            PictureDecodeError::BadDimensions { width, height } => write!(
+                f,
+                "indeo3 picture decoder: picture size {width}x{height} outside the codec envelope"
+            ),
             PictureDecodeError::SizeChanged { expected, found } => write!(
                 f,
                 "indeo3 picture decoder: picture size changed from {}x{} to {}x{}",
@@ -203,6 +215,12 @@ impl Indeo3PictureDecoder {
 
         let header = FrameHeader::parse(input)?;
         let (w, h) = (header.bitstream.width, header.bitstream.height);
+        if !(MIN_DIMENSION..=MAX_WIDTH).contains(&w) || !(MIN_DIMENSION..=MAX_HEIGHT).contains(&h) {
+            return Err(PictureDecodeError::BadDimensions {
+                width: w,
+                height: h,
+            });
+        }
         match self.size {
             None => {
                 self.size = Some((w, h));

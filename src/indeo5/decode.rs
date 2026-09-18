@@ -78,6 +78,11 @@ use super::transform::{
 };
 use super::wavelet::{recompose_plane, Band, LevelBands};
 
+/// The largest picture area the driver allocates band buffers for
+/// (4096 × 4096 samples): a resource guard against hostile headers,
+/// far above any Indeo 5 stream's real size.
+pub const MAX_PICTURE_PIXELS: u64 = 4096 * 4096;
+
 /// Errors raised by the whole-frame driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodeError {
@@ -154,6 +159,15 @@ pub enum DecodeError {
         tile_idx: usize,
         /// The underlying error.
         error: McError,
+    },
+    /// The picture area exceeds [`MAX_PICTURE_PIXELS`] — a decoder
+    /// resource guard, not a format limit (the custom-dimension fields
+    /// can name 8191×8191, which would cost gigabytes of band buffers).
+    PictureTooLarge {
+        /// The picture width.
+        width: u32,
+        /// The picture height.
+        height: u32,
     },
     /// Underlying bit-reader fault.
     BitReader(BitReaderError),
@@ -270,6 +284,10 @@ impl core::fmt::Display for DecodeError {
             } => write!(
                 f,
                 "indeo5 decode: plane {plane_idx} band {band_idx} tile {tile_idx}: {error}"
+            ),
+            DecodeError::PictureTooLarge { width, height } => write!(
+                f,
+                "indeo5 decode: picture {width}x{height} exceeds the {MAX_PICTURE_PIXELS}-pixel decoder guard"
             ),
             DecodeError::BitReader(e) => write!(f, "indeo5 decode: {e}"),
             DecodeError::Output(e) => write!(f, "indeo5 decode: {e}"),
@@ -1104,6 +1122,12 @@ pub(crate) fn decode_payload(
     frame: &FrameHeader,
     reference: Option<&[Vec<Band>]>,
 ) -> Result<PayloadOutcome, DecodeError> {
+    if u64::from(gop.width) * u64::from(gop.height) > MAX_PICTURE_PIXELS {
+        return Err(DecodeError::PictureTooLarge {
+            width: gop.width,
+            height: gop.height,
+        });
+    }
     let band_size_present = frame.flags.band_data_size_present();
     let slice_size = gop.slice_size();
     let level_table = build_level_table();

@@ -1,0 +1,24 @@
+name: Fuzz
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [indeo5_intra, indeo5_session, indeo3_picture]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Build target
+        run: cargo fuzz build -s none ${{ matrix.target }}
+      - name: Run target (bounded)
+        run: cargo fuzz run -s none ${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- -max_total_time=120 -max_len=16384 -rss_limit_mb=2048

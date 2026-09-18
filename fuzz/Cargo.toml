@@ -1,0 +1,38 @@
+[package]
+name = "oxideav-indeo-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.oxideav-indeo]
+path = ".."
+
+[[bin]]
+name = "indeo5_intra"
+path = "fuzz_targets/indeo5_intra.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "indeo5_session"
+path = "fuzz_targets/indeo5_session.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "indeo3_picture"
+path = "fuzz_targets/indeo3_picture.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
