@@ -8,6 +8,26 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Indeo 3 — both `IV32` fixtures decode pixel-exact on all 16 frames;
+  the registry bridge now emits real pictures** (r459,
+  `indeo3::Indeo3PictureDecoder` / `DecodedPicture`,
+  `tests/indeo3_pixels.rs`). The stateful picture decoder joins the
+  session admission (first-frame / seek INTRA gate, NULL repeat), the
+  per-frame `alt_quant` overlay, the two-bank reference ping-pong
+  (`frame_flags` bit 9 selects the destination bank, the other bank is
+  the reference) and the plane decoder. The 176×144 corpus' six inter
+  frames pin the motion-compensation path: the packed byte-offset
+  vector (`spec/05 §6`), the three half-pel filters (truncating
+  averages), the own-content families B (4×4) and F (8×8 — the doubled
+  deltas add per pixel to both rows of a pair over the MC content, and
+  predictor fills keep it), and VQ_NULL on an INTER cell keeping the
+  motion-compensated content. The band-nibble-≥ 8 mode bytes read
+  staging block `lo` (the even seed sets, blocks 8..15) — which is the
+  "rounding toward even" the previous entry measured — with LUT bank
+  `lo & 7`; the plain dyad add is exact on every family.
+  `Indeo3RegistryDecoder` / `decode_video_frame` now decode through this
+  path (`Yuv444P`, chroma box-replicated); the r451 VQ_NULL-subset
+  `Indeo3Decoder` stays exported but no longer feeds the bridge.
 - **Indeo 3 — every intra frame of both `IV32` fixtures decodes
   pixel-exact** (r459, `indeo3::decode_plane` / `PlaneBuffers` /
   `PlaneContext` / `PlaneStats`, `tests/indeo3_cells.rs`): 8 / 8 frames

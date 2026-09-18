@@ -1,6 +1,6 @@
 //! Indeo 3 (IV31 / IV32) codec-registry integration: the
 //! [`oxideav_core`] [`Decoder`] trait wrapper around the in-crate
-//! [`Indeo3Decoder`], plus the FourCC routing surface a generic
+//! [`Indeo3PictureDecoder`], plus the FourCC routing surface a generic
 //! container (`oxideav-avi`, `oxideav-mov`) needs to resolve an
 //! `IV31` / `IV32` video track to this crate.
 //!
@@ -13,8 +13,8 @@
 //! ## What this module adds
 //!
 //! Every other module in this crate is reachable only through the
-//! crate's own typed API ([`Indeo3Decoder::decode`] →
-//! [`DecodedOutput`]). This module bridges that API to the framework's
+//! crate's own typed API ([`Indeo3PictureDecoder::decode`] →
+//! [`DecodedPicture`]). This module bridges that API to the framework's
 //! published codec surface so a pipeline that resolves codecs through
 //! an [`oxideav_core::CodecRegistry`] — the way the container crates do
 //! — can construct and drive an Indeo 3 decoder without naming this
@@ -24,11 +24,11 @@
 //!   case-insensitive) to the [`CodecId`] this crate registers, so a
 //!   demuxer's `CodecResolver` can route a video track here.
 //! * [`Indeo3RegistryDecoder`] implements [`Decoder`]: it owns an
-//!   [`Indeo3Decoder`], feeds each [`Packet`]'s bytes through
-//!   [`Indeo3Decoder::decode`], and maps the resulting
-//!   [`super::YuvFrame`] (full-luma-resolution Y / U / V, `spec/07
-//!   §5.5` box-upsampled chroma) into an [`oxideav_core::VideoFrame`]
-//!   in [`PixelFormat::Yuv444P`] plane order (Y, U, V).
+//!   [`Indeo3PictureDecoder`], feeds each [`Packet`]'s bytes through
+//!   [`Indeo3PictureDecoder::decode`], and maps the resulting
+//!   [`DecodedPicture`] (luma plus `spec/07 §5.5` box-upsampled chroma)
+//!   into an [`oxideav_core::VideoFrame`] in [`PixelFormat::Yuv444P`]
+//!   plane order (Y, U, V).
 //! * [`make_decoder`] is the [`oxideav_core::registry::codec::DecoderFactory`]
 //!   the registry calls; [`register_codecs`] / [`register`] install the
 //!   codec (id + caps + factory + FourCC tags) into a
@@ -39,10 +39,10 @@
 //! ## Output pixel format
 //!
 //! Indeo 3 is natively 4:1:0 (YVU9): luma at full resolution, chroma
-//! subsampled 4×4. The crate's [`super::upsample_frame`] already
-//! box-upsamples (`spec/07 §5.5`) both chroma planes to full luma
-//! resolution, producing the three-plane surface the `spec/07 §5.4`
-//! YUV→RGB matrix consumes. That surface is exactly
+//! subsampled 4×4. [`DecodedPicture::to_yuv444_planes`] box-upsamples
+//! (`spec/07 §5.5`) both chroma planes to full luma resolution,
+//! producing the three-plane surface the `spec/07 §5.4` YUV→RGB matrix
+//! consumes. That surface is exactly
 //! [`PixelFormat::Yuv444P`]-shaped (three equal-size 8-bit planes), so
 //! the registry decoder emits `Yuv444P` rather than inventing a 4:1:0
 //! format the framework does not carry. The chroma is genuine 4:1:0
@@ -51,13 +51,12 @@
 //!
 //! ## Scope
 //!
-//! This is a thin, table-free bridge — it adds no new decode behaviour.
-//! It reconstructs exactly what [`Indeo3Decoder`] reconstructs (the
-//! genuinely-unblocked VQ_NULL subset; VQ_DATA / INTER regions stay
-//! black pending the `spec/04 §7.1` codebook-bank docs-gap), and merely
-//! re-shapes that output into the framework's `VideoFrame`. A NULL /
-//! repeat frame re-emits the previous frame (`spec/07 §6.3`), exactly
-//! as the underlying decoder does.
+//! This is a thin bridge — it adds no decode behaviour of its own. Every
+//! picture is what [`Indeo3PictureDecoder`] reconstructs (both staged
+//! `IV32` corpora decode pixel-exact on every frame), re-shaped into
+//! the framework's `VideoFrame`. A NULL / repeat frame re-emits the
+//! previous frame (`spec/07 §6.3`), exactly as the underlying decoder
+//! does.
 
 use oxideav_core::{
     CodecCapabilities, CodecId, CodecInfo, CodecParameters, CodecRegistry, CodecTag, Decoder,
@@ -65,10 +64,8 @@ use oxideav_core::{
     VideoPlane,
 };
 
-use super::decoder::{DecoderError, Indeo3Decoder};
-use super::frame_yuv::YuvFrame;
 use super::header::{FRAME_HEADER_LEN, MAGIC_FRMH};
-use super::{PLANE_IDX_U, PLANE_IDX_V, PLANE_IDX_Y};
+use super::picture_decoder::{DecodedPicture, Indeo3PictureDecoder, PictureDecodeError};
 
 /// The public codec id this crate registers (`"indeo3"`).
 pub const CODEC_ID_STR: &str = "indeo3";
@@ -113,16 +110,16 @@ pub fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {
 }
 
 /// An [`oxideav_core`] [`Decoder`] backed by the in-crate stateful
-/// [`Indeo3Decoder`].
+/// [`Indeo3PictureDecoder`].
 ///
 /// Holds the multi-frame session (so NULL / repeat frames re-emit the
 /// previous output per `spec/07 §6.3`) and a single-packet pending
 /// slot. `send_packet` stashes the packet; `receive_frame` decodes it,
-/// shapes the [`YuvFrame`] into a [`PixelFormat::Yuv444P`]
+/// shapes the [`DecodedPicture`] into a [`PixelFormat::Yuv444P`]
 /// [`VideoFrame`], and returns it.
 pub struct Indeo3RegistryDecoder {
     codec_id: CodecId,
-    inner: Indeo3Decoder,
+    inner: Indeo3PictureDecoder,
     pending: Option<Packet>,
     eof: bool,
 }
@@ -132,7 +129,7 @@ impl Indeo3RegistryDecoder {
     pub fn new(codec_id: CodecId) -> Self {
         Indeo3RegistryDecoder {
             codec_id,
-            inner: Indeo3Decoder::new(),
+            inner: Indeo3PictureDecoder::new(),
             pending: None,
             eof: false,
         }
@@ -146,34 +143,23 @@ impl Indeo3RegistryDecoder {
 /// surfaced as [`Error::invalid`] with the underlying message, since
 /// they all mean "this packet's bytes are not a decodable Indeo 3
 /// frame in this stream position".
-fn map_decoder_error(e: DecoderError) -> Error {
+fn map_decoder_error(e: PictureDecodeError) -> Error {
     Error::invalid(format!("indeo3: {e}"))
 }
 
-/// Shape an Indeo 3 [`YuvFrame`] (full-luma-resolution Y / V / U) into
-/// an [`oxideav_core`] [`VideoFrame`] in [`PixelFormat::Yuv444P`] plane
-/// order (Y, U, V).
-///
-/// The [`YuvFrame`] carries plane index `0 = Y`, `1 = V`, `2 = U`
-/// (`spec/02 §`). `Yuv444P` is planar (Y, U, V), so this picks the Y,
-/// then U, then V planes in that order. Each plane is full luma
-/// resolution with stride == width.
-///
-/// A frame with no present planes (a NULL / all-skipped frame) maps to
-/// an empty-plane [`VideoFrame`] — the caller sees a frame with the
-/// `pts` set but zero planes, mirroring the underlying decoder's
-/// "nothing reconstructed" outcome.
-fn yuv_to_video_frame(yuv: &YuvFrame, pts: Option<i64>) -> VideoFrame {
-    let mut planes = Vec::with_capacity(3);
-    // Yuv444P plane order is Y, U, V — pull each by its source index.
-    for plane_idx in [PLANE_IDX_Y, PLANE_IDX_U, PLANE_IDX_V] {
-        if let Some(p) = yuv.plane(plane_idx) {
-            planes.push(VideoPlane {
-                stride: p.width as usize,
-                data: p.pixels.clone(),
-            });
-        }
-    }
+/// Shape a [`DecodedPicture`] into an [`oxideav_core`] [`VideoFrame`] in
+/// [`PixelFormat::Yuv444P`] plane order (Y, U, V): luma as decoded,
+/// each chroma plane box-replicated 4×4 to luma resolution
+/// (`spec/07 §5.5`), every plane with stride == width.
+fn picture_to_video_frame(pic: &DecodedPicture, pts: Option<i64>) -> VideoFrame {
+    let planes = pic
+        .to_yuv444_planes()
+        .into_iter()
+        .map(|data| VideoPlane {
+            stride: pic.width as usize,
+            data,
+        })
+        .collect();
     VideoFrame { pts, planes }
 }
 
@@ -184,22 +170,20 @@ fn yuv_to_video_frame(yuv: &YuvFrame, pts: Option<i64>) -> VideoFrame {
 /// This is the direct-API counterpart to the registry path, mirroring
 /// the convention sibling codec crates follow (a free `decode_*`
 /// function alongside the registry factory). It builds a fresh
-/// [`Indeo3Decoder`], decodes `data` as the **first** frame, and shapes
+/// [`Indeo3PictureDecoder`], decodes `data` as the **first** frame, and shapes
 /// the output. Because the decoder starts empty, `data` must be an INTRA
 /// frame (the `spec/01 §3.2` first-frame gate) — a non-INTRA first frame
 /// returns [`Error::invalid`]. Callers decoding a *sequence* (where
 /// inter-frame state, NULL-repeat, and the reference-bank ping-pong
-/// matter) want the stateful [`Indeo3RegistryDecoder`] / [`Indeo3Decoder`]
-/// instead; this convenience is for single-frame / first-frame decode.
+/// matter) want the stateful [`Indeo3RegistryDecoder`] /
+/// [`Indeo3PictureDecoder`] instead; this convenience is for
+/// single-frame / first-frame decode.
 ///
 /// `pts` is carried straight onto the returned frame.
 pub fn decode_video_frame(data: &[u8], pts: Option<i64>) -> Result<VideoFrame> {
-    let mut decoder = Indeo3Decoder::new();
+    let mut decoder = Indeo3PictureDecoder::new();
     let out = decoder.decode(data).map_err(map_decoder_error)?;
-    let yuv = out
-        .to_yuv_frame()
-        .map_err(|e| Error::invalid(format!("indeo3: yuv assembly: {e}")))?;
-    Ok(yuv_to_video_frame(&yuv, pts))
+    Ok(picture_to_video_frame(&out, pts))
 }
 
 impl Decoder for Indeo3RegistryDecoder {
@@ -226,10 +210,7 @@ impl Decoder for Indeo3RegistryDecoder {
             };
         };
         let out = self.inner.decode(&pkt.data).map_err(map_decoder_error)?;
-        let yuv = out
-            .to_yuv_frame()
-            .map_err(|e| Error::invalid(format!("indeo3: yuv assembly: {e}")))?;
-        Ok(Frame::Video(yuv_to_video_frame(&yuv, pkt.pts)))
+        Ok(Frame::Video(picture_to_video_frame(&out, pkt.pts)))
     }
 
     fn flush(&mut self) -> Result<()> {
@@ -244,7 +225,7 @@ impl Decoder for Indeo3RegistryDecoder {
         // first-frame / seek INTRA gate, spec/01 §3.2 / §4).
         self.pending = None;
         self.eof = false;
-        self.inner = Indeo3Decoder::new();
+        self.inner = Indeo3PictureDecoder::new();
         Ok(())
     }
 }
@@ -572,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn skipped_intra_decodes_to_empty_video_frame() {
+    fn skipped_intra_decodes_to_zero_video_frame() {
         // An all-planes-skipped INTRA frame reconstructs to no planes;
         // the registry decoder maps that to a Video frame with zero
         // planes and the packet's pts.
@@ -582,7 +563,8 @@ mod tests {
         let frame = dec.receive_frame().expect("receive");
         match frame {
             Frame::Video(v) => {
-                assert!(v.planes.is_empty());
+                assert_eq!(v.planes.len(), 3);
+                assert!(v.planes[0].data.iter().all(|&b| b == 0));
                 assert_eq!(v.pts, Some(0));
             }
             other => panic!("expected video frame, got {other:?}"),
@@ -608,9 +590,11 @@ mod tests {
     #[test]
     fn decode_video_frame_one_shot_intra() {
         // An all-planes-skipped INTRA frame decodes through the one-shot
-        // path to an empty-plane Yuv444P VideoFrame with the supplied pts.
+        // path to a Yuv444P VideoFrame whose planes keep the untouched
+        // (zero) bank content, with the supplied pts.
         let vf = decode_video_frame(&skipped_intra_frame(0), Some(42)).expect("one-shot decode");
-        assert!(vf.planes.is_empty());
+        assert_eq!(vf.planes.len(), 3);
+        assert!(vf.planes[0].data.iter().all(|&b| b == 0));
         assert_eq!(vf.pts, Some(42));
     }
 
@@ -628,30 +612,30 @@ mod tests {
     }
 
     #[test]
-    fn yuv_to_video_frame_orders_planes_y_u_v() {
-        use super::super::frame_yuv::{YuvFrame, YuvPlane};
-        // Build a 2x2 YuvFrame with distinct constant planes so we can
-        // assert the Y, U, V output order (source idx 0=Y, 1=V, 2=U).
-        let mk = |idx: usize, val: u8| YuvPlane {
-            plane_idx: idx,
-            width: 2,
-            height: 2,
-            pixels: vec![val; 4],
+    fn picture_to_video_frame_orders_planes_y_u_v() {
+        // A 4x4 picture with 1x1 chroma: plane 0 = Y, 1 = U (box-replicated),
+        // 2 = V, every plane full luma resolution.
+        let pic = DecodedPicture {
+            width: 4,
+            height: 4,
+            chroma_width: 1,
+            chroma_height: 1,
+            luma: vec![0x10; 16],
+            chroma_v: vec![0x30],
+            chroma_u: vec![0x20],
+            repeated_previous: false,
+            admission: super::super::frame_session::DecodeSession::new()
+                .admit(&skipped_intra_frame(0))
+                .unwrap(),
+            stats: None,
         };
-        let yuv = YuvFrame {
-            planes: vec![
-                mk(PLANE_IDX_Y, 0x10),
-                mk(PLANE_IDX_V, 0x30),
-                mk(PLANE_IDX_U, 0x20),
-            ],
-        };
-        let vf = yuv_to_video_frame(&yuv, Some(7));
+        let vf = picture_to_video_frame(&pic, Some(7));
         assert_eq!(vf.pts, Some(7));
         assert_eq!(vf.planes.len(), 3);
-        // Plane 0 = Y (0x10), plane 1 = U (0x20), plane 2 = V (0x30).
-        assert_eq!(vf.planes[0].data[0], 0x10);
-        assert_eq!(vf.planes[1].data[0], 0x20);
-        assert_eq!(vf.planes[2].data[0], 0x30);
-        assert_eq!(vf.planes[0].stride, 2);
+        assert!(vf.planes[0].data.iter().all(|&b| b == 0x10));
+        assert!(vf.planes[1].data.iter().all(|&b| b == 0x20));
+        assert!(vf.planes[2].data.iter().all(|&b| b == 0x30));
+        assert_eq!(vf.planes[0].stride, 4);
+        assert_eq!(vf.planes[1].data.len(), 16);
     }
 }

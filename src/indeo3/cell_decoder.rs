@@ -391,7 +391,12 @@ impl<'a, 'b> Walker<'a, 'b> {
                     let s1 = self.r.bit()?;
                     if s1 == 0 {
                         self.stats.copy_upper += 1;
-                        self.copy_upper(&cell);
+                        // An INTER cell keeps its motion-compensated
+                        // content (fixture-arbitrated r459: every
+                        // chroma plane of the inter frames).
+                        if mv.is_none() {
+                            self.copy_upper(&cell);
+                        }
                     } else {
                         self.stats.skipped += 1;
                     }
@@ -506,14 +511,12 @@ impl<'a, 'b> Walker<'a, 'b> {
         // the other table.
         let (base, rows, lut, band) = if lo & 8 != 0 {
             match hi {
-                0x0 | 0x3 | 0xA => {
-                    let b = lo & 7;
-                    match hi {
-                        0x0 => (CodeBase::Staging, 1u8, true, b),
-                        0x3 => (CodeBase::Staging, 2, true, b),
-                        _ => (CodeBase::Staging, 3, true, b),
-                    }
-                }
+                // The LUT rewrite uses bank `lo & 7`; the codebook band
+                // keeps the full nibble (staging block 8.. = the even
+                // seed sets, fixture-arbitrated r459).
+                0x0 => (CodeBase::Staging, 1u8, true, lo),
+                0x3 => (CodeBase::Staging, 2, true, lo),
+                0xA => (CodeBase::Staging, 3, true, lo),
                 0x1 => (CodeBase::Arena, 1, false, lo),
                 0x4 => (CodeBase::Arena, 2, false, lo),
                 0xB => (CodeBase::Staging, 2, false, lo),
@@ -544,7 +547,7 @@ impl<'a, 'b> Walker<'a, 'b> {
         };
         self.stats.families[family as usize] += 1;
         if lut {
-            self.lut_rewrite(cell, band);
+            self.lut_rewrite(cell, band & 7);
         }
 
         let (primary, secondary) = self.tables(base, band)?;
@@ -789,9 +792,27 @@ impl<'a, 'b> Walker<'a, 'b> {
                     0x00..=0xF7 => {
                         let table = if pos % 2 == 0 { secondary } else { primary };
                         let prev_row = y0 + 2 * i64::from(pos) - 1;
-                        let pred = self.pred_dword_doubled(cell.strip, prev_row, x0, own_predictor);
-                        let v = self.literal(table, b, pred)?;
-                        self.store_doubled(cell.strip, y0 + 2 * i64::from(pos), x0, v);
+                        if own_predictor {
+                            // Family F: the doubled deltas add to the
+                            // motion-compensated content of both rows
+                            // of the pair, pixel by pixel.
+                            let row = y0 + 2 * i64::from(pos);
+                            let pred = self.pred_dword_doubled(cell.strip, row - 1, x0, true);
+                            let v = self.literal(table, b, pred)?;
+                            let vb = v.to_le_bytes();
+                            let pb = pred.to_le_bytes();
+                            let d = [
+                                vb[0].wrapping_sub(pb[0]),
+                                vb[1].wrapping_sub(pb[1]),
+                                vb[2].wrapping_sub(pb[2]),
+                                vb[3].wrapping_sub(pb[3]),
+                            ];
+                            self.add_doubled_deltas(cell.strip, row, x0, d);
+                        } else {
+                            let pred = self.pred_dword_doubled(cell.strip, prev_row, x0, false);
+                            let v = self.literal(table, b, pred)?;
+                            self.store_doubled(cell.strip, y0 + 2 * i64::from(pos), x0, v);
+                        }
                         pos += 1;
                     }
                     0xF9 | 0xFA => {
@@ -932,7 +953,24 @@ impl<'a, 'b> Walker<'a, 'b> {
         }
     }
 
+    /// Family F: add per-pixel deltas `(d0, d0, d1, d1, d2, d2, d3, d3)`
+    /// to the two rows of a pair over their own (motion-compensated)
+    /// content.
+    fn add_doubled_deltas(&mut self, strip: usize, y: i64, x: u32, d: [u8; 4]) {
+        let s = &mut self.bufs.strips[strip];
+        for row in [y, y + 1] {
+            let i = PlaneBuffers::idx(row, x);
+            for j in 0..8 {
+                s[i + j] = s[i + j].wrapping_add(d[j / 2]) & 0x7f;
+            }
+        }
+    }
+
     fn fill_doubled(&mut self, strip: usize, y0: i64, x0: u32, from: u8, to: u8, own: bool) {
+        if own {
+            // Predictor fills keep the motion-compensated content.
+            return;
+        }
         for p in from..to {
             let y = y0 + 2 * i64::from(p);
             let pred = self.pred_dword_doubled(strip, y - 1, x0, own);
@@ -955,11 +993,10 @@ fn apply_dyad(pred: u16, dyad: u16) -> u16 {
     if a < 0 {
         b += 1;
     }
-    let round = |d: i32| d - d.signum() * (d & 1);
     let p0 = i32::from(pred & 0xff);
     let p1 = i32::from(pred >> 8);
-    let o0 = (p0 + round(a)) & 0xff;
-    let o1 = (p1 + round(b)) & 0xff;
+    let o0 = (p0 + a) & 0xff;
+    let o1 = (p1 + b) & 0xff;
     ((o1 << 8) | o0) as u16
 }
 
