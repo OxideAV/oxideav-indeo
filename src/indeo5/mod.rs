@@ -49,6 +49,7 @@ mod pack;
 pub mod pic_size;
 mod picture;
 mod planes;
+mod quant;
 mod refbuf;
 pub mod registry;
 mod rv_table;
@@ -158,6 +159,12 @@ pub use planes::PlaneRole;
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use planes::{num_bands, FramePlanes, OUTPUT_ITERATION_ORDER, PLANE_RECORD_ORDER};
+pub use quant::{
+    dequant_level, quant_group, quant_matrix, recon_value, GROUP_4X4, QUANT_BASE, QUANT_GROUPS,
+    QUANT_LEVELS, QUANT_SCALE,
+};
+#[doc(hidden)]
+pub use quant::{BandQuant, OBSERVED_CLASS};
 pub use refbuf::RefSlots;
 pub use registry::{
     codec_id_for_fourcc, decode_video_frame, make_decoder, probe, register, register_codecs,
