@@ -641,18 +641,24 @@ mod tests {
     #[test]
     fn error_display_cites_spec() {
         assert!(CopyUpperError::ZeroWidth.to_string().contains("§1.4"));
-        assert!(CopyUpperError::InvalidRowCount { supplied: 9 }
+        assert!(
+            CopyUpperError::InvalidRowCount { supplied: 9 }
+                .to_string()
+                .contains("§1.4")
+        );
+        assert!(
+            CopyUpperError::UpperNeighbourAboveBuffer
+                .to_string()
+                .contains("§1.4")
+        );
+        assert!(
+            CopyUpperError::OutOfBounds {
+                end: 10,
+                buffer_len: 4
+            }
             .to_string()
-            .contains("§1.4"));
-        assert!(CopyUpperError::UpperNeighbourAboveBuffer
-            .to_string()
-            .contains("§1.4"));
-        assert!(CopyUpperError::OutOfBounds {
-            end: 10,
-            buffer_len: 4
-        }
-        .to_string()
-        .contains("§1.4"));
+            .contains("§1.4")
+        );
     }
 
     #[test]
@@ -796,14 +802,18 @@ mod tests {
     #[test]
     fn mark_edge_error_display_cites_spec() {
         assert!(MarkEdgeError::ZeroWidth.to_string().contains("§4"));
-        assert!(MarkEdgeError::InvalidRowCount { supplied: 9 }
+        assert!(
+            MarkEdgeError::InvalidRowCount { supplied: 9 }
+                .to_string()
+                .contains("§4")
+        );
+        assert!(
+            MarkEdgeError::OutOfBounds {
+                end: 10,
+                buffer_len: 4
+            }
             .to_string()
-            .contains("§4"));
-        assert!(MarkEdgeError::OutOfBounds {
-            end: 10,
-            buffer_len: 4
-        }
-        .to_string()
-        .contains("§4"));
+            .contains("§4")
+        );
     }
 }

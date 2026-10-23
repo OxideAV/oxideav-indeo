@@ -64,8 +64,8 @@
 //! * It does not parse the header whose fields it stores (owned by
 //!   [`super::header`], spec/01).
 
-use super::header::{FrameFlags, FrameHeader};
 use super::Bank;
+use super::header::{FrameFlags, FrameHeader};
 
 /// Spec/07 §6.1 — the 16-bit saved-`frame_flags` slot offset inside
 /// the outer instance state (`[outer_instance + 0x434]`).

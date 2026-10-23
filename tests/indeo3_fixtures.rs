@@ -112,7 +112,9 @@ fn first_frame_stream_anchors_are_byte_exact() {
     assert_eq!(header.bitstream.cb_offset, 0);
     assert_eq!(
         header.bitstream.alt_quant,
-        [2, 20, 38, 56, 74, 92, 110, 127, 130, 148, 166, 184, 202, 220, 238, 255]
+        [
+            2, 20, 38, 56, 74, 92, 110, 127, 130, 148, 166, 184, 202, 220, 238, 255
+        ]
     );
     // The overlay accepts the frame's selection over the built staging
     // image (spec/04 §6.1 over §5.2).

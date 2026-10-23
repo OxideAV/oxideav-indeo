@@ -278,7 +278,7 @@ mod tests {
             }
         }
         fn align(&mut self) {
-            while self.bits.len() % 8 != 0 {
+            while !self.bits.len().is_multiple_of(8) {
                 self.bits.push(0);
             }
         }
@@ -405,7 +405,7 @@ mod tests {
         w.put(2, 8); // value2
         w.put(3, 3); // value3
         w.put(0, 4); // value4 (gop_ext_flg clear)
-                     // §2.1 align happens in parser. Emit alignment padding to match.
+        // §2.1 align happens in parser. Emit alignment padding to match.
         w.align();
         w.put(0x00, 8); // frame_flags
         w.put(0, 3); // value5

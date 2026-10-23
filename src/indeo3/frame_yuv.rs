@@ -46,8 +46,8 @@
 //! frame.
 
 use super::frame::DecodedFrame;
-use super::frame_assemble::{assemble_output, AssembleError, OutputFrame, OutputPlane};
-use super::frame_output::{upsample_chroma_4x4, ChromaUpsampleError, CHROMA_UPSAMPLE_FACTOR};
+use super::frame_assemble::{AssembleError, OutputFrame, OutputPlane, assemble_output};
+use super::frame_output::{CHROMA_UPSAMPLE_FACTOR, ChromaUpsampleError, upsample_chroma_4x4};
 use super::picture_layer::{PLANE_IDX_U, PLANE_IDX_V, PLANE_IDX_Y};
 
 /// One full-resolution plane of a [`YuvFrame`]: a tightly-packed
@@ -326,7 +326,7 @@ mod tests {
         let v = yuv.chroma_v().expect("V present");
         assert_eq!(v.width, 8); // 2 * 4
         assert_eq!(v.height, 4); // 1 * 4
-                                 // First 4 columns of every row are 0x05; last 4 are 0x0a.
+        // First 4 columns of every row are 0x05; last 4 are 0x0a.
         for y in 0..4 {
             let row = v.row(y).expect("row");
             assert_eq!(&row[0..4], &[0x05; 4]);

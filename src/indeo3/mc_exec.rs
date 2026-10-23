@@ -82,8 +82,8 @@ use super::cell_subarray::{
     PER_CELL_EDGE_ROW_STRIDE,
 };
 use super::mc_kernel::{
-    mc_both_half_pel_quad, mc_horiz_half_pel_pair, mc_vert_half_pel_pair, McKernelGeometry,
-    MC_BAND_ROWS, MC_BYTES_PER_DWORD, MC_ROW_STRIDE,
+    MC_BAND_ROWS, MC_BYTES_PER_DWORD, MC_ROW_STRIDE, McKernelGeometry, mc_both_half_pel_quad,
+    mc_horiz_half_pel_pair, mc_vert_half_pel_pair,
 };
 use super::mc_packed::{McDispatchMode, PackedMv};
 

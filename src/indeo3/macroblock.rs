@@ -991,7 +991,7 @@ mod tests {
         // INTER (11) but no leaf byte follows.
         let bits = codes_to_bits(&[0b11]);
         let buf = pack_bits(&bits); // one byte, tree bits + pad, no leaf byte
-                                    // The leaf-byte read happens at byte 1, which doesn't exist.
+        // The leaf-byte read happens at byte 1, which doesn't exist.
         let prelude = prelude_at(0);
         let err = decode_plane_tree(&buf, &prelude, 8, 8, false, FrameFlags(0)).unwrap_err();
         assert_eq!(err, MacroblockError::LeafByteTruncated { offset: 1 });

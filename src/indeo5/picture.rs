@@ -172,7 +172,7 @@ mod tests {
             }
         }
         fn align(&mut self) {
-            while self.bits.len() % 8 != 0 {
+            while !self.bits.len().is_multiple_of(8) {
                 self.bits.push(0);
             }
         }
@@ -226,13 +226,13 @@ mod tests {
         b.put(5, 4); // pic_size_id (CIF)
         b.put(0b000000, 6); // luma band_info
         b.put(0b000000, 6); // chroma band_info
-                            // --- GOP trailer (§1.9) ---
+        // --- GOP trailer (§1.9) ---
         b.put(0, 8); // value1
         b.put(0, 8); // value2
         b.put(0, 3); // value3
         b.put(0, 4); // value4 (no gop_ext)
         b.align(); // §2.1 frame-header align
-                   // --- frame header ---
+        // --- frame header ---
         b.put(0x00, 8); // frame_flags
         b.put(0, 3); // value5
         let full = b.finish();

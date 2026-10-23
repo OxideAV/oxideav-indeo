@@ -281,7 +281,7 @@ impl McPlaneRole {
     /// width counters in the codec-init population).
     pub const fn chroma_cell_size(luma_width: u32, luma_height: u32) -> Option<(u32, u32)> {
         let r = LUMA_PIXEL_PER_CHROMA_PIXEL;
-        if luma_width % r != 0 || luma_height % r != 0 {
+        if !luma_width.is_multiple_of(r) || !luma_height.is_multiple_of(r) {
             return None;
         }
         Some((luma_width / r, luma_height / r))

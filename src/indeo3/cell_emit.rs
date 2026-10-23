@@ -60,8 +60,8 @@
 //!   assembly (owned by [`super::assemble_plane_if09`]).
 
 use super::reconstruct::{
-    emit_variant, pack_predictor, DyadOutcome, VariantEmission, PREDICTOR_ROW_STRIDE,
-    TOP_OF_STRIP_PREDICTOR,
+    DyadOutcome, PREDICTOR_ROW_STRIDE, TOP_OF_STRIP_PREDICTOR, VariantEmission, emit_variant,
+    pack_predictor,
 };
 use super::vq::CellVariant;
 
@@ -408,8 +408,8 @@ mod tests {
         // top so the row-0 predictor is in-buffer (we seed it).
         let mut buf = vec![0u8; STRIDE * 6];
         let top = STRIDE; // cell top-left at row 1
-                          // Seed the row-above-the-cell predictor (row 0) with a known
-                          // pattern.
+        // Seed the row-above-the-cell predictor (row 0) with a known
+        // pattern.
         let seed = [0x10u8, 0x12, 0x14, 0x16];
         buf[0..4].copy_from_slice(&seed);
 

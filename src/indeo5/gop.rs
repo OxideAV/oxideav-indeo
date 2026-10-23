@@ -437,7 +437,7 @@ mod tests {
         fn finish(mut self) -> Vec<u8> {
             // Pad to a multiple of 8, then ensure >= 4 bytes for the
             // reader's DWORD prefetch.
-            while self.bits.len() % 8 != 0 {
+            while !self.bits.len().is_multiple_of(8) {
                 self.bits.push(0);
             }
             let mut out = Vec::new();

@@ -46,10 +46,10 @@
 //! cleanly.
 
 use super::header::{FrameFlags, FrameHeader, HeaderError};
-use super::macroblock::{decode_plane_tree, Cell, CellTree, MacroblockError, VqLeaf};
+use super::macroblock::{Cell, CellTree, MacroblockError, VqLeaf, decode_plane_tree};
 use super::picture_layer::{
-    PictureLayer, PictureLayerError, PlaneDecodePlan, PlanePresence, PLANE_COUNT, PLANE_IDX_U,
-    PLANE_IDX_V, PLANE_IDX_Y,
+    PLANE_COUNT, PLANE_IDX_U, PLANE_IDX_V, PLANE_IDX_Y, PictureLayer, PictureLayerError,
+    PlaneDecodePlan, PlanePresence,
 };
 
 /// Spec/02 §8 — the plane decode order (U, V, Y) the driver walks.
@@ -444,14 +444,14 @@ mod tests {
         // Plane offset 0 (= bsh base) is the plane base. num_vectors
         // = 0 (INTRA plane, 4 bytes), then the bitstream payload.
         let bsh = FRAME_HEADER_LEN; // 0x10
-                                    // prelude: num_vectors (u32 = 0) at plane_base, then payload.
+        // prelude: num_vectors (u32 = 0) at plane_base, then payload.
         let mut payload = vec![0u8; 8]; // 4 bytes num_vectors + payload bytes
-                                        // num_vectors = 0 (already zero).
-                                        // payload bytes drive the binary-tree walk; the exact
-                                        // bytes matter only insofar as they decode to *some* valid
-                                        // tree. A whole 4x4 plane that is a single VQ_DATA leaf:
-                                        // we lean on the macroblock walker to accept these bytes
-                                        // or surface a deterministic error.
+        // num_vectors = 0 (already zero).
+        // payload bytes drive the binary-tree walk; the exact
+        // bytes matter only insofar as they decode to *some* valid
+        // tree. A whole 4x4 plane that is a single VQ_DATA leaf:
+        // we lean on the macroblock walker to accept these bytes
+        // or surface a deterministic error.
         for (i, b) in payload.iter_mut().enumerate().skip(4) {
             *b = (i as u8).wrapping_mul(0x11);
         }

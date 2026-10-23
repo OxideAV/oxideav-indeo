@@ -58,8 +58,8 @@
 //! reconstruction stage the §6.2 handoff targets (deferred to
 //! `spec/07-output-reconstruction.md`).
 
-use super::strip_context::{PlaneDecodeStatus, PLANE_DECODE_STATUS_MALFORMED};
 use super::PLANE_COUNT;
+use super::strip_context::{PLANE_DECODE_STATUS_MALFORMED, PlaneDecodeStatus};
 
 /// Spec/02 §8 — the per-frame plane-iteration order, a count-down
 /// over `plane_idx ∈ {2, 1, 0}` (U, then V, then Y).

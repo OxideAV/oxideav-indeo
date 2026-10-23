@@ -27,11 +27,12 @@
 //! pixels; the motion-compensated predictor copy (skip-inherited and
 //! explicitly-decoded MVs over the band-coefficient layer) is real.
 
+use super::ChecksumStatus;
 use super::decode::{
-    decode_payload, output_format, reconstruction_checksums, BandReconstruction, DecodeError,
-    DecodeFrontier, DecodeStats,
+    BandReconstruction, DecodeError, DecodeFrontier, DecodeStats, decode_payload, output_format,
+    reconstruction_checksums,
 };
-use super::finalise::{reference_rotation, ReferenceRotation};
+use super::finalise::{ReferenceRotation, reference_rotation};
 use super::format::OutputFormat;
 use super::gop::GopHeader;
 use super::header::FrameType;
@@ -39,8 +40,7 @@ use super::pack::HostBuffer;
 use super::picture::{PictureError, PictureHeader};
 use super::refbuf::RefSlots;
 use super::wavelet::Band;
-use super::ChecksumStatus;
-use super::{assemble_frame, AssembleError};
+use super::{AssembleError, assemble_frame};
 
 /// Errors raised by the multi-frame session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -299,7 +299,7 @@ mod tests {
             }
         }
         fn align(&mut self) {
-            while self.bits.len() % 8 != 0 {
+            while !self.bits.len().is_multiple_of(8) {
                 self.bits.push(0);
             }
         }
@@ -502,7 +502,7 @@ mod tests {
         w.put(0, 1); // tile value24
         w.put(0, 1); // value25 -> implicit
         w.align(); // MB-header phase starts byte-aligned (r459)
-                   // MB-header phase: MBs 0..254 skipped.
+        // MB-header phase: MBs 0..254 skipped.
         for _ in 0..255 {
             w.put(1, 1);
         }

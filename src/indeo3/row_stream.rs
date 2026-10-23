@@ -168,7 +168,7 @@ pub fn decode_cell_rows(
     width: usize,
     coded_rows: usize,
 ) -> Result<CellRowsRun, RowStreamError> {
-    if width == 0 || width % 4 != 0 || boundary.len() != width || coded_rows == 0 {
+    if width == 0 || !width.is_multiple_of(4) || boundary.len() != width || coded_rows == 0 {
         return Err(RowStreamError::BadGeometry);
     }
     let mut rows: Vec<Row> = Vec::with_capacity(coded_rows);
@@ -259,7 +259,7 @@ pub fn decode_cell_rows(
                         }
                         Some(RowDeltaOutcome::NeedsContinuation)
                         | Some(RowDeltaOutcome::RangeFault) => {
-                            return Err(RowStreamError::RangeFault)
+                            return Err(RowStreamError::RangeFault);
                         }
                         None => return Err(RowStreamError::BadBlock),
                     }

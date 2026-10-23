@@ -63,8 +63,8 @@
 //!   outcome with the [`super::CodebookEntry`] (round 4) or the
 //!   [`super::VqNullRuntime`] (round 4) it already decoded.
 
-use super::vq::{ARENA_BAND_LEN, ARENA_HALF_LEN};
 use super::PREDICTOR_ROW_STRIDE;
+use super::vq::{ARENA_BAND_LEN, ARENA_HALF_LEN};
 
 // ---- spec/04 §1.1 (cell-geometry bank layout) -----------------------
 

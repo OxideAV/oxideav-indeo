@@ -42,7 +42,7 @@
 //! an actionable reconstruction roadmap without guessing any gated
 //! value.
 
-use super::cell_null::{copy_upper_cell, CopyUpperError, CopyUpperGeometry, COPY_UPPER_ROW_COUNT};
+use super::cell_null::{COPY_UPPER_ROW_COUNT, CopyUpperError, CopyUpperGeometry, copy_upper_cell};
 use super::frame::DecodedPlane;
 use super::macroblock::{Cell, CellTree, VqLeaf, VqNull};
 use super::reconstruct::PREDICTOR_ROW_STRIDE;

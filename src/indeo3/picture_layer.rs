@@ -41,11 +41,11 @@
 //! if they need it.
 
 use super::header::{
-    FrameFlags, FrameHeader, BITSTREAM_HEADER_LEN, FRAME_HEADER_LEN, NULL_FRAME_DATA_SIZE_BITS,
+    BITSTREAM_HEADER_LEN, FRAME_HEADER_LEN, FrameFlags, FrameHeader, NULL_FRAME_DATA_SIZE_BITS,
 };
 use super::strip_context::{
-    chroma_plane_height, chroma_plane_width, strip_slot_index, PerPlaneDecodeCall, PlaneRole,
-    StripGeometry, StripSlotDescriptor,
+    PerPlaneDecodeCall, PlaneRole, StripGeometry, StripSlotDescriptor, chroma_plane_height,
+    chroma_plane_width, strip_slot_index,
 };
 
 /// Spec/02 §2 — count of planes a codec frame carries.
@@ -1611,15 +1611,21 @@ mod tests {
         );
         let header = FrameHeader::parse(&buf).expect("null header parses");
         let layer = PictureLayer::parse(&header, &buf).expect("null layer parses");
-        assert!(layer
-            .plane_decode_plan(PLANE_IDX_Y, &header, false)
-            .is_none());
-        assert!(layer
-            .plane_decode_plan(PLANE_IDX_V, &header, false)
-            .is_none());
-        assert!(layer
-            .plane_decode_plan(PLANE_IDX_U, &header, false)
-            .is_none());
+        assert!(
+            layer
+                .plane_decode_plan(PLANE_IDX_Y, &header, false)
+                .is_none()
+        );
+        assert!(
+            layer
+                .plane_decode_plan(PLANE_IDX_V, &header, false)
+                .is_none()
+        );
+        assert!(
+            layer
+                .plane_decode_plan(PLANE_IDX_U, &header, false)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1635,17 +1641,23 @@ mod tests {
         let header = FrameHeader::parse(&buf).expect("header parses");
         let layer = PictureLayer::parse(&header, &buf).expect("layer parses");
         assert!(layer.y().is_present());
-        assert!(layer
-            .plane_decode_plan(PLANE_IDX_Y, &header, false)
-            .is_some());
+        assert!(
+            layer
+                .plane_decode_plan(PLANE_IDX_Y, &header, false)
+                .is_some()
+        );
         // V is skipped — no plan.
-        assert!(layer
-            .plane_decode_plan(PLANE_IDX_V, &header, false)
-            .is_none());
+        assert!(
+            layer
+                .plane_decode_plan(PLANE_IDX_V, &header, false)
+                .is_none()
+        );
         assert!(layer.u().is_present());
-        assert!(layer
-            .plane_decode_plan(PLANE_IDX_U, &header, false)
-            .is_some());
+        assert!(
+            layer
+                .plane_decode_plan(PLANE_IDX_U, &header, false)
+                .is_some()
+        );
     }
 
     #[test]
@@ -1662,12 +1674,16 @@ mod tests {
         );
         let header = FrameHeader::parse(&buf).expect("header parses");
         let layer = PictureLayer::parse(&header, &buf).expect("layer parses");
-        assert!(layer
-            .plane_decode_plan(PLANE_COUNT, &header, false)
-            .is_none());
-        assert!(layer
-            .plane_decode_plan(usize::MAX, &header, false)
-            .is_none());
+        assert!(
+            layer
+                .plane_decode_plan(PLANE_COUNT, &header, false)
+                .is_none()
+        );
+        assert!(
+            layer
+                .plane_decode_plan(usize::MAX, &header, false)
+                .is_none()
+        );
     }
 
     #[test]
@@ -2007,9 +2023,11 @@ mod tests {
         let header = FrameHeader::parse(&buf).expect("header");
         let layer = PictureLayer::parse(&header, &buf).expect("layer");
         // V is skipped → no byte map for V.
-        assert!(layer
-            .plane_byte_map(PLANE_IDX_V, &header, buf.len())
-            .is_none());
+        assert!(
+            layer
+                .plane_byte_map(PLANE_IDX_V, &header, buf.len())
+                .is_none()
+        );
         let y_map = layer
             .plane_byte_map(PLANE_IDX_Y, &header, buf.len())
             .expect("Y map");
@@ -2028,9 +2046,11 @@ mod tests {
         let header = FrameHeader::parse(&buf).expect("null header");
         let layer = PictureLayer::parse(&header, &buf).expect("null layer");
         for plane_idx in [PLANE_IDX_Y, PLANE_IDX_V, PLANE_IDX_U] {
-            assert!(layer
-                .plane_byte_map(plane_idx, &header, buf.len())
-                .is_none());
+            assert!(
+                layer
+                    .plane_byte_map(plane_idx, &header, buf.len())
+                    .is_none()
+            );
         }
         // Out-of-range plane index → None even on a present layer.
         let buf = build_frame_with_planes(
@@ -2045,12 +2065,16 @@ mod tests {
         );
         let header = FrameHeader::parse(&buf).expect("header");
         let layer = PictureLayer::parse(&header, &buf).expect("layer");
-        assert!(layer
-            .plane_byte_map(PLANE_COUNT, &header, buf.len())
-            .is_none());
-        assert!(layer
-            .plane_byte_map(usize::MAX, &header, buf.len())
-            .is_none());
+        assert!(
+            layer
+                .plane_byte_map(PLANE_COUNT, &header, buf.len())
+                .is_none()
+        );
+        assert!(
+            layer
+                .plane_byte_map(usize::MAX, &header, buf.len())
+                .is_none()
+        );
     }
 
     #[test]

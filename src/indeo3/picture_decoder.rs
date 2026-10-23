@@ -18,7 +18,7 @@
 //! Both staged `IV32` corpora decode pixel-exact through this path on
 //! every frame (`tests/indeo3_pixels.rs`).
 
-use super::cell_decoder::{decode_plane, CellDecodeError, PlaneBuffers, PlaneContext, PlaneStats};
+use super::cell_decoder::{CellDecodeError, PlaneBuffers, PlaneContext, PlaneStats, decode_plane};
 use super::codebook_seed::CodebookSeedArea;
 use super::frame_session::{AdmittedFrame, DecodeSession, FrameAdmission, SessionError};
 use super::header::{FrameHeader, HeaderError, MAX_HEIGHT, MAX_WIDTH, MIN_DIMENSION};
@@ -237,7 +237,7 @@ impl Indeo3PictureDecoder {
                 return Err(PictureDecodeError::SizeChanged {
                     expected: s,
                     found: (w, h),
-                })
+                });
             }
             Some(_) => {}
         }

@@ -50,11 +50,7 @@ pub const BAND_INDEX_FLAGS: [u32; 8] = [
 /// case a 5-row loop (the difference is the zero-padding rows the
 /// inverse transform requires for partial MBs).
 pub fn partial_mb_pad_rows(mb_size: u32, blk_size: u32) -> u32 {
-    if mb_size == blk_size {
-        2
-    } else {
-        5
-    }
+    if mb_size == blk_size { 2 } else { 5 }
 }
 
 /// Spec/03 §3.1 — blocks per macroblock: `(mb_size / blk_size)^2`

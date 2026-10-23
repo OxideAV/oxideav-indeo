@@ -99,7 +99,7 @@
 
 #[cfg(test)]
 use super::strip_context::STRIP_SLOT_STRIDE;
-use super::strip_context::{slot_field, PIXEL_BUFFER_ARENA_LEN, STRIP_SLOT_BASE_PTR_COUNT};
+use super::strip_context::{PIXEL_BUFFER_ARENA_LEN, STRIP_SLOT_BASE_PTR_COUNT, slot_field};
 
 // ---- §4.1 (arena geometry constants) -------------------------------
 

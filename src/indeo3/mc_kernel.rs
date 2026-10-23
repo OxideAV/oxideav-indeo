@@ -97,7 +97,7 @@
 //! half-pel, §5.3 destination/stride). RVAs cited in doc-comments
 //! refer to the binary identified in `spec/00 §2`.
 
-use super::reconstruct::{average_7bit, PREDICTOR_ROW_STRIDE};
+use super::reconstruct::{PREDICTOR_ROW_STRIDE, average_7bit};
 
 // ---- §5.1 / §5.3 row-stride and inner-loop shape constants ---------
 
@@ -240,10 +240,10 @@ impl McKernelGeometry {
         if height_px == 0 {
             return Err(McKernelGeometryError::ZeroHeight);
         }
-        if width_px % MC_COLUMN_GROUP_PIXELS != 0 {
+        if !width_px.is_multiple_of(MC_COLUMN_GROUP_PIXELS) {
             return Err(McKernelGeometryError::WidthNotMultipleOf4);
         }
-        if height_px % MC_BAND_ROWS != 0 {
+        if !height_px.is_multiple_of(MC_BAND_ROWS) {
             return Err(McKernelGeometryError::HeightNotMultipleOf4);
         }
         if width_px > MC_MAX_CELL_WIDTH_BYTES {

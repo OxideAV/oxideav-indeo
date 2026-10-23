@@ -365,15 +365,15 @@ pub const fn is_self_copy_degenerate(dst_slot: u32, src_slot: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::bank_select::{McBankAssignment, BANK_INVERSION_DELTA};
+    use super::super::bank_select::{BANK_INVERSION_DELTA, McBankAssignment};
     use super::super::header::FrameFlags;
     use super::super::mc_address::CellAddrRole;
     use super::super::picture_layer::{PLANE_COUNT, PLANE_IDX_U, PLANE_IDX_V, PLANE_IDX_Y};
     use super::{
-        is_self_copy_degenerate, DecoderStackArg, DispatcherScratch, SourcePlumbingPair,
         DECODER_ARG_DST_SLOT_OFFSET, DECODER_ARG_SRC_SLOT_OFFSET,
         DISPATCHER_SCRATCH_DST_DATA_OFFSET, DISPATCHER_SCRATCH_EXTRA_OFFSET_OFFSET,
-        DISPATCHER_SCRATCH_SRC_DATA_OFFSET, STRIP_CTX_ARRAY_ELEMENT_SHIFT,
+        DISPATCHER_SCRATCH_SRC_DATA_OFFSET, DecoderStackArg, DispatcherScratch,
+        STRIP_CTX_ARRAY_ELEMENT_SHIFT, SourcePlumbingPair, is_self_copy_degenerate,
     };
 
     // ---- decoder-frame arg offsets ----

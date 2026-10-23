@@ -8,7 +8,7 @@
 //! reference ping-pong, the own-content families B / F).
 
 use oxideav_core::{CodecId, Decoder, Frame, Packet, TimeBase};
-use oxideav_indeo::indeo3::{decode_video_frame, Indeo3PictureDecoder, Indeo3RegistryDecoder};
+use oxideav_indeo::indeo3::{Indeo3PictureDecoder, Indeo3RegistryDecoder, decode_video_frame};
 
 const INTRA_BIN: &[u8] = include_bytes!("data/iv32-160x120-all-intra/samples.bin");
 const INTRA_IDX: &str = include_str!("data/iv32-160x120-all-intra/samples-index.csv");

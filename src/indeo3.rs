@@ -310,97 +310,96 @@ mod strip_edge;
 mod vq;
 
 pub use bank_select::Bank;
-pub use cell_decoder::{decode_plane, CellDecodeError, PlaneBuffers, PlaneContext, PlaneStats};
+pub use cell_decoder::{CellDecodeError, PlaneBuffers, PlaneContext, PlaneStats, decode_plane};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
-pub use bank_select::{McBankAssignment, BANK_INVERSION_DELTA};
+pub use bank_select::{BANK_INVERSION_DELTA, McBankAssignment};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use cell_emit::{
-    emit_cell_chain, rows_per_source_row, CellEmitError, CellEmitGeometry, CellEmitStats,
-    DyadDelta, PIXELS_PER_DYAD_DWORD,
+    CellEmitError, CellEmitGeometry, CellEmitStats, DyadDelta, PIXELS_PER_DYAD_DWORD,
+    emit_cell_chain, rows_per_source_row,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use cell_geometry::{
-    cell_coords_from_dst_addr, cell_height_from_row_band_count, cell_width_from_column_group_count,
-    reverse_decompose, row_band_count_from_ch_register, CellCoords, CellRect, CellRectDecodeError,
-    CELL_PIXELS_PER_COLUMN_GROUP, CELL_PIXELS_PER_ROW_BAND,
+    CELL_PIXELS_PER_COLUMN_GROUP, CELL_PIXELS_PER_ROW_BAND, CellCoords, CellRect,
+    CellRectDecodeError, cell_coords_from_dst_addr, cell_height_from_row_band_count,
+    cell_width_from_column_group_count, reverse_decompose, row_band_count_from_ch_register,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use cell_loop::{
-    advance_row, dispatch_cell_preamble, iterate_column_rows, read_cell_position_dword,
-    read_cl_row_counter, CellLoopPreamble, CellLoopState, CellRowAdvance, CodebookBankView,
     CELL_BANK_LEN, CELL_DATA_TABLE, CELL_POSITION_MAX, CELL_POSITION_TABLE, CH_CONTROL_LUT,
-    CL_ROW_COUNTER_LUT, INTRA_CONTEXT_CLEAR_MASK, INTRA_CONTEXT_FLAG, MIRROR_TABLE_OFFSET,
-    SLOT_INDEX_LUT,
+    CL_ROW_COUNTER_LUT, CellLoopPreamble, CellLoopState, CellRowAdvance, CodebookBankView,
+    INTRA_CONTEXT_CLEAR_MASK, INTRA_CONTEXT_FLAG, MIRROR_TABLE_OFFSET, SLOT_INDEX_LUT, advance_row,
+    dispatch_cell_preamble, iterate_column_rows, read_cell_position_dword, read_cl_row_counter,
 };
 pub use cell_null::{CopyUpperError, MarkEdgeError};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use cell_null::{
-    copy_upper_cell, mark_edge_cell, CopyUpperGeometry, CopyUpperStats, MarkEdgeGeometry,
-    MarkEdgeStats, VqNullSubCode, COPY_UPPER_COLUMN_GROUP_BYTES, COPY_UPPER_RAW_ROW_OFFSETS,
-    COPY_UPPER_ROW_COUNT,
+    COPY_UPPER_COLUMN_GROUP_BYTES, COPY_UPPER_RAW_ROW_OFFSETS, COPY_UPPER_ROW_COUNT,
+    CopyUpperGeometry, CopyUpperStats, MarkEdgeGeometry, MarkEdgeStats, VqNullSubCode,
+    copy_upper_cell, mark_edge_cell,
 };
 pub use cell_reconstruct::{
-    reconstruct_cell_stateful, reconstruct_cell_static, run_cell_sequence, CellOutcome,
-    CellReconstructError, CellReconstructGeometry, CellRun, PositionEffect, SequenceReport,
-    SequenceStep,
+    CellOutcome, CellReconstructError, CellReconstructGeometry, CellRun, PositionEffect,
+    SequenceReport, SequenceStep, reconstruct_cell_stateful, reconstruct_cell_static,
+    run_cell_sequence,
 };
 pub use cell_unpack::{
-    arena_primary_offset, arena_secondary_offset, unpack_cell, CellUnpackError, DyadEmit,
-    UnpackEffect, UnpackOutcome, UnpackRun, CANONICAL_DYAD_HANDLERS,
+    CANONICAL_DYAD_HANDLERS, CellUnpackError, DyadEmit, UnpackEffect, UnpackOutcome, UnpackRun,
+    arena_primary_offset, arena_secondary_offset, unpack_cell,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use cell_subarray::{
-    cell_stack_array_offset, cell_stack_slot_offset, CellStackReadSite, CellStackTopDispatch,
-    CELL_STACK_BEGIN_OFFSET, CELL_STACK_ENTRY_SIZE, CELL_STACK_MAX_ENTRIES,
-    PER_CELL_EDGE_HEIGHT_STEP, PER_CELL_EDGE_PREV_BR_NEXT_OFFSET, PER_CELL_EDGE_PREV_BR_OFFSET,
-    PER_CELL_EDGE_ROW_STRIDE,
+    CELL_STACK_BEGIN_OFFSET, CELL_STACK_ENTRY_SIZE, CELL_STACK_MAX_ENTRIES, CellStackReadSite,
+    CellStackTopDispatch, PER_CELL_EDGE_HEIGHT_STEP, PER_CELL_EDGE_PREV_BR_NEXT_OFFSET,
+    PER_CELL_EDGE_PREV_BR_OFFSET, PER_CELL_EDGE_ROW_STRIDE, cell_stack_array_offset,
+    cell_stack_slot_offset,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use codebook_seed::{
-    CodebookSeedArea, SeedAreaError, SeedBlock, SeedPair, BLOCK_DEST_ADVANCE, BLOCK_TERMINATOR,
-    SEED_AREA_LEN, SEED_AREA_VMA, SEED_BLOCK_COUNT, SEED_PAIR_TOTAL, SEED_WORD_BIAS,
+    BLOCK_DEST_ADVANCE, BLOCK_TERMINATOR, CodebookSeedArea, SEED_AREA_LEN, SEED_AREA_VMA,
+    SEED_BLOCK_COUNT, SEED_PAIR_TOTAL, SEED_WORD_BIAS, SeedAreaError, SeedBlock, SeedPair,
 };
 pub use decoder::{DecodedOutput, DecoderError, Indeo3Decoder};
 pub use picture_decoder::{DecodedPicture, Indeo3PictureDecoder, PictureDecodeError};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
-pub use row_stream::{decode_cell_rows, expand_doubled_rows, CellRowsRun, Row, RowStreamError};
+pub use row_stream::{CellRowsRun, Row, RowStreamError, decode_cell_rows, expand_doubled_rows};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use staging::{
-    RowDeltaOutcome, StagingImage, STAGING_ALT_SET_OFFSET, STAGING_BLOCK_COUNT,
-    STAGING_BLOCK_STRIDE, STAGING_IMAGE_LEN, STAGING_SUB_TABLE_LEN,
+    RowDeltaOutcome, STAGING_ALT_SET_OFFSET, STAGING_BLOCK_COUNT, STAGING_BLOCK_STRIDE,
+    STAGING_IMAGE_LEN, STAGING_SUB_TABLE_LEN, StagingImage,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use entropy::{
-    apply_continuation_xor, continuation_needed, fb_category, fb_category_table, handler_prologue,
-    variant_entry_rva, CodebookBase, DyadAddress, FbCategory, FbCounter, HighNibbleAction,
-    JumpTable, JumpTableEntry, LiteralMode, ModeByte, ModeByteKind, PositionClass, RleEscape,
-    RowLookahead, ARENA_BAND_STRIDE, CONTINUATION_XOR, LITERAL_MODE_MAX, MAX_ROW_LOOKAHEAD_OFFSET,
-    PRIMARY_TABLE_DISP, RLE_ESCAPE_MIN, SECONDARY_TABLE_DISP, VARIANT_A_ENTRY, VARIANT_B_ENTRY,
-    VARIANT_C_ENTRY, VARIANT_D_ENTRY,
+    ARENA_BAND_STRIDE, CONTINUATION_XOR, CodebookBase, DyadAddress, FbCategory, FbCounter,
+    HighNibbleAction, JumpTable, JumpTableEntry, LITERAL_MODE_MAX, LiteralMode,
+    MAX_ROW_LOOKAHEAD_OFFSET, ModeByte, ModeByteKind, PRIMARY_TABLE_DISP, PositionClass,
+    RLE_ESCAPE_MIN, RleEscape, RowLookahead, SECONDARY_TABLE_DISP, VARIANT_A_ENTRY,
+    VARIANT_B_ENTRY, VARIANT_C_ENTRY, VARIANT_D_ENTRY, apply_continuation_xor, continuation_needed,
+    fb_category, fb_category_table, handler_prologue, variant_entry_rva,
 };
 pub use frame::{
-    decode_frame, decode_frame_with_selector, DecodedFrame, DecodedPlane, FrameDecodeError,
-    PlaneCellStats, ReconstructionStatus, FRAME_PLANE_DECODE_ORDER,
+    DecodedFrame, DecodedPlane, FRAME_PLANE_DECODE_ORDER, FrameDecodeError, PlaneCellStats,
+    ReconstructionStatus, decode_frame, decode_frame_with_selector,
 };
 pub use frame_assemble::{
-    allocate_strip_buffers, assemble_output, plane_strip_buffer_lengths, AssembleError,
-    OutputFrame, OutputPlane, OUTPUT_ASSEMBLE_ORDER,
+    AssembleError, OUTPUT_ASSEMBLE_ORDER, OutputFrame, OutputPlane, allocate_strip_buffers,
+    assemble_output, plane_strip_buffer_lengths,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use frame_exit::{
-    FrameExitDisposition, FramePlaneStatusFold, FRAME_FAULT_RETURN_RVA,
-    FRAME_OUTPUT_RECONSTRUCTION_RVA, PER_PLANE_DECODE_ARG_COUNT, PER_PLANE_DECODE_CALL_SITE_RVA,
+    FRAME_FAULT_RETURN_RVA, FRAME_OUTPUT_RECONSTRUCTION_RVA, FrameExitDisposition,
+    FramePlaneStatusFold, PER_PLANE_DECODE_ARG_COUNT, PER_PLANE_DECODE_CALL_SITE_RVA,
     PER_PLANE_DECODE_ENTRY_RVA, PER_PLANE_DECODE_RET_CLEANUP_BYTES, PER_PLANE_DECODE_RET_RVA,
     PLANE_ITERATION_ORDER,
 };
@@ -416,160 +415,158 @@ pub use frame_finalise::{
     SAVED_FRAME_NUMBER_STORE_RVA,
 };
 pub use frame_output::{
-    assemble_plane_if09, upsample_chroma_4x4, upshift_7bit_to_8bit, ChromaUpsampleError,
-    PlaneAssembleError, CHROMA_UPSAMPLE_FACTOR,
+    CHROMA_UPSAMPLE_FACTOR, ChromaUpsampleError, PlaneAssembleError, assemble_plane_if09,
+    upsample_chroma_4x4, upshift_7bit_to_8bit,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use frame_output::{
-    select_output_conversion, strip_min_buffer_bytes, OutputConversion, OutputDispatchError,
     BI_BITFIELDS, BI_RGB, FRAME_OUTPUT_SRC_ROW_STRIDE, IF09_FOURCC, IF09_FOURCC_CASE_RVA,
-    IF09_PASSTHROUGH_RVA, OUTPUT_PLANE_ORDER, OUTPUT_UPSHIFT_BITS, RGB24_STRIDE_FIXUP_BIT_COUNT,
+    IF09_PASSTHROUGH_RVA, OUTPUT_PLANE_ORDER, OUTPUT_UPSHIFT_BITS, OutputConversion,
+    OutputDispatchError, RGB24_STRIDE_FIXUP_BIT_COUNT, select_output_conversion,
+    strip_min_buffer_bytes,
 };
 pub use frame_reconstruct::{
-    reconstruct_frame, reconstruct_frame_with_stream, FrameReconstructError, FrameReconstructStats,
-    ReconstructedFrame,
+    FrameReconstructError, FrameReconstructStats, ReconstructedFrame, reconstruct_frame,
+    reconstruct_frame_with_stream,
 };
 pub use frame_session::{AdmittedFrame, DecodeSession, FrameAdmission, SessionError};
-pub use frame_yuv::{assemble_yuv, upsample_frame, YuvError, YuvFrame, YuvPlane};
+pub use frame_yuv::{YuvError, YuvFrame, YuvPlane, assemble_yuv, upsample_frame};
 pub use geometry_bank::{
-    chroma_plane_dims, split_extent, GeometryBank, PlaneBanks, UNDER_FOUR_CODE, UNDER_FOUR_YPOS,
+    GeometryBank, PlaneBanks, UNDER_FOUR_CODE, UNDER_FOUR_YPOS, chroma_plane_dims, split_extent,
 };
 pub use header::{
-    alt_quant_indices, BitstreamHeader, FrameFlags, FrameHeader, FrameHeaderPreamble, HeaderError,
-    BITSTREAM_HEADER_LEN, COMBINED_HEADER_LEN, FLAG_YVU9_8BIT, FRAME_HEADER_LEN, MAGIC_FRMH,
-    MAX_HEIGHT, MAX_WIDTH, MIN_DIMENSION, NULL_FRAME_DATA_SIZE_BITS, REQUIRED_DEC_VERSION,
+    BITSTREAM_HEADER_LEN, BitstreamHeader, COMBINED_HEADER_LEN, FLAG_YVU9_8BIT, FRAME_HEADER_LEN,
+    FrameFlags, FrameHeader, FrameHeaderPreamble, HeaderError, MAGIC_FRMH, MAX_HEIGHT, MAX_WIDTH,
+    MIN_DIMENSION, NULL_FRAME_DATA_SIZE_BITS, REQUIRED_DEC_VERSION, alt_quant_indices,
 };
 pub use macroblock::{
-    decode_plane_tree, Cell, CellTree, MacroblockError, NodeCode, VqCell, VqLeaf, VqNull,
-    CHROMA_STRIP_WIDTH, LUMA_STRIP_WIDTH,
+    CHROMA_STRIP_WIDTH, Cell, CellTree, LUMA_STRIP_WIDTH, MacroblockError, NodeCode, VqCell,
+    VqLeaf, VqNull, decode_plane_tree,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use mc_address::{
-    mc_dest_address, mc_source_address, CellAddrEntry, CellAddrRole, CellSlotBase,
-    CellSubarrayIndex, McAddressError, McCellAddressPair, CELL_SLOT_INDEX_MAX, CELL_SLOT_STRIDE,
+    CELL_SLOT_INDEX_MAX, CELL_SLOT_STRIDE, CellAddrEntry, CellAddrRole, CellSlotBase,
+    CellSubarrayIndex, McAddressError, McCellAddressPair, mc_dest_address, mc_source_address,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use mc_arena::{
-    base_pointer_aliases_equal, strip_region_bytes, StripArenaCapacity, StripPixelBufferAlias,
-    MC_ARENA_LEN, MC_ARENA_ROW_STRIDE, STRIP_PIXEL_BUFFER_ALIAS_COUNT,
+    MC_ARENA_LEN, MC_ARENA_ROW_STRIDE, STRIP_PIXEL_BUFFER_ALIAS_COUNT, StripArenaCapacity,
+    StripPixelBufferAlias, base_pointer_aliases_equal, strip_region_bytes,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use mc_bounds::{
-    mv_source_offset_in_strip_region, MvSourceOffsetClass, PaddingPixelPreservation,
-    SourcePointerBoundsCheck, MC_NO_BOUNDARY_CHECK, STRIP_REGION_LUMA_240_BYTES,
-    STRIP_REGION_LUMA_240_FITS_IN_ARENA,
+    MC_NO_BOUNDARY_CHECK, MvSourceOffsetClass, PaddingPixelPreservation,
+    STRIP_REGION_LUMA_240_BYTES, STRIP_REGION_LUMA_240_FITS_IN_ARENA, SourcePointerBoundsCheck,
+    mv_source_offset_in_strip_region,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use mc_chroma::{
-    McKernelGeometryIsPlaneRoleInvariant, McPlaneRole, MvPixelOffsetInterpretation,
     CHROMA_PACKED_MV_FACTOR_IS_BUFFER_STRIDE, LUMA_PIXEL_PER_CHROMA_PIXEL,
-    MC_KERNEL_GEOMETRY_IS_PLANE_ROLE_INVARIANT,
+    MC_KERNEL_GEOMETRY_IS_PLANE_ROLE_INVARIANT, McKernelGeometryIsPlaneRoleInvariant, McPlaneRole,
+    MvPixelOffsetInterpretation,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use mc_exec::{
-    advance_boundary_fixup_row, apply_per_cell_edge_fixup, boundary_fixup_dst_cell_offset,
-    mc_copy_cell, mc_copy_cell_mv, McCopyError, PerCellEdgeFixupError, BOUNDARY_FIXUP_AUX_SHIFT,
-    BOUNDARY_FIXUP_ROW_ADVANCE, BOUNDARY_FIXUP_SCRATCH_OFFSET,
+    BOUNDARY_FIXUP_AUX_SHIFT, BOUNDARY_FIXUP_ROW_ADVANCE, BOUNDARY_FIXUP_SCRATCH_OFFSET,
+    McCopyError, PerCellEdgeFixupError, advance_boundary_fixup_row, apply_per_cell_edge_fixup,
+    boundary_fixup_dst_cell_offset, mc_copy_cell, mc_copy_cell_mv,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use mc_kernel::{
-    mc_both_half_pel_quad, mc_full_pel_row_dword, mc_horiz_half_pel_pair, mc_vert_half_pel_pair,
-    McKernelGeometry, McKernelGeometryError, McKernelStep, MC_BAND_BYTE_STRIDE, MC_BAND_ROWS,
-    MC_BYTES_PER_DWORD, MC_COLUMN_GROUP_PIXELS, MC_FULL_PEL_ROW_OFFSETS,
-    MC_HORIZ_HALF_PEL_NEIGHBOUR_OFFSET, MC_INNER_LOOP_BYTES_PER_ITER,
+    MC_BAND_BYTE_STRIDE, MC_BAND_ROWS, MC_BYTES_PER_DWORD, MC_COLUMN_GROUP_PIXELS,
+    MC_FULL_PEL_ROW_OFFSETS, MC_HORIZ_HALF_PEL_NEIGHBOUR_OFFSET, MC_INNER_LOOP_BYTES_PER_ITER,
     MC_INNER_LOOP_DWORDS_PER_ITER, MC_MAX_CELL_WIDTH_BYTES, MC_ROW_STRIDE,
-    MC_VERT_HALF_PEL_NEIGHBOUR_OFFSET,
+    MC_VERT_HALF_PEL_NEIGHBOUR_OFFSET, McKernelGeometry, McKernelGeometryError, McKernelStep,
+    mc_both_half_pel_quad, mc_full_pel_row_dword, mc_horiz_half_pel_pair, mc_vert_half_pel_pair,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use mc_packed::{
-    apply_mv_source_offset, pack_mv_components, McDispatchMode, PackedMv, MV_HORIZ_HALFPEL_BIT,
-    MV_MODE_BITS_MASK, MV_PIXEL_OFFSET_ROW_STRIDE, MV_PIXEL_OFFSET_SHIFT, MV_VERT_HALFPEL_BIT,
+    MV_HORIZ_HALFPEL_BIT, MV_MODE_BITS_MASK, MV_PIXEL_OFFSET_ROW_STRIDE, MV_PIXEL_OFFSET_SHIFT,
+    MV_VERT_HALFPEL_BIT, McDispatchMode, PackedMv, apply_mv_source_offset, pack_mv_components,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use mc_residual_boundary::{
-    shares_destination_buffer, McCellDisposition, McToVqHandoff, ResidualApplication,
     MC_CHAPTER_LAST_DST_ROW_INDEX, MC_FETCHER_LAST_WRITE_DST_OFFSET, MC_FETCHER_LAST_WRITE_RVA,
-    MC_INNER_LOOP_BAND_ROWS_ALIAS, VQ_RESIDUAL_DISPATCH_RVA,
+    MC_INNER_LOOP_BAND_ROWS_ALIAS, McCellDisposition, McToVqHandoff, ResidualApplication,
+    VQ_RESIDUAL_DISPATCH_RVA, shares_destination_buffer,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use mc_source_plumbing::{
-    is_self_copy_degenerate, DecoderStackArg, DispatcherScratch, SourcePlumbingPair,
     DECODER_ARG_DST_SLOT_OFFSET, DECODER_ARG_SRC_SLOT_OFFSET, DISPATCHER_SCRATCH_DST_DATA_OFFSET,
-    DISPATCHER_SCRATCH_EXTRA_OFFSET_OFFSET, DISPATCHER_SCRATCH_SRC_DATA_OFFSET,
-    STRIP_CTX_ARRAY_ELEMENT_SHIFT,
+    DISPATCHER_SCRATCH_EXTRA_OFFSET_OFFSET, DISPATCHER_SCRATCH_SRC_DATA_OFFSET, DecoderStackArg,
+    DispatcherScratch, STRIP_CTX_ARRAY_ELEMENT_SHIFT, SourcePlumbingPair, is_self_copy_degenerate,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use mc_table::{
-    mv_table_entry_byte_offset, MvIndexFetch, MvIndexValidity, MvTableParserArm, MV_HALFPEL_HORIZ,
-    MV_HALFPEL_MASK, MV_HALFPEL_VERT, MV_INDEX_SCALE_SHIFT, MV_TABLE_BASE_OFFSET, MV_TABLE_BYTES,
-    MV_TABLE_ENTRY_SIZE, MV_TABLE_MAX_BYTE_INDEXABLE_ENTRIES,
+    MV_HALFPEL_HORIZ, MV_HALFPEL_MASK, MV_HALFPEL_VERT, MV_INDEX_SCALE_SHIFT, MV_TABLE_BASE_OFFSET,
+    MV_TABLE_BYTES, MV_TABLE_ENTRY_SIZE, MV_TABLE_MAX_BYTE_INDEXABLE_ENTRIES, MvIndexFetch,
+    MvIndexValidity, MvTableParserArm, mv_table_entry_byte_offset,
 };
 pub use picture_layer::{
-    MotionVector, PictureLayer, PictureLayerError, PlaneByteMap, PlaneDecodePlan, PlanePrelude,
-    PlanePresence, MC_VECTOR_ENTRY_LEN, MIN_PRELUDE_LEN, NUM_VECTORS_FIELD_LEN, PLANE_COUNT,
-    PLANE_IDX_U, PLANE_IDX_V, PLANE_IDX_Y,
+    MC_VECTOR_ENTRY_LEN, MIN_PRELUDE_LEN, MotionVector, NUM_VECTORS_FIELD_LEN, PLANE_COUNT,
+    PLANE_IDX_U, PLANE_IDX_V, PLANE_IDX_Y, PictureLayer, PictureLayerError, PlaneByteMap,
+    PlaneDecodePlan, PlanePrelude, PlanePresence,
 };
 pub use plane_execute::{
-    exec_plane_plan, exec_plane_plan_with_stream, plane_strip_len, DeferredFrontier,
-    PlaneExecError, PlaneExecStats, ReconstructedPlane, UnpackerCellFault, STRIP_ROW_STRIDE,
+    DeferredFrontier, PlaneExecError, PlaneExecStats, ReconstructedPlane, STRIP_ROW_STRIDE,
+    UnpackerCellFault, exec_plane_plan, exec_plane_plan_with_stream, plane_strip_len,
 };
 pub use plane_reconstruct::{
-    classify_cell_tree, classify_plane, drive_vq_null_copies, CellDisposition, CellPlanEntry,
-    DispositionCounts, PlaneReconstructError, PlaneReconstructPlan, VqNullDriveStats,
+    CellDisposition, CellPlanEntry, DispositionCounts, PlaneReconstructError, PlaneReconstructPlan,
+    VqNullDriveStats, classify_cell_tree, classify_plane, drive_vq_null_copies,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use reconstruct::{
-    apply_dyad_pair, average_7bit, emit_variant, halve_fefefefe, jns_taken, pack_predictor,
-    predictor_offset, unpack_pixels, DyadOutcome, RowEmission, SoftSimdSum, VariantEmission,
-    CLAMP_7BIT_MASK, EDGE_MARKER_BIT, HALF_SENTINEL_MASK, HALVE_CARRY_MASK, PIXEL_VALUE_MAX,
-    PREDICTOR_ROW_STRIDE, TOP_OF_STRIP_PREDICTOR,
+    CLAMP_7BIT_MASK, DyadOutcome, EDGE_MARKER_BIT, HALF_SENTINEL_MASK, HALVE_CARRY_MASK,
+    PIXEL_VALUE_MAX, PREDICTOR_ROW_STRIDE, RowEmission, SoftSimdSum, TOP_OF_STRIP_PREDICTOR,
+    VariantEmission, apply_dyad_pair, average_7bit, emit_variant, halve_fefefefe, jns_taken,
+    pack_predictor, predictor_offset, unpack_pixels,
 };
 pub use registry::{
-    codec_id_for_fourcc, decode_video_frame, make_decoder, probe, register, register_codecs,
-    Indeo3RegistryDecoder, CODEC_ID_STR, INDEO3_FOURCCS, PROBE_CONFIDENCE_HEADER_OK,
-    PROBE_CONFIDENCE_TAG_ONLY,
+    CODEC_ID_STR, INDEO3_FOURCCS, Indeo3RegistryDecoder, PROBE_CONFIDENCE_HEADER_OK,
+    PROBE_CONFIDENCE_TAG_ONLY, codec_id_for_fourcc, decode_video_frame, make_decoder, probe,
+    register, register_codecs,
 };
 pub use strip_context::{
+    PerPlaneDecodeCall, PlaneDecodeStatus, PlaneRole, StripGeometry, StripSlotDescriptor,
     chroma_plane_height, chroma_plane_width, chroma_strip_slot_count, luma_strip_slot_count,
-    strip_slot_index, PerPlaneDecodeCall, PlaneDecodeStatus, PlaneRole, StripGeometry,
-    StripSlotDescriptor,
+    strip_slot_index,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use strip_context::{
-    slot_field, DISPATCHABLE_SLOT_COUNT, INSTANCE_CHROMA_CODEBOOK_BANK,
-    INSTANCE_LUMA_CODEBOOK_BANK, INSTANCE_SECONDARY_CODEBOOK_PTR, INSTANCE_STATE_LEN,
-    INSTANCE_STRIP_ARRAY_VIEW_PTR, PIXEL_BUFFER_ARENA_LEN, PLANE_DECODE_STATUS_MALFORMED,
-    PLANE_DECODE_STATUS_OK, PRIMARY_BANK_SLOTS, SECONDARY_BANK_SLOTS,
-    STRIP_ARRAY_OFFSET_IN_INSTANCE, STRIP_SLOT_BASE_PTR_COUNT, STRIP_SLOT_COUNT,
-    STRIP_SLOT_SENTINEL, STRIP_SLOT_STRIDE,
+    DISPATCHABLE_SLOT_COUNT, INSTANCE_CHROMA_CODEBOOK_BANK, INSTANCE_LUMA_CODEBOOK_BANK,
+    INSTANCE_SECONDARY_CODEBOOK_PTR, INSTANCE_STATE_LEN, INSTANCE_STRIP_ARRAY_VIEW_PTR,
+    PIXEL_BUFFER_ARENA_LEN, PLANE_DECODE_STATUS_MALFORMED, PLANE_DECODE_STATUS_OK,
+    PRIMARY_BANK_SLOTS, SECONDARY_BANK_SLOTS, STRIP_ARRAY_OFFSET_IN_INSTANCE,
+    STRIP_SLOT_BASE_PTR_COUNT, STRIP_SLOT_COUNT, STRIP_SLOT_SENTINEL, STRIP_SLOT_STRIDE,
+    slot_field,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use strip_edge::{
-    strip_edge_byte_copy_offsets, strip_edge_chroma_shift, strip_edge_row_step,
-    StripEdgeApplyError, StripEdgeFixupDims, StripEdgeRow, StripEdgeRowIter,
     STRIP_EDGE_BYTE_READ_OFFSET, STRIP_EDGE_BYTE_WRITE_OFFSET, STRIP_EDGE_CHROMA_SHIFT,
-    STRIP_EDGE_ROW_STRIDE,
+    STRIP_EDGE_ROW_STRIDE, StripEdgeApplyError, StripEdgeFixupDims, StripEdgeRow, StripEdgeRowIter,
+    strip_edge_byte_copy_offsets, strip_edge_chroma_shift, strip_edge_row_step,
 };
 pub use vq::{DyadDeltaTable, SeedDispatchTables, VqError};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use vq::{
-    apply_row_band_seed, seed_dispatch_entries, CellVariant, CodebookEntry, RowBandSeed, SeedEntry,
-    VqArena, VqNullRuntime, ARENA_BANDS_OFFSET, ARENA_BAND_COUNT, ARENA_BAND_LEN, ARENA_HALF_LEN,
-    ARENA_LEN, DYAD_BANK15_VALID_ROWS, DYAD_BANK_COUNT, DYAD_BANK_STRIDE, DYAD_TABLE_LEN,
-    SEED_DISPATCH_RECORDS, SEED_PAIR_COUNT, SEED_TABLE_LEN, STAGING_SELECT_STRIDE,
+    ARENA_BAND_COUNT, ARENA_BAND_LEN, ARENA_BANDS_OFFSET, ARENA_HALF_LEN, ARENA_LEN, CellVariant,
+    CodebookEntry, DYAD_BANK_COUNT, DYAD_BANK_STRIDE, DYAD_BANK15_VALID_ROWS, DYAD_TABLE_LEN,
+    RowBandSeed, SEED_DISPATCH_RECORDS, SEED_PAIR_COUNT, SEED_TABLE_LEN, STAGING_SELECT_STRIDE,
+    SeedEntry, VqArena, VqNullRuntime, apply_row_band_seed, seed_dispatch_entries,
 };

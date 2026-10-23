@@ -502,7 +502,7 @@ impl McCellAddressPair {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::indeo3::{pack_mv_components, DISPATCHABLE_SLOT_COUNT};
+    use crate::indeo3::{DISPATCHABLE_SLOT_COUNT, pack_mv_components};
 
     // ---- §7.2 / §4.3 (slot-stride constants) -----------------------
 

@@ -306,7 +306,7 @@ mod tests {
     use super::super::header::FrameFlags;
     use super::super::picture_layer::{PLANE_COUNT, PLANE_IDX_U, PLANE_IDX_V, PLANE_IDX_Y};
     use super::super::strip_context::{PRIMARY_BANK_SLOTS, SECONDARY_BANK_SLOTS};
-    use super::{Bank, McBankAssignment, BANK_INVERSION_DELTA};
+    use super::{BANK_INVERSION_DELTA, Bank, McBankAssignment};
 
     // ---- BANK_INVERSION_DELTA cross-checks ----
 

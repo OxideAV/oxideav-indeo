@@ -30,7 +30,7 @@
 
 use super::bitreader::{BitReader, BitReaderError};
 use super::codebook::{Codebook, CodebookError};
-use super::level_table::{level_value, LEVEL_TABLE_LEN};
+use super::level_table::{LEVEL_TABLE_LEN, level_value};
 
 /// Spec/03 §5 / spec/06 §5.2 — the effective per-MB quantiser valid
 /// range bound (`0..=31`).
@@ -276,7 +276,7 @@ mod tests {
             }
         }
         fn finish(mut self) -> Vec<u8> {
-            while self.bits.len() % 8 != 0 {
+            while !self.bits.len().is_multiple_of(8) {
                 self.bits.push(0);
             }
             let mut out = Vec::new();

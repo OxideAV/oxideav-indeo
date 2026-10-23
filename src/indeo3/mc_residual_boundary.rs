@@ -316,7 +316,7 @@ impl McToVqHandoff {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{McDispatchMode, PackedMv, MC_BAND_ROWS, MC_FULL_PEL_ROW_OFFSETS};
+    use super::super::{MC_BAND_ROWS, MC_FULL_PEL_ROW_OFFSETS, McDispatchMode, PackedMv};
     use super::*;
 
     // ---- MC_FETCHER_LAST_WRITE_RVA -------------------------------

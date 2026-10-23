@@ -119,7 +119,7 @@
 //! RVAs cited in doc-comments refer to the binary identified in
 //! `spec/00 §2`.
 
-use super::mc_arena::{strip_region_bytes, MC_ARENA_LEN, MC_ARENA_ROW_STRIDE};
+use super::mc_arena::{MC_ARENA_LEN, MC_ARENA_ROW_STRIDE, strip_region_bytes};
 
 // ---- §4.4 disposition ---------------------------------------------
 
@@ -398,11 +398,11 @@ impl PaddingPixelPreservation {
 
 #[cfg(test)]
 mod tests {
-    use super::super::mc_arena::{strip_region_bytes, MC_ARENA_LEN, MC_ARENA_ROW_STRIDE};
+    use super::super::mc_arena::{MC_ARENA_LEN, MC_ARENA_ROW_STRIDE, strip_region_bytes};
     use super::{
-        mv_source_offset_in_strip_region, MvSourceOffsetClass, PaddingPixelPreservation,
-        SourcePointerBoundsCheck, MC_NO_BOUNDARY_CHECK, STRIP_REGION_LUMA_240_BYTES,
-        STRIP_REGION_LUMA_240_FITS_IN_ARENA,
+        MC_NO_BOUNDARY_CHECK, MvSourceOffsetClass, PaddingPixelPreservation,
+        STRIP_REGION_LUMA_240_BYTES, STRIP_REGION_LUMA_240_FITS_IN_ARENA, SourcePointerBoundsCheck,
+        mv_source_offset_in_strip_region,
     };
 
     // ---- §4.4 disposition flag ----
@@ -542,8 +542,8 @@ mod tests {
     #[test]
     fn mv_source_offset_positive_within_region_is_in_region() {
         let region = strip_region_bytes(240); // 0xa500
-                                              // dst_cell_base = 0x1000, mv_offset = +0xb0 (one row down).
-                                              // Resulting address = 0x10b0 < 0xa500: in region.
+        // dst_cell_base = 0x1000, mv_offset = +0xb0 (one row down).
+        // Resulting address = 0x10b0 < 0xa500: in region.
         assert_eq!(
             mv_source_offset_in_strip_region(0x1000, 0xb0, region),
             MvSourceOffsetClass::InRegion,
@@ -566,8 +566,8 @@ mod tests {
     #[test]
     fn mv_source_offset_positive_past_end_is_out_of_region() {
         let region = strip_region_bytes(240); // 0xa500
-                                              // dst_cell_base = 0xa400, mv_offset = +0x200: resulting
-                                              // address = 0xa600 >= 0xa500: out of region.
+        // dst_cell_base = 0xa400, mv_offset = +0x200: resulting
+        // address = 0xa600 >= 0xa500: out of region.
         assert_eq!(
             mv_source_offset_in_strip_region(0xa400, 0x200, region),
             MvSourceOffsetClass::OutOfRegion,
@@ -577,7 +577,7 @@ mod tests {
     #[test]
     fn mv_source_offset_at_region_end_is_out_of_region() {
         let region = strip_region_bytes(240); // 0xa500
-                                              // address == region size is out of region (>= predicate).
+        // address == region size is out of region (>= predicate).
         assert_eq!(
             mv_source_offset_in_strip_region(0xa500, 0, region),
             MvSourceOffsetClass::OutOfRegion,
@@ -596,7 +596,7 @@ mod tests {
     #[test]
     fn mv_source_offset_one_under_region_end_is_in_region() {
         let region = strip_region_bytes(240); // 0xa500
-                                              // address 0xa4ff < 0xa500: in region.
+        // address 0xa4ff < 0xa500: in region.
         assert_eq!(
             mv_source_offset_in_strip_region(0xa4fe, 1, region),
             MvSourceOffsetClass::InRegion,

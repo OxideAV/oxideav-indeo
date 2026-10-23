@@ -52,12 +52,12 @@
 //! handoff (the VfW `ICDecompress` envelope) nor the YUV→RGB conversion
 //! (spec/07 §5.4 LUT docs-gap).
 
-use super::frame::{decode_frame, FrameDecodeError};
-use super::frame_assemble::OutputFrame;
-use super::frame_reconstruct::{reconstruct_frame, FrameReconstructError, ReconstructedFrame};
-use super::frame_session::{AdmittedFrame, DecodeSession, FrameAdmission, SessionError};
-use super::frame_yuv::{upsample_frame, YuvError, YuvFrame};
 use super::Bank;
+use super::frame::{FrameDecodeError, decode_frame};
+use super::frame_assemble::OutputFrame;
+use super::frame_reconstruct::{FrameReconstructError, ReconstructedFrame, reconstruct_frame};
+use super::frame_session::{AdmittedFrame, DecodeSession, FrameAdmission, SessionError};
+use super::frame_yuv::{YuvError, YuvFrame, upsample_frame};
 
 /// Errors raised while decoding one frame through an [`Indeo3Decoder`].
 #[derive(Debug, Clone, PartialEq, Eq)]

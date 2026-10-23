@@ -49,8 +49,8 @@ use super::frame::DecodedFrame;
 use super::frame_assemble::{OutputFrame, OutputPlane};
 use super::frame_output::upshift_7bit_to_8bit;
 use super::plane_execute::{
-    exec_plane_plan, exec_plane_plan_with_stream, PlaneExecError, ReconstructedPlane,
-    STRIP_ROW_STRIDE,
+    PlaneExecError, ReconstructedPlane, STRIP_ROW_STRIDE, exec_plane_plan,
+    exec_plane_plan_with_stream,
 };
 use super::plane_reconstruct::classify_cell_tree;
 use super::vq::DyadDeltaTable;
@@ -401,10 +401,10 @@ mod tests {
 
     #[test]
     fn to_output_frame_upshifts_strip_pixels() {
-        use crate::indeo3::plane_execute::{plane_strip_len, PlaneExecStats};
-        use crate::indeo3::reconstruct::EDGE_MARKER_BIT;
-        use crate::indeo3::ReconstructedPlane;
         use crate::indeo3::PLANE_IDX_Y;
+        use crate::indeo3::ReconstructedPlane;
+        use crate::indeo3::plane_execute::{PlaneExecStats, plane_strip_len};
+        use crate::indeo3::reconstruct::EDGE_MARKER_BIT;
 
         // Build a reconstructed plane by hand with a known strip pattern:
         // row 0 holds 0x01, 0x02 with the edge marker set on the first

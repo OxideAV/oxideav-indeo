@@ -28,7 +28,7 @@
 
 use crate::indeo5::format::OutputFormat;
 use crate::indeo5::output::{OutputPlane, ReconstructionPlane};
-use crate::indeo5::pack::{pack_planar, HostBuffer};
+use crate::indeo5::pack::{HostBuffer, pack_planar};
 use crate::indeo5::planes::{FramePlanes, PlaneRole};
 
 /// Errors the whole-frame assembly can raise.

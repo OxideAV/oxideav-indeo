@@ -15,10 +15,10 @@
 //! banks — and reconstructs every cell in place.
 
 use super::geometry_bank::{
-    chroma_plane_dims, PlaneBanks, STRIP_ROW_STRIDE, UNDER_FOUR_CODE, UNDER_FOUR_YPOS,
+    PlaneBanks, STRIP_ROW_STRIDE, UNDER_FOUR_CODE, UNDER_FOUR_YPOS, chroma_plane_dims,
 };
 use super::picture_layer::MotionVector;
-use super::staging::{StagingImage, STAGING_BLOCK_COUNT, STAGING_BLOCK_STRIDE};
+use super::staging::{STAGING_BLOCK_COUNT, STAGING_BLOCK_STRIDE, StagingImage};
 use super::vq::{DyadDeltaTable, VqArena};
 
 /// The strip pixel buffers of one plane.
@@ -662,7 +662,11 @@ impl<'a, 'b> Walker<'a, 'b> {
                 let b = self.r.byte()?;
                 match b {
                     0x00..=0xF7 => {
-                        let table = if pos % 2 == 0 { secondary } else { primary };
+                        let table = if pos.is_multiple_of(2) {
+                            secondary
+                        } else {
+                            primary
+                        };
                         let pred =
                             self.pred_dword(cell.strip, y0 + i64::from(pos), x0, own_predictor);
                         let v = self.literal(table, b, pred)?;
@@ -798,7 +802,11 @@ impl<'a, 'b> Walker<'a, 'b> {
                 let b = self.r.byte()?;
                 match b {
                     0x00..=0xF7 => {
-                        let table = if pos % 2 == 0 { secondary } else { primary };
+                        let table = if pos.is_multiple_of(2) {
+                            secondary
+                        } else {
+                            primary
+                        };
                         let prev_row = y0 + 2 * i64::from(pos) - 1;
                         if own_predictor {
                             // Family F: the doubled deltas add to the

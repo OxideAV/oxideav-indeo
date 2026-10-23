@@ -6,7 +6,7 @@
 //! the packed view are the vendor's upsampled planes and are covered
 //! by the `spec/08 §7` band checksums instead.
 
-use oxideav_indeo::indeo5::{decode_intra_picture, pack_yuy2, BlockCoding, ChecksumStatus};
+use oxideav_indeo::indeo5::{BlockCoding, ChecksumStatus, decode_intra_picture, pack_yuy2};
 
 const INDEO5: &[u8] = include_bytes!("data/intra-320x240-indeo5.iv50");
 const INDEO5_YUY2: &[u8] = include_bytes!("data/intra-320x240-indeo5.expected.yuy2");

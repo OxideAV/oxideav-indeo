@@ -223,7 +223,7 @@ mod tests {
         // the next frame's reference.
         assert_eq!(s.next_current, 30);
         assert_eq!(s.secondary_ref, 40); // not dirty -> no swap
-                                         // Dirty case swaps the secondary pair.
+        // Dirty case swaps the secondary pair.
         let mut s = slots();
         s.secondary_dirty = 1;
         s.post_decode(FrameType::DroppableInter);

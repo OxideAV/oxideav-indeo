@@ -78,35 +78,35 @@ pub use bitreader::{BitReader, MAX_READ_BITS};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use checksum::{
-    frame_checksum_present, parse_band_checksum, parse_frame_checksum, ChecksumField,
-    FRAME_CHECKSUM_FLAG,
+    ChecksumField, FRAME_CHECKSUM_FLAG, frame_checksum_present, parse_band_checksum,
+    parse_frame_checksum,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
-pub use chroma::{upsample_chroma, ChromaSubsampling};
+pub use chroma::{ChromaSubsampling, upsample_chroma};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use clip_table::{
-    build_clip_table, clip_lookup, CLIP_BIAS, CLIP_LOWER, CLIP_PIXEL_CENTRE, CLIP_TABLE_LEN,
-    CLIP_UPPER,
+    CLIP_BIAS, CLIP_LOWER, CLIP_PIXEL_CENTRE, CLIP_TABLE_LEN, CLIP_UPPER, build_clip_table,
+    clip_lookup,
 };
 pub use codebook::CodebookError;
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use codebook::{
-    Codebook, Codeword, HuffContext, BLOCK_HUFF_PRESETS, DEFAULT_PRESET_ID, MAX_ROWS,
+    BLOCK_HUFF_PRESETS, Codebook, Codeword, DEFAULT_PRESET_ID, HuffContext, MAX_ROWS,
     MB_HUFF_PRESETS,
 };
 pub use decode::{
-    decode_intra_picture, BandReconstruction, BandTrace, BlockCoding, BlockRecord,
-    BlockStreamFault, DecodeError, DecodeFrontier, DecodeStats, DecodedPicture, FrontierReason,
-    MAX_PICTURE_PIXELS,
+    BandReconstruction, BandTrace, BlockCoding, BlockRecord, BlockStreamFault, DecodeError,
+    DecodeFrontier, DecodeStats, DecodedPicture, FrontierReason, MAX_PICTURE_PIXELS,
+    decode_intra_picture,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use finalise::{
-    frame_produces_output, is_output_written, mark_output_written, output_row_order,
-    reference_rotation, DecodeReturn, ReferenceRotation, RowOrder, OUTPUT_WRITTEN_FLAG,
+    DecodeReturn, OUTPUT_WRITTEN_FLAG, ReferenceRotation, RowOrder, frame_produces_output,
+    is_output_written, mark_output_written, output_row_order, reference_rotation,
 };
 pub use format::{ChromaLayout, OutputFormat};
 // internal — exposed for tests/fuzz; not part of the stable API
@@ -127,30 +127,30 @@ pub use header::{FormatDescriptor, FrameType, HeaderError, PictureStart};
 pub use header::{MAGIC_ALTERNATE, MAGIC_CANONICAL, MIN_HEIGHT, MIN_WIDTH, PICTURE_START_CODE};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
-pub use level_table::{build_level_table, level_value, LEVEL_TABLE_LEN};
+pub use level_table::{LEVEL_TABLE_LEN, build_level_table, level_value};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use mb::{
-    blocks_per_mb, mb_stride, partial_mb_pad_rows, Macroblock, MbBlock, MbGrid, BAND_INDEX_FLAGS,
-    BLK_STRIDE_TABLE_A, BLK_STRIDE_TABLE_B, FOUR_BLOCK_X, FOUR_BLOCK_Y, FOUR_BLOCK_Z,
+    BAND_INDEX_FLAGS, BLK_STRIDE_TABLE_A, BLK_STRIDE_TABLE_B, FOUR_BLOCK_X, FOUR_BLOCK_Y,
+    FOUR_BLOCK_Z, Macroblock, MbBlock, MbGrid, blocks_per_mb, mb_stride, partial_mb_pad_rows,
 };
 pub use mb_header::MbHeaderError;
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
-pub use mb_header::{effective_mb_quant, Cbp, MbContext, MbHeader, QdeltaMode, MAX_QUANT};
+pub use mb_header::{Cbp, MAX_QUANT, MbContext, MbHeader, QdeltaMode, effective_mb_quant};
 pub use mc::McError;
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
-pub use mc::{mb_uses_mc, mc_add_block, BandView, MC_TRANSFORM_FLAG_MASK};
+pub use mc::{BandView, MC_TRANSFORM_FLAG_MASK, mb_uses_mc, mc_add_block};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
-pub use mv::{resolve_mv, McMode, Mv, MvPredictor, MvResolution, ResolvedMv, MV_DELTA_PRESENT};
+pub use mv::{MV_DELTA_PRESENT, McMode, Mv, MvPredictor, MvResolution, ResolvedMv, resolve_mv};
 pub use output::OutputError;
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use output::{
-    bias_and_clamp, plane_stride, OutputPlane, ReconstructionPlane, OUTPUT_BIAS, OUTPUT_CLAMP_MAX,
-    OUTPUT_CLAMP_MIN, PLANE_STRIDE_ALIGN,
+    OUTPUT_BIAS, OUTPUT_CLAMP_MAX, OUTPUT_CLAMP_MIN, OutputPlane, PLANE_STRIDE_ALIGN,
+    ReconstructionPlane, bias_and_clamp, plane_stride,
 };
 pub use pack::{HostBuffer, PlanePlacement};
 // internal — exposed for tests/fuzz; not part of the stable API
@@ -161,55 +161,55 @@ pub use planes::PlaneRole;
 pub use yuy2::{pack_yuy2, upsample_chroma_2x};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
-pub use planes::{num_bands, FramePlanes, OUTPUT_ITERATION_ORDER, PLANE_RECORD_ORDER};
-pub use quant::{
-    dequant_level, quant_group, quant_matrix, recon_value, GROUP_4X4, QUANT_BASE, QUANT_GROUPS,
-    QUANT_LEVELS, QUANT_SCALE,
-};
+pub use planes::{FramePlanes, OUTPUT_ITERATION_ORDER, PLANE_RECORD_ORDER, num_bands};
 #[doc(hidden)]
 pub use quant::{BandQuant, OBSERVED_CLASS};
+pub use quant::{
+    GROUP_4X4, QUANT_BASE, QUANT_GROUPS, QUANT_LEVELS, QUANT_SCALE, dequant_level, quant_group,
+    quant_matrix, recon_value,
+};
 pub use refbuf::RefSlots;
 pub use registry::{
-    codec_id_for_fourcc, decode_video_frame, make_decoder, probe, register, register_codecs,
-    Indeo5RegistryDecoder, CODEC_ID_STR, INDEO5_FOURCCS, PROBE_CONFIDENCE_HEADER_OK,
-    PROBE_CONFIDENCE_TAG_ONLY,
+    CODEC_ID_STR, INDEO5_FOURCCS, Indeo5RegistryDecoder, PROBE_CONFIDENCE_HEADER_OK,
+    PROBE_CONFIDENCE_TAG_ONLY, codec_id_for_fourcc, decode_video_frame, make_decoder, probe,
+    register, register_codecs,
 };
 pub use rv_table::RvTableError;
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use rv_table::{
-    escape_lindex, escape_value, run_advance, RvEntry, RvSlotData, RvTable, RV_TABLE_SLOTS,
+    RV_TABLE_SLOTS, RvEntry, RvSlotData, RvTable, escape_lindex, escape_value, run_advance,
 };
 pub use session::{Indeo5Decoder, SessionError, SessionOutput};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use slant::{
-    a0_fragment, b0a_fragment, b1a_fragment, dispatch_use, pair_add, pair_normalise, pair_pack,
-    pair_ror1, pair_ror17, pair_ror2, pair_unpack, DispatchUse, HandlerCluster, Page0Handler,
-    PairRotate, BLOCK_BYTES, BLOCK_ROW_STRIDE, DEQUANT_FUSED_MASK, PAGE0_ROW_PASS_HANDLERS,
-    PAIR_NORM_MASK,
+    BLOCK_BYTES, BLOCK_ROW_STRIDE, DEQUANT_FUSED_MASK, DispatchUse, HandlerCluster,
+    PAGE0_ROW_PASS_HANDLERS, PAIR_NORM_MASK, Page0Handler, PairRotate, a0_fragment, b0a_fragment,
+    b1a_fragment, dispatch_use, pair_add, pair_normalise, pair_pack, pair_ror1, pair_ror2,
+    pair_ror17, pair_unpack,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use tables::{
-    dequant_scale, DEQUANT_SCALE_BITS, DEQUANT_SCALE_DEFAULT_BITS, DEQUANT_SCALE_LEN, VLC_END,
-    WAVELET_SYNTH_CONSTANTS, WAVELET_SYNTH_ROUND_BIAS,
+    DEQUANT_SCALE_BITS, DEQUANT_SCALE_DEFAULT_BITS, DEQUANT_SCALE_LEN, VLC_END,
+    WAVELET_SYNTH_CONSTANTS, WAVELET_SYNTH_ROUND_BIAS, dequant_scale,
 };
 pub use transform::{
-    inverse_slant_2d_4x4, inverse_slant_2d_8x8, inverse_slant_4, inverse_slant_4_second_pass,
-    inverse_slant_8, inverse_slant_8_second_pass, inverse_slant_col_4x4, inverse_slant_col_8x8,
-    inverse_slant_row_4x4, inverse_slant_row_8x8, place_scan_4x4, place_scan_8x8, SCAN_COLUMN_8X8,
-    SCAN_RASTER_4X4, SCAN_RASTER_8X8, SCAN_ZIGZAG_4X4, SCAN_ZIGZAG_8X8, SECOND_PASS_DC_BIAS,
-    STAGE1_ROTATE_BIAS, STAGE2_ROTATE_BIAS,
+    SCAN_COLUMN_8X8, SCAN_RASTER_4X4, SCAN_RASTER_8X8, SCAN_ZIGZAG_4X4, SCAN_ZIGZAG_8X8,
+    SECOND_PASS_DC_BIAS, STAGE1_ROTATE_BIAS, STAGE2_ROTATE_BIAS, inverse_slant_2d_4x4,
+    inverse_slant_2d_8x8, inverse_slant_4, inverse_slant_4_second_pass, inverse_slant_8,
+    inverse_slant_8_second_pass, inverse_slant_col_4x4, inverse_slant_col_8x8,
+    inverse_slant_row_4x4, inverse_slant_row_8x8, place_scan_4x4, place_scan_8x8,
 };
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
-pub use tile::{tile_count, Tile, TileGrid};
+pub use tile::{Tile, TileGrid, tile_count};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use tile_header::{
-    explicit_size_matches, tile_predictor_active, TileDataSize, TileHeader, MAX_TILE_DATA_SIZE,
-    TILE_SIZE_ESCAPE,
+    MAX_TILE_DATA_SIZE, TILE_SIZE_ESCAPE, TileDataSize, TileHeader, explicit_size_matches,
+    tile_predictor_active,
 };
 pub use verify::ChecksumStatus;
 // internal — exposed for tests/fuzz; not part of the stable API
@@ -217,4 +217,4 @@ pub use verify::ChecksumStatus;
 pub use verify::{band_checksum, frame_checksum};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
-pub use wavelet::{recompose_level, recompose_plane, synth_1d, Band, LevelBands};
+pub use wavelet::{Band, LevelBands, recompose_level, recompose_plane, synth_1d};

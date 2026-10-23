@@ -75,7 +75,7 @@
 
 use super::entropy::{FbCounter, ModeByte, ModeByteKind, PositionClass, RleEscape};
 use super::reconstruct::PREDICTOR_ROW_STRIDE;
-use super::vq::{apply_row_band_seed, DyadDeltaTable};
+use super::vq::{DyadDeltaTable, apply_row_band_seed};
 
 /// Geometry of the cell the executor walks.
 ///

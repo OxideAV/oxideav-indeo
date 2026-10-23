@@ -75,16 +75,16 @@
 //! naming to a Specifier reconciliation (reported as a docs gap).
 
 use super::cell_emit::rows_per_source_row;
-use super::cell_reconstruct::{fb_run, CellReconstructGeometry, PositionEffect};
+use super::cell_reconstruct::{CellReconstructGeometry, PositionEffect, fb_run};
 use super::entropy::{
-    FbCounter, LiteralMode, ModeByte, ModeByteKind, PositionClass, RleEscape, PRIMARY_TABLE_DISP,
+    FbCounter, LiteralMode, ModeByte, ModeByteKind, PRIMARY_TABLE_DISP, PositionClass, RleEscape,
     SECONDARY_TABLE_DISP,
 };
 use super::reconstruct::{
-    emit_variant, pack_predictor, DyadOutcome, VariantEmission, PREDICTOR_ROW_STRIDE,
-    TOP_OF_STRIP_PREDICTOR,
+    DyadOutcome, PREDICTOR_ROW_STRIDE, TOP_OF_STRIP_PREDICTOR, VariantEmission, emit_variant,
+    pack_predictor,
 };
-use super::vq::{apply_row_band_seed, CellVariant, DyadDeltaTable, VqArena, ARENA_LEN};
+use super::vq::{ARENA_LEN, CellVariant, DyadDeltaTable, VqArena, apply_row_band_seed};
 
 /// The two canonical literal-dyad handler RVAs (`spec/06 §3.2`): the
 /// table-1 entry shared by high nibbles `0x0` / `0x3` / `0xA`, and the

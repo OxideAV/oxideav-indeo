@@ -328,8 +328,8 @@ pub fn register(ctx: &mut RuntimeContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oxideav_core::stream::CodecResolver;
     use oxideav_core::TimeBase;
+    use oxideav_core::stream::CodecResolver;
 
     fn packet(data: Vec<u8>) -> Packet {
         Packet {

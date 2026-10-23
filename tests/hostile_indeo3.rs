@@ -383,7 +383,7 @@ fn hostile_row_stream_never_panics() {
     // LCG-driven sweep over the r451 row-stream executor: arbitrary
     // streams, geometries and staging blocks must produce typed
     // results only.
-    use oxideav_indeo::indeo3::{decode_cell_rows, CodebookSeedArea, StagingImage};
+    use oxideav_indeo::indeo3::{CodebookSeedArea, StagingImage, decode_cell_rows};
     let staging = StagingImage::build(&CodebookSeedArea::load());
     let mut lcg = 0x1234_5678u32;
     let mut next = move || {

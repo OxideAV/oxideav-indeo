@@ -26,7 +26,7 @@
 //! the un-extracted bank values.
 
 use super::frame::DecodedFrame;
-use super::frame_output::{assemble_plane_if09, strip_min_buffer_bytes, PlaneAssembleError};
+use super::frame_output::{PlaneAssembleError, assemble_plane_if09, strip_min_buffer_bytes};
 use super::picture_layer::{PLANE_COUNT, PLANE_IDX_U, PLANE_IDX_V, PLANE_IDX_Y};
 use super::strip_context::StripGeometry;
 

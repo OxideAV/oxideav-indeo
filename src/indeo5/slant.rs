@@ -394,7 +394,7 @@ mod tests {
         let pair = pair_pack(100, 64);
         let (lo, hi) = pair_unpack(pair_normalise(pair_ror1(pair)));
         assert_eq!((lo, hi), (48, 32)); // mask clears the 2 LSBs: 50 -> 48
-                                        // A multiple of 8 survives exactly.
+        // A multiple of 8 survives exactly.
         let pair = pair_pack(80, 8);
         let (lo, hi) = pair_unpack(pair_normalise(pair_ror1(pair)));
         assert_eq!((lo, hi), (40, 4));

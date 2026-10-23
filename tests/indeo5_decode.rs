@@ -7,7 +7,7 @@
 //! frame reconstructs to the `spec/08 §3.3` mid-grey (`(0 + 0x200) >>
 //! 2 = 128`) in every plane.
 
-use oxideav_indeo::indeo5::{decode_intra_picture, PlaneRole, TileDataSize, TileHeader};
+use oxideav_indeo::indeo5::{PlaneRole, TileDataSize, TileHeader, decode_intra_picture};
 
 /// LSB-first bit packer mirroring the decoder's bit order
 /// (`spec/00 §3`).
@@ -25,12 +25,12 @@ impl BitWriter {
         }
     }
     fn align(&mut self) {
-        while self.bits.len() % 8 != 0 {
+        while !self.bits.len().is_multiple_of(8) {
             self.bits.push(0);
         }
     }
     fn byte_len(&self) -> usize {
-        assert!(self.bits.len() % 8 == 0, "aligned");
+        assert!(self.bits.len().is_multiple_of(8), "aligned");
         self.bits.len() / 8
     }
     fn finish(mut self) -> Vec<u8> {
@@ -73,7 +73,7 @@ fn intra_cif_header(w: &mut BitWriter) {
     w.put(0, 3);
     w.put(0, 4);
     w.align(); // §2.1 pre-frame-header alignment
-               // spec/02 §2 frame header: flags=0, value5=0, aligned exit.
+    // spec/02 §2 frame header: flags=0, value5=0, aligned exit.
     w.put(0x00, 8);
     w.put(0, 3);
     w.align();

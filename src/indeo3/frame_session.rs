@@ -76,9 +76,9 @@
 //! finalisation maintains plus the first-frame / seek INTRA gate, which
 //! are entirely table-free and decodable now.
 
+use super::Bank;
 use super::frame_finalise::{DecodeReturn, FrameContinuity, FrameFinalisation};
 use super::header::{FrameHeader, HeaderError};
-use super::Bank;
 
 /// How an incoming frame was admitted to the session, relative to the
 /// previously-decoded frame's saved state.

@@ -273,7 +273,7 @@ mod tests {
         let r = resolve_mv(Mv { x: -1, y: -2 }, MvResolution::HalfPel);
         assert_eq!((r.dx, r.dy), (-1, -1));
         assert_eq!(r.mode, McMode::HalfPelX); // x LSB=1, y LSB=0
-                                              // -3 -> sar 1 = -2, LSB=1.
+        // -3 -> sar 1 = -2, LSB=1.
         let r = resolve_mv(Mv { x: -3, y: -3 }, MvResolution::HalfPel);
         assert_eq!((r.dx, r.dy, r.mode), (-2, -2, McMode::HalfPelXY));
     }

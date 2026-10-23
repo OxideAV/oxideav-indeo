@@ -131,18 +131,20 @@ fn indeo5_320x240_intra_decodes_all_bands() {
         .filter(|b| b.coding == BlockCoding::Coded)
         .count();
     assert_eq!(coded, 682); // matches stats.coded_blocks for the Y band
-                            // Every coded block's quantiser is band_glob_quant or +1 (the 18
-                            // per-MB +1 deltas the sandbox counted) and its size is 8.
+    // Every coded block's quantiser is band_glob_quant or +1 (the 18
+    // per-MB +1 deltas the sandbox counted) and its size is 8.
     for b in &y_band.blocks {
         assert!(b.quant == 9 || b.quant == 10);
         assert!(b.blk_size == 8);
     }
     // A coded block with non-zero coefficients exists (they are decoded
     // and carried, not discarded).
-    assert!(y_band
-        .blocks
-        .iter()
-        .any(|b| b.coding == BlockCoding::Coded && b.coeffs.iter().any(|&c| c != 0)));
+    assert!(
+        y_band
+            .blocks
+            .iter()
+            .any(|b| b.coding == BlockCoding::Coded && b.coeffs.iter().any(|&c| c != 0))
+    );
 
     // spec/08 §7.3 reconstruction oracle: all four stored checksums
     // verify (Y 0xee60, V 0x4be4, U 0xcf31, frame 0xc975) — the

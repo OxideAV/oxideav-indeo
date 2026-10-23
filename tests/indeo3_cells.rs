@@ -7,8 +7,8 @@
 //! banks, the binary-tree walk and the mode-byte families A and E.
 
 use oxideav_indeo::indeo3::{
-    decode_plane, CodebookSeedArea, DyadDeltaTable, FrameHeader, PictureLayer, PlaneBuffers,
-    PlaneContext, PlanePresence, StagingImage, VqArena,
+    CodebookSeedArea, DyadDeltaTable, FrameHeader, PictureLayer, PlaneBuffers, PlaneContext,
+    PlanePresence, StagingImage, VqArena, decode_plane,
 };
 
 const INTRA_BIN: &[u8] = include_bytes!("data/iv32-160x120-all-intra/samples.bin");

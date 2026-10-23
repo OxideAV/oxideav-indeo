@@ -51,7 +51,7 @@
 //! their `spec/08 §7.3` checksum oracle reports the remaining gap
 //! quantitatively.
 
-use super::assemble::{assemble_frame, AssembleError};
+use super::assemble::{AssembleError, assemble_frame};
 use super::band::{BandError, BandHeader};
 use super::bitreader::{BitReader, BitReaderError};
 use super::codebook::{Codebook, CodebookError, HuffContext};
@@ -59,24 +59,24 @@ use super::format::OutputFormat;
 use super::frame::FrameHeader;
 use super::gop::{BandInfo, GopHeader, Subsampling, TransformId};
 use super::header::FrameType;
-use super::level_table::{build_level_table, LEVEL_TABLE_LEN};
+use super::level_table::{LEVEL_TABLE_LEN, build_level_table};
 use super::mb::MbGrid;
-use super::mb_header::{effective_mb_quant, MbContext, MbHeader, MbHeaderError, QdeltaMode};
-use super::mc::{mc_add_block, BandView, McError};
-use super::mv::{resolve_mv, Mv, MvPredictor, MvResolution};
-use super::output::{plane_stride, OutputError, ReconstructionPlane};
+use super::mb_header::{MbContext, MbHeader, MbHeaderError, QdeltaMode, effective_mb_quant};
+use super::mc::{BandView, McError, mc_add_block};
+use super::mv::{Mv, MvPredictor, MvResolution, resolve_mv};
+use super::output::{OutputError, ReconstructionPlane, plane_stride};
 use super::pack::HostBuffer;
 use super::picture::{PictureError, PictureHeader};
-use super::quant::{dequant_level, BandQuant};
-use super::rv_table::{escape_lindex, escape_value, run_advance, RvEntry, RvTable, RvTableError};
+use super::quant::{BandQuant, dequant_level};
+use super::rv_table::{RvEntry, RvTable, RvTableError, escape_lindex, escape_value, run_advance};
 use super::tile::TileGrid;
 use super::tile_header::{TileDataSize, TileHeader};
 use super::transform::{
+    SCAN_COLUMN_8X8, SCAN_RASTER_4X4, SCAN_RASTER_8X8, SCAN_ZIGZAG_4X4, SCAN_ZIGZAG_8X8,
     inverse_slant_2d_4x4, inverse_slant_2d_8x8, inverse_slant_col_4x4, inverse_slant_col_8x8,
-    inverse_slant_row_4x4, inverse_slant_row_8x8, place_scan_4x4, place_scan_8x8, SCAN_COLUMN_8X8,
-    SCAN_RASTER_4X4, SCAN_RASTER_8X8, SCAN_ZIGZAG_4X4, SCAN_ZIGZAG_8X8,
+    inverse_slant_row_4x4, inverse_slant_row_8x8, place_scan_4x4, place_scan_8x8,
 };
-use super::wavelet::{recompose_plane, Band, LevelBands};
+use super::wavelet::{Band, LevelBands, recompose_plane};
 
 /// The largest picture area the driver allocates band buffers for
 /// (4096 × 4096 samples): a resource guard against hostile headers,
@@ -1364,12 +1364,13 @@ pub(crate) fn decode_payload(
                     declared: band_header.band_data_size,
                 });
             }
-            if parse_complete && !band_aborted {
-                if let Some(end) = band_end {
-                    r.align()?;
-                    if r.byte_pos() < end {
-                        skip_to_byte(&mut *r, end)?;
-                    }
+            if parse_complete
+                && !band_aborted
+                && let Some(end) = band_end
+            {
+                r.align()?;
+                if r.byte_pos() < end {
+                    skip_to_byte(&mut *r, end)?;
                 }
             }
             if inter {

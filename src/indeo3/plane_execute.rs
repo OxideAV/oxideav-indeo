@@ -63,12 +63,12 @@
 //! the pixel synthesis, not the strip-to-frame assembly.
 
 use super::cell_null::{
-    copy_upper_cell, mark_edge_cell, CopyUpperError, CopyUpperGeometry, MarkEdgeError,
-    MarkEdgeGeometry, COPY_UPPER_ROW_COUNT,
+    COPY_UPPER_ROW_COUNT, CopyUpperError, CopyUpperGeometry, MarkEdgeError, MarkEdgeGeometry,
+    copy_upper_cell, mark_edge_cell,
 };
 use super::cell_reconstruct::{
-    reconstruct_cell_stateful, CellOutcome, CellReconstructError, CellReconstructGeometry,
-    PositionEffect,
+    CellOutcome, CellReconstructError, CellReconstructGeometry, PositionEffect,
+    reconstruct_cell_stateful,
 };
 use super::plane_reconstruct::{CellDisposition, CellPlanEntry, PlaneReconstructPlan};
 use super::reconstruct::PREDICTOR_ROW_STRIDE;

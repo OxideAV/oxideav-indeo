@@ -275,13 +275,12 @@ impl PictureStart {
 
         // Spec/01 §3.4 — duplicate-frame_number soft-correction.
         let mut soft_corrected_to_null = false;
-        if frame_type.is_predicted() {
-            if let Some(prev) = prev_frame_number {
-                if prev == frame_number {
-                    frame_type = FrameType::Null;
-                    soft_corrected_to_null = true;
-                }
-            }
+        if frame_type.is_predicted()
+            && let Some(prev) = prev_frame_number
+            && prev == frame_number
+        {
+            frame_type = FrameType::Null;
+            soft_corrected_to_null = true;
         }
 
         Ok((

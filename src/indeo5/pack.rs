@@ -138,7 +138,7 @@ mod tests {
         assert_eq!(&hb.data[0..16], &[1u8; 16]);
         assert_eq!(hb.data[16], 2); // V
         assert_eq!(hb.data[17], 3); // U
-                                    // Placements in buffer order: Y, V, U.
+        // Placements in buffer order: Y, V, U.
         assert_eq!(hb.placements[0].role, PlaneRole::Luma);
         assert_eq!(hb.placements[1].role, PlaneRole::ChromaV);
         assert_eq!(hb.placements[2].role, PlaneRole::ChromaU);

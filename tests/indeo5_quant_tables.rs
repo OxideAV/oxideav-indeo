@@ -6,7 +6,7 @@
 //! on-disk tables through the `ICOpen`-time fill arithmetic must equal
 //! the live bank the Validator round measured (`spec/06 §5.4`).
 
-use oxideav_indeo::indeo5::{quant_matrix, QUANT_GROUPS, QUANT_LEVELS};
+use oxideav_indeo::indeo5::{QUANT_GROUPS, QUANT_LEVELS, quant_matrix};
 
 const CSV: &str = include_str!("data/iv50-quant-matrices-1007b000.csv");
 

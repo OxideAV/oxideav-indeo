@@ -81,7 +81,7 @@
 //! `add eax, [esi + 4*edx + 0x400]` chain at
 //! `IR32_32.DLL!0x10006e0f..0x10006e2e` does.
 
-use super::{CellVariant, CONTINUATION_XOR};
+use super::{CONTINUATION_XOR, CellVariant};
 
 /// Spec/07 §0 / §1.1 — the strip pixel buffer's row stride, `0xb0`
 /// (176) bytes. The predictor for `[edi]` is at `[edi - 0xb0]`.

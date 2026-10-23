@@ -18,11 +18,7 @@ fn bank<'a>(
     which: &str,
 ) -> &'a GeometryBank {
     let p = if plane == "luma" { luma } else { chroma };
-    if which == "full" {
-        &p.full
-    } else {
-        &p.last
-    }
+    if which == "full" { &p.full } else { &p.last }
 }
 
 #[test]

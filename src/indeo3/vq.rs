@@ -1054,12 +1054,14 @@ mod tests {
         }
         let mut alt = [0u8; 16];
         alt[0] = 0x11; // band 0 active
-                       // band 1 stays 0 -> skipped.
+        // band 1 stays 0 -> skipped.
         arena.apply_alt_quant(&img, &alt, 0).unwrap();
         // Band 1 untouched (still 0x55).
-        assert!(arena.as_bytes()[p1..p1 + ARENA_BAND_LEN]
-            .iter()
-            .all(|&b| b == 0x55));
+        assert!(
+            arena.as_bytes()[p1..p1 + ARENA_BAND_LEN]
+                .iter()
+                .all(|&b| b == 0x55)
+        );
     }
 
     #[test]

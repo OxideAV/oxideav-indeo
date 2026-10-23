@@ -49,7 +49,7 @@
 //! §5.5 of `03-macroblock-layer.md`. The RVAs cited in doc-comments
 //! refer to the binary identified in `spec/00 §2`.
 
-use super::strip_context::{slot_field, STRIP_SLOT_COUNT, STRIP_SLOT_STRIDE};
+use super::strip_context::{STRIP_SLOT_COUNT, STRIP_SLOT_STRIDE, slot_field};
 
 // ---- spec/03 §5.1 / §5.3 (cell-stack entry geometry) ---------------
 
