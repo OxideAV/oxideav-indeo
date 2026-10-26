@@ -113,7 +113,7 @@ impl From<VqError> for PictureDecodeError {
 }
 
 /// One decoded picture: three 8-bit planes at their native sizes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct DecodedPicture {
     /// Picture width in luma samples.
     pub width: u32,
@@ -137,6 +137,32 @@ pub struct DecodedPicture {
     pub admission: AdmittedFrame,
     /// Per-plane cell statistics (`None` for a repeated frame).
     pub stats: Option<[PlaneStats; 3]>,
+}
+
+impl Clone for DecodedPicture {
+    fn clone(&self) -> Self {
+        DecodedPicture {
+            luma: self.luma.clone(),
+            chroma_v: self.chroma_v.clone(),
+            chroma_u: self.chroma_u.clone(),
+            ..*self
+        }
+    }
+
+    /// Reuses `self`'s plane buffers, so the decoder can keep its copy
+    /// of the last picture without allocating one per frame.
+    fn clone_from(&mut self, source: &Self) {
+        self.width = source.width;
+        self.height = source.height;
+        self.chroma_width = source.chroma_width;
+        self.chroma_height = source.chroma_height;
+        self.luma.clone_from(&source.luma);
+        self.chroma_v.clone_from(&source.chroma_v);
+        self.chroma_u.clone_from(&source.chroma_u);
+        self.repeated_previous = source.repeated_previous;
+        self.admission = source.admission;
+        self.stats = source.stats;
+    }
 }
 
 impl DecodedPicture {
@@ -292,7 +318,10 @@ impl Indeo3PictureDecoder {
             admission: admitted,
             stats: Some(stats),
         };
-        self.previous = Some(out.clone());
+        match &mut self.previous {
+            Some(prev) => prev.clone_from(&out),
+            None => self.previous = Some(out.clone()),
+        }
         Ok(out)
     }
 }

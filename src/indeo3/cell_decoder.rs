@@ -93,11 +93,22 @@ impl PlaneBuffers {
     /// The plane as `out_w × out_h` 8-bit samples (`spec/07 §4.3`:
     /// `(v & 0x7f) << 1`), cropped from the decoded plane.
     pub fn to_pixels(&self, out_w: u32, out_h: u32) -> Vec<u8> {
-        let mut out = Vec::with_capacity((out_w * out_h) as usize);
-        for y in 0..out_h {
-            for x in 0..out_w {
-                let v = self.sample(x, y).unwrap_or(0);
-                out.push((v & 0x7f) << 1);
+        // Row by row and strip by strip: each strip's run of a row is
+        // contiguous in its buffer. Samples [`Self::sample`] reports as
+        // `None` stay 0.
+        let mut out = vec![0u8; (out_w * out_h) as usize];
+        let full = self.banks.full_strip as usize;
+        let (w, h) = (out_w.min(self.width) as usize, out_h.min(self.height));
+        if full == 0 || w == 0 {
+            return out;
+        }
+        for (y, row) in (0..h).zip(out.chunks_exact_mut(out_w as usize)) {
+            let start = Self::idx(i64::from(y), 0);
+            for (run, strip) in row[..w].chunks_mut(full).zip(&self.strips) {
+                let src = strip.get(start..).unwrap_or(&[]);
+                for (d, &v) in run.iter_mut().zip(src) {
+                    *d = (v & 0x7f) << 1;
+                }
             }
         }
         out
@@ -422,14 +433,13 @@ impl<'a, 'b> Walker<'a, 'b> {
     /// above it (the predictor chain reduces to the row above the
     /// cell).
     fn copy_upper(&mut self, cell: &CellRect) {
-        let stride = STRIP_ROW_STRIDE as usize;
         let s = self.strip_mut(cell.strip);
         let src = PlaneBuffers::idx(i64::from(cell.y) - 1, cell.x);
-        let row: Vec<u8> = s[src..src + cell.w as usize].to_vec();
+        let w = cell.w as usize;
+        // The source row lies above the cell, so no copy overwrites it.
         for r in 0..cell.h as usize {
             let dst = PlaneBuffers::idx(i64::from(cell.y) + r as i64, cell.x);
-            s[dst..dst + cell.w as usize].copy_from_slice(&row);
-            let _ = stride;
+            s.copy_within(src..src + w, dst);
         }
     }
 
@@ -448,38 +458,60 @@ impl<'a, 'b> Walker<'a, 'b> {
         let offset = i64::from(packed >> 2);
         let vert_half = packed & 1 != 0;
         let horiz_half = packed & 2 != 0;
-        let stride = STRIP_ROW_STRIDE as i64;
-        let mut out = vec![0u8; (cell.w * cell.h) as usize];
-        for r in 0..cell.h as i64 {
-            for c in 0..cell.w as i64 {
-                let dst = PlaneBuffers::idx(i64::from(cell.y) + r, cell.x + c as u32) as i64;
-                let src = dst + offset;
-                let fetch = |i: i64| -> Result<u32, CellDecodeError> {
-                    if i < 0 {
-                        return Err(CellDecodeError::McOutOfRange);
-                    }
-                    rs.get(i as usize)
-                        .map(|&v| u32::from(v))
-                        .ok_or(CellDecodeError::McOutOfRange)
-                };
-                let v = match (vert_half, horiz_half) {
-                    (false, false) => fetch(src)?,
-                    (true, false) => (fetch(src)? + fetch(src + stride)?) >> 1,
-                    (false, true) => (fetch(src)? + fetch(src + 1)?) >> 1,
-                    (true, true) => {
-                        let a = (fetch(src)? + fetch(src + 1)?) >> 1;
-                        let b = (fetch(src + stride)? + fetch(src + stride + 1)?) >> 1;
-                        (a + b) >> 1
-                    }
-                };
-                out[(r as u32 * cell.w + c as u32) as usize] = (v & 0x7f) as u8;
-            }
+        let stride = STRIP_ROW_STRIDE as usize;
+        let (w, h) = (cell.w as usize, cell.h as usize);
+        if w == 0 || h == 0 {
+            return Ok(());
         }
-        let s = self.strip_mut(cell.strip);
-        for r in 0..cell.h as usize {
-            let dst = PlaneBuffers::idx(i64::from(cell.y) + r as i64, cell.x);
-            s[dst..dst + cell.w as usize]
-                .copy_from_slice(&out[r * cell.w as usize..(r + 1) * cell.w as usize]);
+        // The fetch addresses grow with the row and the column, so the
+        // whole cell is in range when its first and last fetches are.
+        // Checking both before writing anything leaves the cell
+        // untouched on a fault, as a per-sample check would.
+        let first = PlaneBuffers::idx(i64::from(cell.y), cell.x) as i64 + offset;
+        let last = PlaneBuffers::idx(i64::from(cell.y) + h as i64 - 1, cell.x) as i64
+            + offset
+            + (w - 1) as i64
+            + if vert_half { stride as i64 } else { 0 }
+            + i64::from(horiz_half);
+        if first < 0 || last >= rs.len() as i64 {
+            return Err(CellDecodeError::McOutOfRange);
+        }
+        let avg = |a: u8, b: u8| (u16::from(a) + u16::from(b)) >> 1;
+        let s = &mut self.bufs.strips[cell.strip];
+        for r in 0..h {
+            let d0 = PlaneBuffers::idx(i64::from(cell.y) + r as i64, cell.x);
+            let s0 = (d0 as i64 + offset) as usize;
+            let dst = &mut s[d0..d0 + w];
+            let a = &rs[s0..s0 + w];
+            match (vert_half, horiz_half) {
+                (false, false) => {
+                    for (d, &p) in dst.iter_mut().zip(a) {
+                        *d = p & 0x7f;
+                    }
+                }
+                (true, false) => {
+                    let b = &rs[s0 + stride..s0 + stride + w];
+                    for ((d, &p), &q) in dst.iter_mut().zip(a).zip(b) {
+                        *d = (avg(p, q) & 0x7f) as u8;
+                    }
+                }
+                (false, true) => {
+                    let b = &rs[s0 + 1..s0 + 1 + w];
+                    for ((d, &p), &q) in dst.iter_mut().zip(a).zip(b) {
+                        *d = (avg(p, q) & 0x7f) as u8;
+                    }
+                }
+                (true, true) => {
+                    let a1 = &rs[s0 + 1..s0 + 1 + w];
+                    let b = &rs[s0 + stride..s0 + stride + w];
+                    let b1 = &rs[s0 + stride + 1..s0 + stride + 1 + w];
+                    for (i, d) in dst.iter_mut().enumerate() {
+                        let top = avg(a[i], a1[i]);
+                        let bottom = avg(b[i], b1[i]);
+                        *d = (((top + bottom) >> 1) & 0x7f) as u8;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -587,7 +619,7 @@ impl<'a, 'b> Walker<'a, 'b> {
     /// high word — each applied through [`apply_dyad`].
     fn literal(&mut self, table: &[u8], b: u8, pred: u32) -> Result<u32, CellDecodeError> {
         let e = usize::from(b) * 4;
-        let word = u32::from_le_bytes([table[e], table[e + 1], table[e + 2], table[e + 3]]);
+        let word = u32::from_le_bytes(table[e..e + 4].try_into().unwrap());
         let sum = pred.wrapping_add(word);
         let (lo_dyad, hi_dyad) = if sum & 0x8000_0000 == 0 {
             // One-byte form: `(B[i] << 16) + sext16(B[j])`.
@@ -598,7 +630,7 @@ impl<'a, 'b> Walker<'a, 'b> {
         } else {
             let c = self.r.byte()?;
             let ce = usize::from(c) * 4 + 2;
-            let c_hi = u16::from_le_bytes([table[ce], table[ce + 1]]);
+            let c_hi = u16::from_le_bytes(table[ce..ce + 2].try_into().unwrap());
             (
                 c_hi.wrapping_sub(0x8000),
                 ((word >> 16) as u16).wrapping_sub(0x8000),
@@ -910,7 +942,7 @@ impl<'a, 'b> Walker<'a, 'b> {
     fn pred_dword(&self, strip: usize, y: i64, x: u32, own: bool) -> u32 {
         let s = &self.bufs.strips[strip];
         let i = PlaneBuffers::idx(if own { y } else { y - 1 }, x);
-        u32::from_le_bytes([s[i], s[i + 1], s[i + 2], s[i + 3]])
+        u32::from_le_bytes(s[i..i + 4].try_into().unwrap())
     }
 
     #[inline]
@@ -936,7 +968,8 @@ impl<'a, 'b> Walker<'a, 'b> {
     fn pred_dword_doubled(&self, strip: usize, y: i64, x: u32, own: bool) -> u32 {
         let s = &self.bufs.strips[strip];
         let i = PlaneBuffers::idx(if own { y + 1 } else { y }, x);
-        u32::from_le_bytes([s[i], s[i + 2], s[i + 4], s[i + 6]])
+        let p: &[u8; 7] = s[i..i + 7].try_into().unwrap();
+        u32::from_le_bytes([p[0], p[2], p[4], p[6]])
     }
 
     /// Store a decoded 4-byte row doubled horizontally as rows
@@ -956,29 +989,36 @@ impl<'a, 'b> Walker<'a, 'b> {
         let repeat = y == 0;
         let s = &mut self.bufs.strips[strip];
         let above = PlaneBuffers::idx(y - 1, x);
-        let prev: Vec<u8> = s[above..above + 8].to_vec();
         let i0 = PlaneBuffers::idx(y, x);
         let i1 = PlaneBuffers::idx(y + 1, x);
-        for j in 0..8 {
-            s[i0 + j] = if repeat {
-                cur[j]
-            } else {
-                ((u16::from(prev[j] & 0x7f) + u16::from(cur[j] & 0x7f)) >> 1) as u8
-            };
-            s[i1 + j] = cur[j];
-        }
+        let cur = u64::from_le_bytes(cur);
+        let first = if repeat {
+            cur
+        } else {
+            // Bytewise `((prev & 0x7f) + (cur & 0x7f)) >> 1`: the 7-bit
+            // sums fit their bytes, and the final mask drops the bit
+            // each byte's shift takes from the byte above it.
+            let prev = u64::from_le_bytes(s[above..above + 8].try_into().unwrap());
+            (((prev & LOW7) + (cur & LOW7)) >> 1) & LOW7
+        };
+        s[i0..i0 + 8].copy_from_slice(&first.to_le_bytes());
+        s[i1..i1 + 8].copy_from_slice(&cur.to_le_bytes());
     }
 
     /// Family F: add per-pixel deltas `(d0, d0, d1, d1, d2, d2, d3, d3)`
     /// to the two rows of a pair over their own (motion-compensated)
     /// content.
     fn add_doubled_deltas(&mut self, strip: usize, y: i64, x: u32, d: [u8; 4]) {
+        // Bytewise `(s + d) & 0x7f`: the low seven bits of a sum only
+        // depend on the low seven bits of its terms, whose sums fit
+        // their bytes.
+        let d = u64::from_le_bytes([d[0], d[0], d[1], d[1], d[2], d[2], d[3], d[3]]) & LOW7;
         let s = &mut self.bufs.strips[strip];
         for row in [y, y + 1] {
             let i = PlaneBuffers::idx(row, x);
-            for j in 0..8 {
-                s[i + j] = s[i + j].wrapping_add(d[j / 2]) & 0x7f;
-            }
+            let px = &mut s[i..i + 8];
+            let v = u64::from_le_bytes((&*px).try_into().unwrap());
+            px.copy_from_slice(&(((v & LOW7) + d) & LOW7).to_le_bytes());
         }
     }
 
@@ -994,6 +1034,9 @@ impl<'a, 'b> Walker<'a, 'b> {
         }
     }
 }
+
+/// The low seven bits of each byte of a `u64`.
+const LOW7: u64 = 0x7f7f_7f7f_7f7f_7f7f;
 
 /// Apply one dyad (a 16-bit lane `b·256 + a`, `a` and `b` signed with
 /// the low byte's borrow folded into `b`) to a lane of two predictor

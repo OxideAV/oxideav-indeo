@@ -7,6 +7,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - edition 2024, MSRV 1.95
+- indeo3: about 4x faster picture decode with identical output; criterion
+  bench `indeo3_decode` over the staged IV32 corpora
 
 ## [0.0.2](https://github.com/OxideAV/oxideav-indeo/compare/v0.0.1...v0.0.2) - 2026-09-18
 
