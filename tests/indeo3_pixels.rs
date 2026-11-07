@@ -4,8 +4,9 @@
 //! decodes (`expected.yuv`, planar `yuv410p`: Y, then U, then V) —
 //! the all-intra 160×120 corpus (8 intra frames) and the 176×144
 //! 4-frame-intra-period corpus (2 intra + 6 inter frames: motion
-//! compensation with full- and half-pel vectors, the two-bank
-//! reference ping-pong, the own-content families B / F).
+//! compensation with full-pel vectors only, the two-bank reference
+//! ping-pong, the own-content families B / F). The half-pel filters
+//! are pinned by the unit tests in `src/indeo3/cell_decoder.rs`.
 
 use oxideav_core::{CodecId, Decoder, Frame, Packet, TimeBase};
 use oxideav_indeo::indeo3::{Indeo3PictureDecoder, Indeo3RegistryDecoder, decode_video_frame};
