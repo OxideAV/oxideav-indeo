@@ -61,6 +61,7 @@ use super::frame_yuv::{YuvError, YuvFrame, upsample_frame};
 
 /// Errors raised while decoding one frame through an [`Indeo3Decoder`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DecoderError {
     /// The frame's sequencing was rejected by the session (first-frame
     /// or seek INTRA requirement, or a malformed header).
@@ -104,6 +105,7 @@ impl From<FrameReconstructError> for DecoderError {
 /// The result of decoding one frame through an [`Indeo3Decoder`]: the
 /// session admission plus a borrow of the reconstructed output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DecodedOutput<'a> {
     /// The session's sequencing classification for this frame.
     pub admission: AdmittedFrame,

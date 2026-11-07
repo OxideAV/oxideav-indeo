@@ -166,6 +166,7 @@ pub struct UnpackRun {
 
 /// Errors the arena-driven unpacker surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CellUnpackError {
     /// Degenerate geometry (zero width or zero rows).
     ZeroDimension {

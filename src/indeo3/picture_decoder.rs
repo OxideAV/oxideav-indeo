@@ -29,6 +29,7 @@ use super::vq::{DyadDeltaTable, VqArena, VqError};
 /// Errors raised while decoding one frame through an
 /// [`Indeo3PictureDecoder`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PictureDecodeError {
     /// The frame's sequencing was rejected by the session.
     Session(SessionError),
@@ -114,6 +115,7 @@ impl From<VqError> for PictureDecodeError {
 
 /// One decoded picture: three 8-bit planes at their native sizes.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DecodedPicture {
     /// Picture width in luma samples.
     pub width: u32,

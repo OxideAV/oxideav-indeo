@@ -158,6 +158,7 @@ pub const BI_BITFIELDS: u32 = 3;
 /// performing it. Only [`OutputConversion::If09Passthrough`] has a
 /// landed body ([`assemble_plane_if09`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OutputConversion {
     /// `0x1000a53c` — IF09 / YVU9 planar passthrough (input
     /// `biCompression == 'IF09'`). 7-bit→8-bit upshift + plane copy.
@@ -208,6 +209,7 @@ impl OutputConversion {
 /// Spec/07 §5.3 — why an output-format request resolves to no
 /// conversion variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OutputDispatchError {
     /// The input `biCompression` is none of the three the dispatch
     /// switches on (`'IF09'`, `BI_RGB`, `BI_BITFIELDS`).
@@ -305,6 +307,7 @@ pub const fn strip_min_buffer_bytes(strip_width: u32, plane_height: u32) -> usiz
 
 /// Spec/07 §5.7 — failure modes of the strip-to-frame assembly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PlaneAssembleError {
     /// The caller supplied a different number of strip buffers than
     /// the §5.7 / spec/02 §4.1 geometry's `strip_count`.
@@ -523,6 +526,7 @@ pub const CHROMA_UPSAMPLE_FACTOR: usize = 4;
 
 /// Spec/07 §5.5 — failure modes of the chroma box-upsampler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ChromaUpsampleError {
     /// The source row stride is narrower than the source chroma width
     /// — one source row cannot fit.

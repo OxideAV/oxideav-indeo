@@ -79,6 +79,7 @@ pub fn bias_and_clamp(coeff: i32) -> u8 {
 
 /// Errors the output-plane conversion can raise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OutputError {
     /// The reconstruction buffer's length does not match
     /// `stride * height` (`spec/08 §1.1`). A programming error in the

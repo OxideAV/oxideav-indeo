@@ -127,6 +127,7 @@ pub struct DyadDelta {
 
 /// The error modes the in-cell predictor chain surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CellEmitError {
     /// `width_dwords` or `source_rows` is zero (a degenerate cell the
     /// §2.4 iteration order cannot describe). Carries which dimension.
@@ -198,6 +199,7 @@ impl core::fmt::Display for CellEmitError {
 
 /// The result of driving a cell through the in-cell predictor chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct CellEmitStats {
     /// The number of source rows processed (= `geometry.source_rows`).
     pub source_rows: usize,

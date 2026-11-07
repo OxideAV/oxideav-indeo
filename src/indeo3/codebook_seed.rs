@@ -171,6 +171,7 @@ impl SeedBlock {
 /// vendored area parses cleanly; these fire only for caller-supplied
 /// synthetic tables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SeedAreaError {
     /// A block's body (pairs + expansion byte) ran past the supplied
     /// buffer before a terminator was seen.

@@ -55,6 +55,7 @@ pub fn mb_uses_mc(transform_id: u32) -> bool {
 
 /// Errors the MC block fetch can raise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum McError {
     /// The MV-displaced source rectangle (including the +1 column/row
     /// the half-pel kernels read) falls outside the reference buffer.

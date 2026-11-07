@@ -32,6 +32,7 @@ const DECOMP_LEVELS_ACCEPTED: [u32; 4] = [0, 1, 2, 6];
 
 /// Errors raised while parsing the GOP header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GopError {
     /// Spec/02 §1.5 — the 3-bit `decomp_levels` field held a forbidden
     /// value (`> 2 && != 6`), parser sentinel `2`
@@ -290,6 +291,7 @@ pub struct Transparency {
 /// Spec/02 §1 — the parsed GOP header (the determinable subset through
 /// the band_info array + transparency block).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct GopHeader {
     /// The 8-bit `gop_flags` (§1.1).
     pub flags: GopFlags,

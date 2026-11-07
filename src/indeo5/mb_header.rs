@@ -38,6 +38,7 @@ pub const MAX_QUANT: u8 = 31;
 
 /// Errors raised while parsing a per-MB header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MbHeaderError {
     /// A VLC field failed to decode against the codebook.
     Vlc(CodebookError),

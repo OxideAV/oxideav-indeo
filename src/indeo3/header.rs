@@ -59,6 +59,7 @@ pub const MAX_HEIGHT: u16 = 0x01e0;
 /// distinguish "the buffer was too short" from "the checksum did
 /// not match" from "the codec version is wrong".
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HeaderError {
     /// The supplied buffer was too short for either the 16-byte
     /// frame header (§2) or the 48-byte bitstream header (§3).
@@ -228,6 +229,7 @@ pub struct FrameHeaderPreamble {
 /// 48-byte bitstream header (§3) starting at byte `0x10` of the
 /// codec frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BitstreamHeader {
     /// `dec_version` (bsh+0x00, §3.1). Always equals
     /// [`REQUIRED_DEC_VERSION`] for a successfully parsed
@@ -291,6 +293,7 @@ impl BitstreamHeader {
 /// validation called out in `spec/01-file-header.md` §§2.1, 2.2,
 /// 3.1, and 3.2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FrameHeader {
     /// The 16-byte preamble at offset 0 (§2).
     pub frame: FrameHeaderPreamble,

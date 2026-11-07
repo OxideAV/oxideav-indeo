@@ -58,6 +58,7 @@ use super::vq::DyadDeltaTable;
 /// Frame-wide reconstruction coverage, folding every present plane's
 /// [`super::PlaneExecStats`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FrameReconstructStats {
     /// Present planes reconstructed this pass.
     pub planes: usize,
@@ -111,6 +112,7 @@ impl FrameReconstructStats {
 /// [`super::ReconstructedPlane`] per present plane plus the frame-wide
 /// coverage fold.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ReconstructedFrame {
     /// One reconstructed plane per present plane, in the
     /// [`super::DecodedFrame::planes`] decode order (U, V, Y). Empty for

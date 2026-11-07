@@ -83,6 +83,7 @@ oxideav_core::register!("indeo", register);
 
 /// Crate-local error type.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// Reserved placeholder for codec paths that have not landed
     /// yet (anything beyond the Indeo 3 header + picture layer).

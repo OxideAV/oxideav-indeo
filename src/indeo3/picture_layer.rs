@@ -88,6 +88,7 @@ pub const MIN_PRELUDE_LEN: usize = NUM_VECTORS_FIELD_LEN;
 /// `num_vectors` field would extend past the input buffer — raise
 /// an error.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PictureLayerError {
     /// The plane's computed base address would extend past the
     /// end of the input buffer. The decoder cannot read the

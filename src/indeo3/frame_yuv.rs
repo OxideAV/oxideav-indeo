@@ -58,6 +58,7 @@ use super::picture_layer::{PLANE_IDX_U, PLANE_IDX_V, PLANE_IDX_Y};
 /// box-upsampled from their 4:1:0 subsampled geometry (`spec/07
 /// §5.5`).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct YuvPlane {
     /// Spec/02 §2 plane index (0 = Y, 1 = V, 2 = U).
     pub plane_idx: usize,
@@ -93,6 +94,7 @@ impl YuvPlane {
 /// box-upsampled per `spec/07 §5.5`; the Y plane is carried through
 /// unchanged from the §5.7 assembly.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct YuvFrame {
     /// Full-resolution planes in `spec/07 §5.6` output order (Y, V,
     /// U). A plane absent from the source [`OutputFrame`] is omitted.
@@ -123,6 +125,7 @@ impl YuvFrame {
 
 /// Errors raised while producing a full-resolution [`YuvFrame`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum YuvError {
     /// The underlying spec/07 §5.7 strip-to-frame assembly failed.
     Assemble(AssembleError),

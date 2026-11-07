@@ -66,6 +66,7 @@ const _: () = assert!(FRAME_PLANE_DECODE_ORDER[2] == PLANE_IDX_Y);
 
 /// Errors raised by the end-to-end frame-decode driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FrameDecodeError {
     /// The spec/01 header parse failed.
     Header(HeaderError),
@@ -128,6 +129,7 @@ impl From<PictureLayerError> for FrameDecodeError {
 /// sub-cells. These counts summarise that decomposition without
 /// re-walking the tree.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PlaneCellStats {
     /// Number of top-level INTRA leaf cells (spec/03 §3.3).
     pub intra_cells: usize,
@@ -169,6 +171,7 @@ impl PlaneCellStats {
 
 /// The structural decode result for one present plane.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DecodedPlane {
     /// Spec/02 §2 plane index (0 = Y, 1 = V, 2 = U).
     pub plane_idx: usize,
@@ -207,6 +210,7 @@ pub enum ReconstructionStatus {
 
 /// The end-to-end structural decode of one Indeo 3 codec frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DecodedFrame {
     /// The parsed spec/01 combined header.
     pub header: FrameHeader,

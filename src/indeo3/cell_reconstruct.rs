@@ -168,6 +168,7 @@ pub enum CellOutcome {
 
 /// Errors the static-table-only executor surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CellReconstructError {
     /// `width_dwords` or `source_rows` is zero — a degenerate cell.
     ZeroDimension {

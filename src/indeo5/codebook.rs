@@ -100,6 +100,7 @@ impl HuffContext {
 
 /// Errors raised while building or decoding a codebook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CodebookError {
     /// A descriptor declared no rows at all.
     NoRows,

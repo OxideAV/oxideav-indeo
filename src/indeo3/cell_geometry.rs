@@ -316,6 +316,7 @@ impl CellRect {
 /// Spec/05 §7.3 — typed failure surface for the reverse
 /// decomposition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CellRectDecodeError {
     /// `dst_addr < strip_base` — caller passed an address before
     /// the strip's base pointer; the binary's forward arithmetic

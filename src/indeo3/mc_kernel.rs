@@ -206,6 +206,7 @@ pub struct McKernelGeometry {
 
 /// Spec/05 §5.1 / §5.3 — construction error for [`McKernelGeometry`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum McKernelGeometryError {
     /// The supplied cell width was zero — the inner loop's `dec cl;
     /// jne` would underflow on entry. §2.4 of `spec/03` and §5.1 of

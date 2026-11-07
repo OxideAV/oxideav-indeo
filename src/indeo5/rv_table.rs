@@ -85,6 +85,7 @@ pub enum RvEntry {
 
 /// Errors raised by the rv-table mechanism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RvTableError {
     /// `rv_tab_sel` outside `0..=8`.
     BadSelector {

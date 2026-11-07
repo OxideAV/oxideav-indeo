@@ -83,6 +83,7 @@ const _: () = assert!(STRIP_ROW_STRIDE == 0xb0);
 
 /// Errors raised while executing a plane's reconstruction plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PlaneExecError {
     /// The plane geometry is degenerate: zero width or zero height
     /// (`spec/02 §4.1` rejects a zero-sized plane).
@@ -190,6 +191,7 @@ pub struct DeferredFrontier {
 
 /// Per-plane reconstruction coverage after executing a plan.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PlaneExecStats {
     /// VQ_NULL copy units reconstructed through [`copy_upper_cell`].
     pub copy_units: usize,

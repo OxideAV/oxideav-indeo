@@ -46,6 +46,7 @@ pub const MAX_READ_BITS: u32 = 26;
 
 /// Errors the LSB-first reader can raise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BitReaderError {
     /// The stream did not even carry the initial 4-byte DWORD prefetch
     /// (`spec/01 §3.1`); an Indeo 5 frame is always at least the
