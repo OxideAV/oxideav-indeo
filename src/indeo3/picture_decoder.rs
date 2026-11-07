@@ -154,16 +154,30 @@ impl Clone for DecodedPicture {
     /// Reuses `self`'s plane buffers, so the decoder can keep its copy
     /// of the last picture without allocating one per frame.
     fn clone_from(&mut self, source: &Self) {
-        self.width = source.width;
-        self.height = source.height;
-        self.chroma_width = source.chroma_width;
-        self.chroma_height = source.chroma_height;
-        self.luma.clone_from(&source.luma);
-        self.chroma_v.clone_from(&source.chroma_v);
-        self.chroma_u.clone_from(&source.chroma_u);
-        self.repeated_previous = source.repeated_previous;
-        self.admission = source.admission;
-        self.stats = source.stats;
+        // Destructured in full so a field added later fails to compile
+        // here instead of being silently left stale.
+        let DecodedPicture {
+            width,
+            height,
+            chroma_width,
+            chroma_height,
+            luma,
+            chroma_v,
+            chroma_u,
+            repeated_previous,
+            admission,
+            stats,
+        } = source;
+        self.width = *width;
+        self.height = *height;
+        self.chroma_width = *chroma_width;
+        self.chroma_height = *chroma_height;
+        self.luma.clone_from(luma);
+        self.chroma_v.clone_from(chroma_v);
+        self.chroma_u.clone_from(chroma_u);
+        self.repeated_previous = *repeated_previous;
+        self.admission = *admission;
+        self.stats = *stats;
     }
 }
 
