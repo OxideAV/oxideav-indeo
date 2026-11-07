@@ -44,6 +44,7 @@ use super::{AssembleError, assemble_frame};
 
 /// Errors raised by the multi-frame session.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SessionError {
     /// The first frame of a session must be INTRA (`spec/01 §3.2` —
     /// nothing to predict from or repeat).
@@ -87,6 +88,7 @@ impl std::error::Error for SessionError {}
 
 /// One decoded frame out of the session.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SessionOutput {
     /// The frame type (after the `spec/01 §3.4` soft-correction).
     pub frame_type: FrameType,

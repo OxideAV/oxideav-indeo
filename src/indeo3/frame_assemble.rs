@@ -81,6 +81,7 @@ impl OutputFrame {
 
 /// Errors raised while assembling output planes.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AssembleError {
     /// The caller supplied the wrong number of strip buffers for a
     /// plane.

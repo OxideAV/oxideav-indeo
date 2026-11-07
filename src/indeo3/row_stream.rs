@@ -80,6 +80,7 @@ pub struct CellRowsRun {
 
 /// Errors the row-stream executor surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RowStreamError {
     /// The stream ran out mid-cell.
     StreamExhausted {

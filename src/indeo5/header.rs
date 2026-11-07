@@ -43,6 +43,7 @@ pub const PICTURE_START_CODE: u32 = 0x1f;
 
 /// Errors raised while parsing the Indeo 5 file header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HeaderError {
     /// Spec/01 §2 — the format descriptor was shorter than the 0x14
     /// bytes the validator reads.
@@ -132,6 +133,7 @@ impl std::error::Error for HeaderError {}
 /// surfaced; offsets `0x14+` are codec-internal session scratch
 /// (`spec/01 §2.3`) and not part of the wire format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FormatDescriptor {
     /// Coded picture width in pixels (offset 0x10).
     pub width: u32,

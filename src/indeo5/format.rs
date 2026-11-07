@@ -44,6 +44,7 @@ pub const BI_RGB: u32 = 0;
 
 /// The host chroma layout for one output format (`spec/08 §5.3`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ChromaLayout {
     /// 4:1:0 planar (`YVU9`/`IF09`).
     Planar410,
@@ -57,6 +58,7 @@ pub enum ChromaLayout {
 
 /// An Indeo 5 host output format (`spec/08 §2.2`/`§2.3`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OutputFormat {
     /// `YVU9` / `IF09` — 4:1:0 planar, plane order Y, V, U.
     Yvu9,

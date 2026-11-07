@@ -33,6 +33,7 @@ use crate::indeo5::planes::{FramePlanes, PlaneRole};
 
 /// Errors the whole-frame assembly can raise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AssembleError {
     /// The requested output format is not a planar YUV format — the
     /// packed `Yuy2` byte interleave is deferred (`spec/08 §9.4`) and

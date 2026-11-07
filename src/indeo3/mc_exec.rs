@@ -155,6 +155,7 @@ pub const fn advance_boundary_fixup_row(dst_cell_offset: i64) -> i64 {
 /// itself performs no such check per §4.4; the strip allocation's
 /// padding absorbs in-bounds-by-construction encoder output).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum McCopyError {
     /// The destination cell's last row would extend past the end of
     /// the supplied buffer.
@@ -364,6 +365,7 @@ pub fn mc_copy_cell_mv(
 /// Spec/03 §5.5 — failure modes of the safe-Rust bound check
 /// [`apply_per_cell_edge_fixup`] applies at the buffer edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PerCellEdgeFixupError {
     /// A zero cell height would underflow the §5.5 do-while counter
     /// (`edx -= 4; while (edx > 0)` runs its body at least once).

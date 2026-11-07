@@ -85,6 +85,7 @@ pub const MAX_PICTURE_PIXELS: u64 = 4096 * 4096;
 
 /// Errors raised by the whole-frame driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DecodeError {
     /// Fault in the spec/01/spec/02 picture-header stack.
     Picture(PictureError),
@@ -327,6 +328,7 @@ pub struct DecodeFrontier {
 
 /// Aggregate structural counts over one decoded frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct DecodeStats {
     /// Bands walked (including empty ones).
     pub bands: u32,
@@ -398,6 +400,7 @@ pub struct BandReconstruction {
 /// One decoded INTRA frame: the parsed header stack, the assembled
 /// host buffer, and the structural coverage report.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct DecodedPicture {
     /// The parsed picture header.
     pub header: PictureHeader,

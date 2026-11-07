@@ -117,6 +117,7 @@ impl PlaneBuffers {
 
 /// Errors of the plane decoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CellDecodeError {
     /// The bitstream ended inside the plane.
     StreamExhausted,
@@ -182,6 +183,7 @@ impl std::error::Error for CellDecodeError {}
 
 /// Per-plane decode statistics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct PlaneStats {
     /// Leaf cells positioned.
     pub cells: u32,

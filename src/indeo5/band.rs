@@ -32,6 +32,7 @@ pub const DEFAULT_RV_TAB_SEL: u32 = 8;
 
 /// Errors raised while parsing the band header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BandError {
     /// Spec/02 §3.4 — `num_rv_corr` exceeded [`MAX_RV_CORR`]; the
     /// parser takes the early-exit at `IR50_32.DLL!0x1001e0c3`.

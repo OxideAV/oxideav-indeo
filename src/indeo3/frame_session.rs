@@ -123,6 +123,7 @@ impl FrameAdmission {
 
 /// The fully-classified outcome of admitting one frame to the session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AdmittedFrame {
     /// How the frame was admitted relative to the saved state.
     pub admission: FrameAdmission,
@@ -152,6 +153,7 @@ impl AdmittedFrame {
 
 /// Errors raised while admitting a frame to a [`DecodeSession`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SessionError {
     /// The frame's spec/01 header could not be parsed.
     Header(HeaderError),

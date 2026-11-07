@@ -373,6 +373,7 @@ impl CellAddrEntry {
 /// reject malformed wire input rather than producing an in-range
 /// but meaningless byte offset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum McAddressError {
     /// `dst_addr = dst_cell_data + cell_pos_aux` overflowed `usize`.
     DestAddressOverflow,

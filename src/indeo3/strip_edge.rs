@@ -294,6 +294,7 @@ pub const fn strip_edge_byte_copy_offsets() -> (i32, i32) {
 /// caller's pixel buffer. The three failure modes below capture the
 /// out-of-bounds cases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StripEdgeApplyError {
     /// The dims report a zero `strip_width`; the §5.4 fix-up cannot
     /// derive a "one-byte-before-rightmost" read offset because there

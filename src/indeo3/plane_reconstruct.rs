@@ -114,6 +114,7 @@ pub struct CellPlanEntry {
 
 /// Per-disposition reconstruction-unit counts for one plane.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DispositionCounts {
     /// VQ_NULL copy cells (table-free; reconstructable now).
     pub vq_null_copy: usize,
@@ -264,6 +265,7 @@ pub fn classify_plane(plane: &DecodedPlane) -> PlaneReconstructPlan {
 /// Errors raised while driving the unblocked VQ_NULL cells of a plane
 /// over a strip pixel buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PlaneReconstructError {
     /// A VQ_NULL copy cell's [`copy_upper_cell`] drive failed. Carries
     /// the unit's plane coordinates and the underlying error.
@@ -291,6 +293,7 @@ impl std::error::Error for PlaneReconstructError {}
 
 /// Outcome of driving a plane's unblocked VQ_NULL copy cells.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct VqNullDriveStats {
     /// VQ_NULL copy cells that were driven through [`copy_upper_cell`].
     pub copy_cells_driven: usize,

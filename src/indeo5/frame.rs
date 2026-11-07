@@ -24,6 +24,7 @@ use super::bitreader::{BitReader, BitReaderError};
 
 /// Errors raised while parsing the frame header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FrameError {
     /// Underlying bit-reader fault.
     BitReader(BitReaderError),
@@ -171,6 +172,7 @@ impl HuffDesc {
 
 /// Spec/02 §2 — the parsed frame header.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FrameHeader {
     /// The §1.9 GOP-trailing block (present for INTRA frames only).
     pub gop_trailer: Option<GopTrailer>,

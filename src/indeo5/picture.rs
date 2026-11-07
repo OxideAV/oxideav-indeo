@@ -27,6 +27,7 @@ use super::header::{FrameType, HeaderError, PictureStart};
 
 /// Errors raised while parsing a full picture header.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PictureError {
     /// Fault in the `spec/01 §3` picture-start triplet.
     Header(HeaderError),
@@ -66,6 +67,7 @@ impl std::error::Error for PictureError {}
 
 /// Spec/01 + spec/02 — a fully parsed Indeo 5 picture header.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PictureHeader {
     /// The `spec/01 §3` picture-start triplet.
     pub start: PictureStart,

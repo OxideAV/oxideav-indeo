@@ -248,6 +248,7 @@ impl CellTree {
 
 /// Errors raised while walking the spec/03 binary tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MacroblockError {
     /// Spec/03 §2.1 — the bit reader ran out of bytes mid-node.
     /// The plane payload was truncated before the tree completed.

@@ -800,6 +800,7 @@ impl VqNullRuntime {
 
 /// Errors raised while materialising the spec/04 VQ codebook state.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum VqError {
     /// Spec/04 §6 — an `alt_quant[]` band's source window (after the
     /// `cb_offset` bias and the nibble-stride multiply) fell outside

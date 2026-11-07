@@ -162,6 +162,7 @@ pub struct CopyUpperGeometry {
 
 /// The error modes the copy-upper executor surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CopyUpperError {
     /// `width_dwords` is zero (a degenerate cell with no column groups).
     ZeroWidth,
@@ -212,6 +213,7 @@ impl core::fmt::Display for CopyUpperError {
 
 /// The result of a copy-upper cell emission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct CopyUpperStats {
     /// The number of destination rows written (= `geometry.row_count`).
     pub rows_written: usize,
@@ -317,6 +319,7 @@ pub struct MarkEdgeGeometry {
 
 /// The error modes the mark-edge executor surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MarkEdgeError {
     /// `width_dwords` is zero (a degenerate cell with no column groups).
     ZeroWidth,
@@ -356,6 +359,7 @@ impl core::fmt::Display for MarkEdgeError {
 
 /// The result of a mark-edge cell emission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct MarkEdgeStats {
     /// The number of cell rows marked (= `geometry.row_count`).
     pub rows_marked: usize,
