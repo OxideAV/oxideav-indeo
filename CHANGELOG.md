@@ -8,6 +8,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- indeo3: about 4x faster picture decode with identical output; criterion
+  bench `indeo3_decode` over the staged IV32 corpora
 - `#[non_exhaustive]` on every error enum and the output-shape enums:
   `AssembleError`, `BandError`, `BitReaderError`, `CellDecodeError`, `CellEmitError`, `CellReconstructError`, `CellRectDecodeError`, `CellUnpackError`, `ChromaLayout`, `ChromaUpsampleError`, `CodebookError`, `CopyUpperError`, `DecodeError`, `DecoderError`, `Error`, `FrameDecodeError`, `FrameError`, `GopError`, `HeaderError`, `MacroblockError`, `MarkEdgeError`, `MbHeaderError`, `McAddressError`, `McCopyError`, `McError`, `McKernelGeometryError`, `OutputConversion`, `OutputDispatchError`, `OutputError`, `OutputFormat`, `PerCellEdgeFixupError`, `PictureDecodeError`, `PictureError`, `PictureLayerError`, `PlaneAssembleError`, `PlaneExecError`, `PlaneReconstructError`, `RowStreamError`, `RvTableError`, `SeedAreaError`, `SessionError`, `StripEdgeApplyError`, `VqError`, `YuvError`.
 - `#[non_exhaustive]` on the decoded-output, header and statistics
@@ -16,8 +18,6 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.0.3](https://github.com/OxideAV/oxideav-indeo/compare/v0.0.2...v0.0.3) - 2026-10-23
 
 ### Other
-
-- edition 2024, MSRV 1.95
 
 - edition 2024, MSRV 1.95
 

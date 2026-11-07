@@ -114,7 +114,7 @@ impl From<VqError> for PictureDecodeError {
 }
 
 /// One decoded picture: three 8-bit planes at their native sizes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DecodedPicture {
     /// Picture width in luma samples.
@@ -139,6 +139,46 @@ pub struct DecodedPicture {
     pub admission: AdmittedFrame,
     /// Per-plane cell statistics (`None` for a repeated frame).
     pub stats: Option<[PlaneStats; 3]>,
+}
+
+impl Clone for DecodedPicture {
+    fn clone(&self) -> Self {
+        DecodedPicture {
+            luma: self.luma.clone(),
+            chroma_v: self.chroma_v.clone(),
+            chroma_u: self.chroma_u.clone(),
+            ..*self
+        }
+    }
+
+    /// Reuses `self`'s plane buffers, so the decoder can keep its copy
+    /// of the last picture without allocating one per frame.
+    fn clone_from(&mut self, source: &Self) {
+        // Destructured in full so a field added later fails to compile
+        // here instead of being silently left stale.
+        let DecodedPicture {
+            width,
+            height,
+            chroma_width,
+            chroma_height,
+            luma,
+            chroma_v,
+            chroma_u,
+            repeated_previous,
+            admission,
+            stats,
+        } = source;
+        self.width = *width;
+        self.height = *height;
+        self.chroma_width = *chroma_width;
+        self.chroma_height = *chroma_height;
+        self.luma.clone_from(luma);
+        self.chroma_v.clone_from(chroma_v);
+        self.chroma_u.clone_from(chroma_u);
+        self.repeated_previous = *repeated_previous;
+        self.admission = *admission;
+        self.stats = *stats;
+    }
 }
 
 impl DecodedPicture {
@@ -294,7 +334,10 @@ impl Indeo3PictureDecoder {
             admission: admitted,
             stats: Some(stats),
         };
-        self.previous = Some(out.clone());
+        match &mut self.previous {
+            Some(prev) => prev.clone_from(&out),
+            None => self.previous = Some(out.clone()),
+        }
         Ok(out)
     }
 }
