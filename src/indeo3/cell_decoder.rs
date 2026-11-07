@@ -1110,3 +1110,281 @@ pub fn decode_plane(
     let _ = width;
     Ok(stats)
 }
+
+#[cfg(test)]
+mod tests {
+    //! Equivalence pins for the slice-based `mc_copy` and `to_pixels`:
+    //! each is checked against a straightforward per-sample model of
+    //! the same rule. The staged `IV32` fixtures carry full-pel
+    //! vectors only, so the half-pel arms are pinned here.
+
+    use super::super::codebook_seed::CodebookSeedArea;
+    use super::*;
+
+    /// Deterministic xorshift byte source.
+    struct Rng(u64);
+
+    impl Rng {
+        fn step(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, n: u64) -> u64 {
+            self.step() % n
+        }
+
+        fn fill(&mut self, bufs: &mut PlaneBuffers) {
+            for s in &mut bufs.strips {
+                for b in s.iter_mut() {
+                    *b = self.step() as u8;
+                }
+            }
+        }
+    }
+
+    fn mv(vert: i16, horiz: i16, vert_half: bool, horiz_half: bool) -> MotionVector {
+        MotionVector {
+            vertical_raw: 0,
+            horizontal_raw: 0,
+            vertical_scaled: vert,
+            horizontal_scaled: horiz,
+            vertical_halfpel_bit: u8::from(vert_half),
+            horizontal_halfpel_bit: u8::from(horiz_half),
+        }
+    }
+
+    /// Per-sample model of `spec/05 §5`/`§6`: every fetch bounds
+    /// checked on its own; a fault leaves the destination untouched.
+    fn mc_model(
+        dst: &mut PlaneBuffers,
+        reference: &PlaneBuffers,
+        cell: &CellRect,
+        mv: MotionVector,
+    ) -> Result<(), CellDecodeError> {
+        let rs = &reference.strips[cell.strip];
+        let packed = mv.packed_mv();
+        let offset = i64::from(packed >> 2);
+        let (vh, hh) = (packed & 1 != 0, packed & 2 != 0);
+        let stride = i64::from(STRIP_ROW_STRIDE);
+        let fetch = |i: i64| -> Result<u32, CellDecodeError> {
+            usize::try_from(i)
+                .ok()
+                .and_then(|i| rs.get(i))
+                .map(|&v| u32::from(v))
+                .ok_or(CellDecodeError::McOutOfRange)
+        };
+        let mut out = Vec::new();
+        for r in 0..i64::from(cell.h) {
+            for c in 0..cell.w {
+                let d = PlaneBuffers::idx(i64::from(cell.y) + r, cell.x + c) as i64;
+                let s = d + offset;
+                let v = match (vh, hh) {
+                    (false, false) => fetch(s)?,
+                    (true, false) => (fetch(s)? + fetch(s + stride)?) >> 1,
+                    (false, true) => (fetch(s)? + fetch(s + 1)?) >> 1,
+                    (true, true) => {
+                        let a = (fetch(s)? + fetch(s + 1)?) >> 1;
+                        let b = (fetch(s + stride)? + fetch(s + stride + 1)?) >> 1;
+                        (a + b) >> 1
+                    }
+                };
+                out.push((d as usize, (v & 0x7f) as u8));
+            }
+        }
+        let s = &mut dst.strips[cell.strip];
+        for (d, v) in out {
+            s[d] = v;
+        }
+        Ok(())
+    }
+
+    /// The codec tables a [`PlaneContext`] borrows (built once per
+    /// test; `mc_copy` reads none of them).
+    struct Tables {
+        staging: StagingImage,
+        arena: VqArena,
+        lut: DyadDeltaTable,
+    }
+
+    impl Tables {
+        fn new() -> Self {
+            Tables {
+                staging: StagingImage::build(&CodebookSeedArea::load()),
+                arena: VqArena::new(),
+                lut: DyadDeltaTable::load(),
+            }
+        }
+    }
+
+    /// Run the decoder's `mc_copy` on `dst`.
+    fn mc_fast(
+        t: &Tables,
+        dst: &mut PlaneBuffers,
+        reference: &PlaneBuffers,
+        cell: &CellRect,
+        mv: MotionVector,
+    ) -> Result<(), CellDecodeError> {
+        let ctx = PlaneContext {
+            staging: &t.staging,
+            arena: &t.arena,
+            cb_offset: 0,
+            lut: &t.lut,
+            mvs: &[],
+            reference: Some(reference),
+        };
+        let mut w = Walker {
+            r: Reader::new(&[]),
+            bufs: dst,
+            ctx: &ctx,
+            stats: PlaneStats::default(),
+            sticky: false,
+        };
+        w.mc_copy(cell, mv)
+    }
+
+    /// Both implementations from the same starting buffers: same
+    /// result, same buffers afterwards (untouched on a fault).
+    fn check(
+        t: &Tables,
+        start: &PlaneBuffers,
+        reference: &PlaneBuffers,
+        cell: &CellRect,
+        mv: MotionVector,
+    ) -> Result<(), CellDecodeError> {
+        let mut want = start.clone();
+        let want_r = mc_model(&mut want, reference, cell, mv);
+        let mut got = start.clone();
+        let got_r = mc_fast(t, &mut got, reference, cell, mv);
+        assert_eq!(got_r, want_r, "{cell:?} {mv:?}");
+        assert!(got == want, "{cell:?} {mv:?}: planes differ");
+        if got_r.is_err() {
+            assert!(&got == start, "{cell:?} {mv:?}: written on a fault");
+        }
+        got_r
+    }
+
+    #[test]
+    fn mc_copy_matches_per_sample_model_in_every_half_pel_mode() {
+        let mut rng = Rng(0x1d0_3e3e_c0de);
+        // 176 wide: a 160 strip and a 16 strip.
+        let mut start = PlaneBuffers::luma(176, 144);
+        let mut reference = start.clone();
+        rng.fill(&mut start);
+        rng.fill(&mut reference);
+        let t = Tables::new();
+        let mut tally = [[0u32; 2]; 4];
+        let rounds = if cfg!(miri) { 200 } else { 4000 };
+        for _ in 0..rounds {
+            let strip = rng.below(2) as usize;
+            let strip_w = if strip == 0 { 160 } else { 16 };
+            let w = 4 * (1 + rng.below(strip_w / 4)) as u32;
+            let h = 4 * (1 + rng.below(8)) as u32;
+            let cell = CellRect {
+                strip,
+                x: 4 * rng.below(u64::from((strip_w as u32 - w) / 4 + 1)) as u32,
+                y: 4 * rng.below(u64::from((144 - h) / 4 + 1)) as u32,
+                w,
+                h,
+            };
+            let mode = rng.below(4);
+            let v = mv(
+                rng.below(41) as i16 - 20,
+                rng.below(81) as i16 - 40,
+                mode & 1 != 0,
+                mode & 2 != 0,
+            );
+            let ok = check(&t, &start, &reference, &cell, v).is_ok();
+            tally[mode as usize][usize::from(ok)] += 1;
+        }
+        for (mode, t) in tally.iter().enumerate() {
+            assert!(t[0] > 0 && t[1] > 0, "mode {mode}: faults/ok {t:?}");
+        }
+    }
+
+    #[test]
+    fn mc_copy_range_edges_are_exact() {
+        let mut rng = Rng(0xbead_f00d);
+        let t = Tables::new();
+        let mut start = PlaneBuffers::luma(176, 144);
+        let mut reference = start.clone();
+        rng.fill(&mut start);
+        rng.fill(&mut reference);
+        let stride = i64::from(STRIP_ROW_STRIDE);
+        let len = reference.strips[0].len() as i64;
+        for mode in 0..4u8 {
+            let (vh, hh) = (mode & 1 != 0, mode & 2 != 0);
+            // First fetch: the cell at (0, 0) reaches back to index 0
+            // (the predictor row) but not to -1.
+            let top = CellRect {
+                strip: 0,
+                x: 0,
+                y: 0,
+                w: 8,
+                h: 4,
+            };
+            let first = PlaneBuffers::idx(0, 0) as i64;
+            let at = |o: i64| mv(0, o as i16, vh, hh);
+            assert_eq!(check(&t, &start, &reference, &top, at(-first)), Ok(()));
+            assert_eq!(
+                check(&t, &start, &reference, &top, at(-first - 1)),
+                Err(CellDecodeError::McOutOfRange),
+                "mode {mode}"
+            );
+            // Last fetch: the bottom-right cell of the strip reaches
+            // the buffer's last byte but not one past it.
+            let bottom = CellRect {
+                strip: 0,
+                x: 152,
+                y: 136,
+                w: 8,
+                h: 8,
+            };
+            let last = PlaneBuffers::idx(143, 152) as i64
+                + 7
+                + if vh { stride } else { 0 }
+                + i64::from(hh);
+            let o = len - 1 - last;
+            assert_eq!(check(&t, &start, &reference, &bottom, at(o)), Ok(()));
+            assert_eq!(
+                check(&t, &start, &reference, &bottom, at(o + 1)),
+                Err(CellDecodeError::McOutOfRange),
+                "mode {mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn to_pixels_matches_sample_with_crop_and_padding() {
+        let mut rng = Rng(0xc0ff_ee11);
+        // A 168-wide picture: 44-wide chroma plane (two strips, 40 +
+        // 4) cropped to a 42-wide output; 120 high: 32 rows to 30.
+        for mut bufs in [
+            PlaneBuffers::chroma(168, 120),
+            PlaneBuffers::luma(176, 144),
+            PlaneBuffers::luma(16, 16),
+        ] {
+            rng.fill(&mut bufs);
+            let (pw, ph) = (bufs.width, bufs.height);
+            for (ow, oh) in [
+                (pw, ph),
+                (pw - 2, ph - 2),
+                (pw + 5, ph + 3),
+                (1, 1),
+                (0, 4),
+                (4, 0),
+                (41u32.min(pw), 3),
+            ] {
+                let mut want = Vec::new();
+                for y in 0..oh {
+                    for x in 0..ow {
+                        want.push((bufs.sample(x, y).unwrap_or(0) & 0x7f) << 1);
+                    }
+                }
+                assert_eq!(bufs.to_pixels(ow, oh), want, "{pw}x{ph} -> {ow}x{oh}");
+            }
+        }
+    }
+}
