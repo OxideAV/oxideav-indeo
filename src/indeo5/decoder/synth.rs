@@ -81,14 +81,31 @@ pub(crate) fn four_band(area: &[i16], bands: &[BandGeom], win: Window, out: &mut
         bands[3].offset as isize,
     );
     let p = pitch as isize;
-    let at = |base: isize, r: isize, c: isize| -> i32 {
-        let i = base + r * p + c;
-        if i >= 0 && (i as usize) < area.len() {
-            area[i as usize] as i32
+    // Each output row pair reads ten band rows: L and H at r and rn_c,
+    // V and D at r, rp and rn_m. They are fetched once per row pair into
+    // `n` entries each, entry k holding band column bc0 - 1 + k; samples
+    // outside the plane area read zero.
+    let n = nbc + 2;
+    let fetch = |dst: &mut [i32], base: isize, r: isize| {
+        let start = base + r * p + bc0 as isize - 1;
+        if start >= 0 && start as usize + dst.len() <= area.len() {
+            for (d, &s) in dst.iter_mut().zip(&area[start as usize..]) {
+                *d = s as i32;
+            }
         } else {
-            0
+            for (k, d) in dst.iter_mut().enumerate() {
+                let i = start + k as isize;
+                *d = if i >= 0 && (i as usize) < area.len() {
+                    area[i as usize] as i32
+                } else {
+                    0
+                };
+            }
         }
     };
+    let mut buf = vec![0i32; 10 * n];
+    // Per band column: V's s1 and t1, D's S and T.
+    let (mut s1, mut t1, mut ds, mut dt) = (vec![0; n], vec![0; n], vec![0; n], vec![0; n]);
     let out_rows = out.data.len() / out.stride;
     for i in 0..nbr {
         let r = (br0 + i) as isize;
@@ -100,42 +117,51 @@ pub(crate) fn four_band(area: &[i16], bands: &[BandGeom], win: Window, out: &mut
         if orow + 1 >= out_rows {
             break;
         }
+        let mut rows = buf.chunks_mut(n);
+        let mut next = |base: isize, row: isize| -> &[i32] {
+            let dst = rows.next().expect("ten rows");
+            fetch(dst, base, row);
+            dst
+        };
+        let (l0, l1) = (next(lo, r), next(lo, rn_c));
+        let (v0, vp, vm) = (next(vo, r), next(vo, rp), next(vo, rn_m));
+        let (h0, h1) = (next(ho, r), next(ho, rn_c));
+        let (d0, dp, dm) = (next(dof, r), next(dof, rp), next(dof, rn_m));
+        for b in 0..n {
+            s1[b] = v0[b] + vp[b];
+            t1[b] = vp[b] - 6 * v0[b] + vm[b];
+            ds[b] = d0[b] + dp[b];
+            dt[b] = dp[b] + dm[b];
+        }
         for j in 0..nbc {
-            let c = (bc0 + j) as isize;
-            let cl = if j == 0 { c } else { c - 1 };
-            let cr = c + 1;
+            // Entries of band columns c, cl and cr.
+            let k = j + 1;
+            let kl = if j == 0 { k } else { j };
+            let kr = j + 2;
             // Band L.
-            let l = at(lo, r, c);
-            let lr = at(lo, r, cr);
-            let ln = at(lo, rn_c, c);
-            let lnr = at(lo, rn_c, cr);
+            let (l, lr, ln, lnr) = (l0[k], l0[kr], l1[k], l1[kr]);
             let mut ee = 16 * l;
             let mut eo = 8 * (l + lr);
             let mut oe = 8 * (l + ln);
             let mut oo = 4 * (l + lr + ln + lnr);
             // Band V (vertical high pass).
-            let s1 = |b: isize| at(vo, r, b) + at(vo, rp, b);
-            let t1 = |b: isize| at(vo, rp, b) - 6 * at(vo, r, b) + at(vo, rn_m, b);
-            let (s1c, s1r, t1c, t1r) = (s1(c), s1(cr), t1(c), t1(cr));
+            let (s1c, s1r, t1c, t1r) = (s1[k], s1[kr], t1[k], t1[kr]);
             ee += 8 * s1c;
             eo += 4 * (s1c + s1r);
             oe += 4 * t1c;
             oo += 2 * (t1c + t1r);
             // Band H (horizontal high pass).
-            let s2 = |a: isize| at(ho, a, c) + at(ho, a, cl);
-            let t2 = |a: isize| at(ho, a, cl) - 6 * at(ho, a, c) + at(ho, a, cr);
-            let (s2r, s2n, t2r, t2n) = (s2(r), s2(rn_c), t2(r), t2(rn_c));
+            let s2 = |a: &[i32]| a[k] + a[kl];
+            let t2 = |a: &[i32]| a[kl] - 6 * a[k] + a[kr];
+            let (s2r, s2n, t2r, t2n) = (s2(h0), s2(h1), t2(h0), t2(h1));
             ee += 8 * s2r;
             eo += 4 * t2r;
             oe += 4 * (s2r + s2n);
             oo += 2 * (t2r + t2n);
             // Band D.
-            let ds = |b: isize| at(dof, r, b) + at(dof, rp, b);
-            let dt = |b: isize| at(dof, rp, b) + at(dof, rn_m, b);
-            let de = |b: isize| at(dof, r, b);
-            let (scl, sc, scr) = (ds(cl), ds(c), ds(cr));
-            let (tcl, tc, tcr) = (dt(cl), dt(c), dt(cr));
-            let (ecl, ec, ecr) = (de(cl), de(c), de(cr));
+            let (scl, sc, scr) = (ds[kl], ds[k], ds[kr]);
+            let (tcl, tc, tcr) = (dt[kl], dt[k], dt[kr]);
+            let (ecl, ec, ecr) = (d0[kl], d0[k], d0[kr]);
             ee += 4 * (scl + sc);
             eo += 2 * (scl - 6 * sc + scr);
             oe += 2 * (tcl + tc - 6 * (ecl + ec));
