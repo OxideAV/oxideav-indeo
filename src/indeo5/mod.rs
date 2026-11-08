@@ -37,6 +37,7 @@ mod format;
 mod frame;
 mod gop;
 mod header;
+mod ir;
 mod level_table;
 mod mb;
 mod mb_header;
@@ -122,6 +123,7 @@ pub use gop::{
 #[doc(hidden)]
 pub use gop::{BLK_SIZE_TABLE, MB_SIZE_TABLE};
 pub use header::{FormatDescriptor, FrameType, HeaderError, PictureStart};
+pub use ir::{Iv50Decoder, Iv50Error, Iv50Plane};
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub use header::{MAGIC_ALTERNATE, MAGIC_CANONICAL, MIN_HEIGHT, MIN_WIDTH, PICTURE_START_CODE};
