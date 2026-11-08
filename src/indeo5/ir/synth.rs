@@ -40,7 +40,9 @@ pub(crate) fn one_band(area: &[i16], b: &BandGeom, win: Window, out: &mut OutPla
     let x0 = win.x & !15;
     let w = (15 + win.x + win.w - x0) & !15;
     // Never write past the band's pitch or the output plane.
-    let w = w.min(b.pitch - x0).min(out.stride - x0);
+    let w = w
+        .min(b.pitch.saturating_sub(x0))
+        .min(out.stride.saturating_sub(x0));
     for row in win.y..win.y + win.h {
         if row >= b.height.next_multiple_of(16) || row >= out.data.len() / out.stride {
             break;
@@ -66,8 +68,8 @@ pub(crate) fn four_band(area: &[i16], bands: &[BandGeom], win: Window, out: &mut
     let pitch = bands[0].pitch;
     let nbr = h.div_ceil(2);
     let nbc = (wpp / 2).min(pitch.saturating_sub(x0 / 2));
-    let wpp = wpp.min(out.stride - x0);
-    if nbr == 0 || nbc == 0 {
+    let wpp = wpp.min(out.stride.saturating_sub(x0));
+    if nbr == 0 || nbc == 0 || wpp == 0 {
         return;
     }
     let br0 = y / 2;

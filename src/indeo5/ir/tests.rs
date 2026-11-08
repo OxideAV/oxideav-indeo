@@ -263,7 +263,10 @@ fn bad_headers_are_rejected() {
         w.put(flags, 8);
         w.put(0, 32);
         w.put(0, 32);
-        assert!(matches!(dec.decode(&w.bytes), Err(Iv50Error::Unsupported(_))));
+        assert!(matches!(
+            dec.decode(&w.bytes),
+            Err(Iv50Error::Unsupported(_))
+        ));
     }
     // Truncated band data.
     let f = intra_frame();
@@ -361,5 +364,71 @@ fn four_band_first_column_repeats_itself() {
         assert_eq!(px(&out, r, 0), 128 + 16);
         // Band column 1: s2 = H[1] + H[0] = 64.
         assert_eq!(px(&out, r, 2), 128 + 8);
+    }
+}
+
+/// An intra frame like [`intra_frame`] in a stream with transparency
+/// (gop_flags bit 3), whose trailer carries `rects` as (x, y, w, h).
+fn transparent_intra_frame(rects: &[(u32, u32, u32, u32)]) -> Vec<u8> {
+    let rv = RvMap::new(8, &[]).unwrap();
+    let mut w = BitWriter::new();
+    w.put(0x1f, 5);
+    w.put(0, 3);
+    w.put(0, 8);
+    w.put(8, 8); // gop_flags: transparency
+    w.put(0, 3);
+    w.put(15, 4);
+    w.put((16 << 13) | 8, 26);
+    w.put(0, 6);
+    w.put(6, 6);
+    w.put(0, 4); // transparency flags: no colour
+    w.align();
+    w.put(2 << 19, 24);
+    w.align();
+    frame_header(&mut w, 0);
+    w.put(0, 8);
+    w.put(0, 1);
+    w.put(0, 5);
+    w.align();
+    w.put(0, 1);
+    w.put(0, 1);
+    w.align();
+    w.put(0, 1);
+    w.put(0xf, 4);
+    w.align();
+    for d in DCS {
+        dc_block(&mut w, &rv, d);
+    }
+    w.align();
+    empty_chroma(&mut w);
+    // Trailer: rectangle count, the rectangles, mask flag, no
+    // descriptor.
+    w.put(rects.len() as u32, 3);
+    for &(x, y, rw, rh) in rects {
+        w.put(x, 16);
+        w.put(y, 16);
+        w.put(rw, 16);
+        w.put(rh, 16);
+    }
+    w.put(0, 2);
+    w.align();
+    w.bytes
+}
+
+#[test]
+fn transparency_rectangles_outside_the_picture_write_nothing() {
+    for rect in [
+        (60000, 0, 10, 10),
+        (0, 60000, 10, 10),
+        (65535, 65535, 65535, 65535),
+    ] {
+        let mut dec = Iv50Decoder::new();
+        assert_eq!(
+            dec.decode(&transparent_intra_frame(&[rect])),
+            Ok(FrameType::Intra)
+        );
+        // The window lies outside the picture, so nothing is
+        // recombined and the planes keep their initial zeros.
+        assert!(rows(dec.y().unwrap()).iter().flatten().all(|&v| v == 0));
     }
 }

@@ -455,6 +455,12 @@ impl Iv50Decoder {
             };
             h = h.max(1);
             w = w.max(1);
+            // A bounding box that starts below or right of the picture
+            // gives a window outside the planes. The DLL would write
+            // past its planes there; this decoder writes nothing.
+            if y0 >= ph || x0 >= pw {
+                return;
+            }
         }
         for plane in 0..3 {
             let win = if plane == 0 {
