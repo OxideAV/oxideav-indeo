@@ -236,6 +236,9 @@ pub(crate) struct BandJob<'a> {
     pub frame_flags: u32,
     /// Macroblock size of luma band 0, for inherited vectors.
     pub b0_mb_size: u32,
+    /// Luma band 0 has 1-block macroblocks in rows of odd length, whose
+    /// records the DLL steps through with a drift (00-gaps.md, item 16).
+    pub b0_drifts: bool,
     pub mb_huff: &'a Huff,
     pub blk_huff: &'a Huff,
     pub bank: &'a Bank,
@@ -269,6 +272,12 @@ impl BandJob<'_> {
             ));
         }
         let ks = (-ks) as u32;
+        let reads_b0 = self.hdr.inherit() || (self.hdr.has_delta() && !self.hdr.reads_delta());
+        if reads_b0 && !self.is_b0 && self.b0_drifts {
+            return Err(Iv50Error::Unsupported(
+                "inheriting from 1-block luma band 0 macroblocks in odd rows",
+            ));
+        }
         let scan = scan_for(info.xform)?;
         let xf_blk = if info.xform >= 4 { 4 } else { 8 };
         if xf_blk != info.blk_size {

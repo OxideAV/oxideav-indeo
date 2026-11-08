@@ -67,8 +67,6 @@ pub(crate) struct BandInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GopHeader {
     pub flags: u32,
-    /// Tile side in luma pixels, or 0 for one tile.
-    pub tile_side: u32,
     pub luma_bands: usize,
     pub chroma_bands: usize,
     pub width: u32,
@@ -78,20 +76,14 @@ pub(crate) struct GopHeader {
     pub chroma_info: Vec<BandInfo>,
     /// gop_flags bit 3: frames carry a transparency trailer.
     pub transparency: bool,
-    /// gop_flags bit 1: chroma planes are half the luma size.
-    pub half_chroma: bool,
     /// gop_flags bit 2: the stream has intra frames only.
     pub intra_only: bool,
 }
 
 impl GopHeader {
-    /// Chroma plane size (spec 02, 1.3).
+    /// Chroma plane size, a quarter of the luma size (spec 02, 1.3).
     pub fn chroma_size(&self) -> (u32, u32) {
-        if self.half_chroma {
-            (self.width.div_ceil(2), self.height.div_ceil(2))
-        } else {
-            ((self.width + 3) >> 2, (self.height + 3) >> 2)
-        }
+        ((self.width + 3) >> 2, (self.height + 3) >> 2)
     }
 }
 
@@ -131,11 +123,16 @@ pub(crate) fn read_gop(r: &mut Bits) -> Result<GopHeader, Iv50Error> {
         // that this decoder has no way to receive.
         return Err(Iv50Error::Unsupported("locked stream (gop_flags bit 5)"));
     }
-    let tile_side = if flags & 0x40 != 0 {
-        32 << (r.read(2) + 1)
-    } else {
-        0
-    };
+    if flags & 0x40 != 0 {
+        // Several tiles: how a chroma band's tile size follows from the
+        // luma tile is unclear (impl-questions.md, Q3).
+        return Err(Iv50Error::Unsupported("multiple tiles (gop_flags bit 6)"));
+    }
+    if flags & 2 != 0 {
+        // Half-size chroma: spec 08 gives the window scaling for
+        // quarter-size chroma only (impl-questions.md, Q4).
+        return Err(Iv50Error::Unsupported("half-size chroma (gop_flags bit 1)"));
+    }
     let sub = r.read(3);
     if !matches!(sub, 0 | 1 | 2 | 6) {
         return Err(Iv50Error::BadHeader("subsampling code"));
@@ -190,7 +187,6 @@ pub(crate) fn read_gop(r: &mut Bits) -> Result<GopHeader, Iv50Error> {
     r.align();
     Ok(GopHeader {
         flags,
-        tile_side,
         luma_bands,
         chroma_bands,
         width,
@@ -198,7 +194,6 @@ pub(crate) fn read_gop(r: &mut Bits) -> Result<GopHeader, Iv50Error> {
         luma_info,
         chroma_info,
         transparency,
-        half_chroma: flags & 2 != 0,
         intra_only: flags & 4 != 0,
     })
 }

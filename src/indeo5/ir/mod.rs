@@ -314,7 +314,6 @@ impl Iv50Decoder {
                     || old.height != gop.height
                     || old.luma_bands != gop.luma_bands
                     || old.chroma_bands != gop.chroma_bands
-                    || old.half_chroma != gop.half_chroma
             }
             None => true,
         };
@@ -369,6 +368,9 @@ impl Iv50Decoder {
         let mb_idx = Self::huff_index(&mut self.mb_huffs, &fh.mb_rows)?;
         let gop = self.gop.clone().expect("GOP checked by the caller");
         let b0_mb_size = gop.luma_info[0].mb_size;
+        let b0 = &self.layout[0].bands[0];
+        let b0_drifts =
+            b0.info.mb_size == b0.info.blk_size && b0.tiles.iter().any(|t| t.cols % 2 == 1);
         for plane in 0..3 {
             for bi in 0..self.layout[plane].bands.len() {
                 if pos >= frame.len() {
@@ -393,6 +395,7 @@ impl Iv50Decoder {
                     frame_type: ftype,
                     frame_flags: fh.flags,
                     b0_mb_size,
+                    b0_drifts,
                     mb_huff: &self.mb_huffs[mb_idx],
                     blk_huff: &self.blk_huffs[blk_idx],
                     bank: &self.bank,
@@ -456,14 +459,6 @@ impl Iv50Decoder {
         for plane in 0..3 {
             let win = if plane == 0 {
                 Window { y: y0, x: x0, h, w }
-            } else if gop.half_chroma {
-                let (yc, xc) = (y0 >> 1, x0 >> 1);
-                Window {
-                    y: yc,
-                    x: xc,
-                    h: ((y0 + 1 + h) >> 1) - yc,
-                    w: ((x0 + 1 + w) >> 1) - xc,
-                }
             } else {
                 let (yc, xc) = (y0 >> 2, x0 >> 2);
                 Window {
@@ -504,26 +499,13 @@ fn split_sets(
     }
 }
 
-/// Band sizes, buffer layout, tiles and macroblock record bases for a
-/// GOP header (spec 02, sections 1.5 and 4; spec 08, 8.2).
+/// Band sizes, buffer layout and tiles for a GOP header (spec 02,
+/// section 4; spec 08, 8.2).
 fn build_layout(gop: &GopHeader) -> Vec<PlaneLayout> {
     let (lw, lh) = (gop.width as usize, gop.height as usize);
     let (cw, ch) = gop.chroma_size();
     let (cw, ch) = (cw as usize, ch as usize);
-    // Tiles are cut from the luma plane.
-    let tside = gop.tile_side as usize;
-    let (tw, tcols) = if tside == 0 || tside > lw {
-        (lw, 1)
-    } else {
-        (tside, lw.div_ceil(tside))
-    };
-    let (th, trows) = if tside == 0 || tside > lh {
-        (lh, 1)
-    } else {
-        (tside, lh.div_ceil(tside))
-    };
     let mut layouts = Vec::with_capacity(3);
-    let mut b0_bases: Vec<usize> = Vec::new();
     for plane in 0..3 {
         let (pw, ph, infos) = if plane == 0 {
             (lw, lh, &gop.luma_info)
@@ -550,52 +532,17 @@ fn build_layout(gop: &GopHeader) -> Vec<PlaneLayout> {
             } else {
                 bi + 6
             };
-            // Band tile size: the luma tile scaled by the luma-to-band
-            // ratio (see impl-questions.md for multi-tile chroma).
+            // One tile covering the band (multi-tile streams are refused
+            // by the GOP header reader).
             let mb = info.mb_size as usize;
-            let (rx, ry) = ((lw / bw).max(1), (lh / bh).max(1));
-            let (btw, bth) = ((tw / rx).max(1), (th / ry).max(1));
-            let mut tiles = Vec::with_capacity(tcols * trows);
-            let mut base = 0usize;
-            for tr in 0..trows {
-                for tc in 0..tcols {
-                    let x = (tc * btw).min(bw);
-                    let y = (tr * bth).min(bh);
-                    let x_end = if tc + 1 == tcols {
-                        bw
-                    } else {
-                        (x + btw).min(bw)
-                    };
-                    let y_end = if tr + 1 == trows {
-                        bh
-                    } else {
-                        (y + bth).min(bh)
-                    };
-                    let cols = (x_end - x).div_ceil(mb);
-                    let trows_mb = (y_end - y).div_ceil(mb);
-                    let copy_width = if tc + 1 == tcols {
-                        pitch - x
-                    } else {
-                        (cols * mb).min(pitch - x)
-                    };
-                    let idx = tr * tcols + tc;
-                    let rec_base = if plane == 0 && bi == 0 {
-                        b0_bases.push(base);
-                        base
-                    } else {
-                        b0_bases.get(idx).copied().unwrap_or(0)
-                    };
-                    base += cols * trows_mb;
-                    tiles.push(TileGeom {
-                        x,
-                        y,
-                        cols,
-                        rows: trows_mb,
-                        copy_width,
-                        rec_base,
-                    });
-                }
-            }
+            let tiles = vec![TileGeom {
+                x: 0,
+                y: 0,
+                cols: bw.div_ceil(mb),
+                rows: bh.div_ceil(mb),
+                copy_width: pitch,
+                rec_base: 0,
+            }];
             bands.push(BandGeom {
                 height: bh,
                 pitch,

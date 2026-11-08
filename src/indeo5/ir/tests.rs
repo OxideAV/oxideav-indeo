@@ -254,6 +254,17 @@ fn bad_headers_are_rejected() {
         dec.decode(&w.bytes),
         Err(Iv50Error::BadHeader("subsampling code"))
     );
+    // Several tiles and half-size chroma are refused.
+    for flags in [0x40, 0x02] {
+        let mut w = BitWriter::new();
+        w.put(0x1f, 5);
+        w.put(0, 3);
+        w.put(0, 8);
+        w.put(flags, 8);
+        w.put(0, 32);
+        w.put(0, 32);
+        assert!(matches!(dec.decode(&w.bytes), Err(Iv50Error::Unsupported(_))));
+    }
     // Truncated band data.
     let f = intra_frame();
     assert!(dec.decode(&f[..f.len() - 4]).is_err());
@@ -269,7 +280,6 @@ fn four_band_layout() -> PlaneLayout {
     };
     let gop = GopHeader {
         flags: 0,
-        tile_side: 0,
         luma_bands: 4,
         chroma_bands: 1,
         width: 64,
@@ -277,7 +287,6 @@ fn four_band_layout() -> PlaneLayout {
         luma_info: vec![info; 4],
         chroma_info: vec![info],
         transparency: false,
-        half_chroma: false,
         intra_only: false,
     };
     build_layout(&gop).swap_remove(0)
