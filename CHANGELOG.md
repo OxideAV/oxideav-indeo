@@ -16,14 +16,28 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - indeo5: `Indeo5RegistryDecoder` and `decode_video_frame` decode with
-  `Iv50Decoder`, so registry packets now give the real pictures
-
+  `Iv50Decoder`, so registry packets now give the real pictures; `probe`
+  checks the headers with the same parser
+- indeo5: `FrameType` is `#[non_exhaustive]` and has lost `from_bits`
+  and `to_bits`; `MAX_PICTURE_PIXELS` now bounds `Iv50Decoder`
 - indeo3: about 4x faster picture decode with identical output; criterion
   bench `indeo3_decode` over the staged IV32 corpora
 - `#[non_exhaustive]` on every error enum and the output-shape enums:
   `AssembleError`, `BandError`, `BitReaderError`, `CellDecodeError`, `CellEmitError`, `CellReconstructError`, `CellRectDecodeError`, `CellUnpackError`, `ChromaLayout`, `ChromaUpsampleError`, `CodebookError`, `CopyUpperError`, `DecodeError`, `DecoderError`, `Error`, `FrameDecodeError`, `FrameError`, `GopError`, `HeaderError`, `MacroblockError`, `MarkEdgeError`, `MbHeaderError`, `McAddressError`, `McCopyError`, `McError`, `McKernelGeometryError`, `OutputConversion`, `OutputDispatchError`, `OutputError`, `OutputFormat`, `PerCellEdgeFixupError`, `PictureDecodeError`, `PictureError`, `PictureLayerError`, `PlaneAssembleError`, `PlaneExecError`, `PlaneReconstructError`, `RowStreamError`, `RvTableError`, `SeedAreaError`, `SessionError`, `StripEdgeApplyError`, `VqError`, `YuvError`.
 - `#[non_exhaustive]` on the decoded-output, header and statistics
   records: `AdmittedFrame`, `BitstreamHeader`, `CellEmitStats`, `CopyUpperStats`, `DecodeStats`, `DecodedFrame`, `DecodedOutput`, `DecodedPicture`, `DecodedPlane`, `DispositionCounts`, `FormatDescriptor`, `FrameHeader`, `FrameReconstructStats`, `GopHeader`, `MarkEdgeStats`, `PictureHeader`, `PlaneCellStats`, `PlaneExecStats`, `PlaneStats`, `ReconstructedFrame`, `SessionOutput`, `VqNullDriveStats`, `YuvFrame`, `YuvPlane`.
+
+### Removed
+
+- indeo5: the earlier structural decode stack and its API:
+  `Indeo5Decoder` / `SessionOutput`, `decode_intra_picture` /
+  `DecodedPicture` and their trace, checksum and statistics types, the
+  header, band, codebook, quantiser, transform, motion and output
+  building blocks (`BitReader`, `PictureHeader`, `GopHeader`,
+  `quant_matrix`, `pack_yuy2` and the rest), the `indeo5_intra` and
+  `indeo5_session` fuzz targets (replaced by `indeo5_decoder`). It
+  failed on most inter frames of real movies and its pictures differed
+  from the vendor driver's; `Iv50Decoder` replaces it
 
 ## [0.0.3](https://github.com/OxideAV/oxideav-indeo/compare/v0.0.2...v0.0.3) - 2026-10-23
 

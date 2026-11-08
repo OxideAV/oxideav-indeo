@@ -29,7 +29,32 @@ use headers::{GopHeader, MAX_SIDE};
 use huff::Huff;
 use synth::{OutPlane, Window};
 
-use super::FrameType;
+/// Largest picture area, in luma pixels, the decoder accepts. A custom
+/// picture size can ask for up to 8191 by 8191; larger pictures than this
+/// are refused before any buffer is allocated.
+pub const MAX_PICTURE_PIXELS: u64 = 4096 * 4096;
+
+/// The type of a decoded frame (spec 01, "Frame types").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FrameType {
+    /// Type 0: every macroblock is intra; carries the GOP header. Becomes
+    /// the reference of the following type 1 frames.
+    Intra,
+    /// Type 1: predicted from the last type 0 or 1 frame, and becomes the
+    /// reference of the following frames in its place.
+    Inter,
+    /// Type 2: predicted from the last type 2 frame since the last type 0
+    /// or 1 frame (else from that frame). Later type 2 and 3 frames
+    /// predict from it, type 0 and 1 frames never do.
+    DroppableInterScalability,
+    /// Type 3: predicted like a type 2 frame and never used as a
+    /// reference.
+    DroppableInter,
+    /// Type 4, or a predicted frame that repeats the previous frame's
+    /// number: no picture data; the picture stays as it was.
+    Null,
+}
 
 /// Errors of [`Iv50Decoder::decode`]. Every one of them means the frame
 /// was not decoded; the planes keep the previous picture.
@@ -73,9 +98,11 @@ impl std::error::Error for Iv50Error {}
 
 /// One plane of the decoded picture.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct Iv50Plane<'a> {
-    /// Visible width and height in samples.
+    /// Visible width in samples.
     pub width: usize,
+    /// Visible height in samples.
     pub height: usize,
     /// Distance between rows in `data`.
     pub stride: usize,
@@ -84,7 +111,8 @@ pub struct Iv50Plane<'a> {
 }
 
 impl Iv50Plane<'_> {
-    /// Row `r` of the visible picture.
+    /// Row `r` of the visible picture, `width` samples; `r` must be below
+    /// `height`.
     pub fn row(&self, r: usize) -> &[u8] {
         &self.data[r * self.stride..r * self.stride + self.width]
     }
@@ -236,9 +264,11 @@ impl Iv50Decoder {
             let gop = headers::read_gop(&mut r)?;
             if gop.width > MAX_SIDE
                 || gop.height > MAX_SIDE
-                || gop.width as u64 * gop.height as u64 > super::MAX_PICTURE_PIXELS
+                || gop.width as u64 * gop.height as u64 > MAX_PICTURE_PIXELS
             {
-                return Err(Iv50Error::Unsupported("picture larger than 4096 x 4096"));
+                return Err(Iv50Error::Unsupported(
+                    "picture area above 4096 x 4096 pixels",
+                ));
             }
             self.set_gop(gop);
         } else {
@@ -485,6 +515,29 @@ impl Iv50Decoder {
             }
         }
     }
+}
+
+/// Whether `data` starts like an IV50 frame: a valid picture start and,
+/// for an intra frame, a GOP header and frame header that parse (a
+/// header that asks for an unsupported feature still counts), or for a
+/// predicted frame a frame header that fits in `data`.
+pub(crate) fn looks_like_iv50(data: &[u8]) -> bool {
+    let frame = PaddedFrame::new(data);
+    let mut r = frame.reader_at(0);
+    let Ok(start) = headers::read_picture_start(&mut r) else {
+        return false;
+    };
+    if start.frame_type == 4 {
+        return true;
+    }
+    if start.frame_type == 0 {
+        match headers::read_gop(&mut r) {
+            Ok(_) => {}
+            Err(Iv50Error::Unsupported(_)) => return true,
+            Err(_) => return false,
+        }
+    }
+    headers::read_frame_header(&mut r).is_ok()
 }
 
 /// Borrow set `a` mutably and set `b` immutably.

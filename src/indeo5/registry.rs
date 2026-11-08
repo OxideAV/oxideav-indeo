@@ -29,8 +29,7 @@ use oxideav_core::{
     VideoPlane,
 };
 
-use super::ir::{Iv50Decoder, Iv50Error, Iv50Plane};
-use super::picture::PictureHeader;
+use super::decoder::{Iv50Decoder, Iv50Error, Iv50Plane, looks_like_iv50};
 
 /// The public codec id this crate registers for Indeo 5 (`"indeo5"`).
 pub const CODEC_ID_STR: &str = "indeo5";
@@ -61,8 +60,8 @@ pub fn codec_id_for_fourcc(fourcc: &[u8; 4]) -> Option<CodecId> {
 /// parameters.
 ///
 /// The parameters' `width` / `height` / `pixel_format` are advisory —
-/// the Indeo 5 bitstream carries its own dimensions in every INTRA GOP
-/// header (`spec/02 §1.6`), so the decoder is self-describing.
+/// the Indeo 5 bitstream carries its own dimensions in the GOP header of
+/// every intra frame, so the decoder is self-describing.
 pub fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {
     Ok(Box::new(Indeo5RegistryDecoder::new(
         params.codec_id.clone(),
@@ -190,9 +189,8 @@ impl Decoder for Indeo5RegistryDecoder {
 
     fn reset(&mut self) -> Result<()> {
         // A container seek restarts the Indeo 5 inter-frame state: drop
-        // the pending packet and the held session so the next packet
-        // decodes as a fresh INTRA frame (the `spec/01 §3.2` first-frame
-        // gate).
+        // the pending packet and the decoder, so the next packet must be
+        // an intra frame.
         self.pending = None;
         self.eof = false;
         self.inner = Iv50Decoder::new();
@@ -200,8 +198,8 @@ impl Decoder for Indeo5RegistryDecoder {
     }
 }
 
-/// Confidence [`probe`] returns when a first packet parses as a genuine
-/// Indeo 5 picture header (PSC + frame-type + dimensions all validate).
+/// Confidence [`probe`] returns when a first packet starts with valid
+/// Indeo 5 headers.
 pub const PROBE_CONFIDENCE_HEADER_OK: f32 = 1.0;
 
 /// Confidence [`probe`] returns when no first-packet bytes are available
@@ -212,24 +210,25 @@ pub const PROBE_CONFIDENCE_TAG_ONLY: f32 = 0.6;
 /// The [`oxideav_core::ProbeFn`] for Indeo 5 tag disambiguation.
 ///
 /// When the demuxer has peeked a first packet ([`ProbeContext::packet`]
-/// is `Some`), parse the `spec/01 §3` picture-start header (PSC `0x1f`,
-/// frame type, and — for INTRA — the GOP dimensions):
+/// is `Some`), parse its picture start (start code 0x1f and a frame type
+/// of 0 to 4), and for an intra frame its GOP header (subsampling code,
+/// picture size, band layout) and frame header:
 ///
-/// * a structurally-valid picture header → [`PROBE_CONFIDENCE_HEADER_OK`];
-/// * a packet present but whose header fails to parse → `0.0`
-///   ("not me" — lets a colliding FourCC claimant win on genuinely
-///   non-Indeo-5 bytes);
-/// * no packet available → [`PROBE_CONFIDENCE_TAG_ONLY`].
+/// * headers that parse give [`PROBE_CONFIDENCE_HEADER_OK`], also when
+///   they ask for a feature the decoder doesn't support;
+/// * a packet whose headers don't parse gives `0.0`, so another claimant
+///   of the FourCC can win on bytes that aren't Indeo 5;
+/// * no packet gives [`PROBE_CONFIDENCE_TAG_ONLY`].
 ///
-/// The probe reads only the fixed header bits, never the coefficient
-/// stream, so it stays cheap and touches no docs-gapped table.
+/// The probe reads only the headers, never the band data.
 pub fn probe(ctx: &ProbeContext) -> f32 {
     let Some(bytes) = ctx.packet else {
         return PROBE_CONFIDENCE_TAG_ONLY;
     };
-    match PictureHeader::parse(bytes, None) {
-        Ok(_) => PROBE_CONFIDENCE_HEADER_OK,
-        Err(_) => 0.0,
+    if looks_like_iv50(bytes) {
+        PROBE_CONFIDENCE_HEADER_OK
+    } else {
+        0.0
     }
 }
 
@@ -237,10 +236,9 @@ pub fn probe(ctx: &ProbeContext) -> f32 {
 /// the `IV50` FourCC tag) into a [`CodecRegistry`].
 ///
 /// The capabilities advertise the lossy video codec emitting
-/// [`PixelFormat::Yuv444P`] (the full-luma-resolution surface the
-/// registry decoder produces after the `spec/08 §3.5` chroma box
-/// upsample). No encoder is registered — this crate is a decoder-only
-/// clean-room rebuild.
+/// [`PixelFormat::Yuv444P`] (the registry decoder repeats each chroma
+/// sample over its 4 by 4 luma pixels). No encoder is registered: the
+/// crate only decodes.
 pub fn register_codecs(reg: &mut CodecRegistry) {
     let caps = CodecCapabilities::video("indeo5_sw")
         .with_lossy(true)
@@ -355,6 +353,30 @@ mod tests {
         let junk = [0u8; 4];
         let ctx = ProbeContext::new(&tag).packet(&junk);
         assert_eq!(probe(&ctx), 0.0);
+    }
+
+    #[test]
+    fn probe_accepts_real_frames_and_refuses_bad_headers() {
+        let tag = CodecTag::fourcc(b"IV50");
+        let frame: &[u8] = include_bytes!("../../tests/data/intra-320x240-indeo5.iv50");
+        assert_eq!(
+            probe(&ProbeContext::new(&tag).packet(frame)),
+            PROBE_CONFIDENCE_HEADER_OK
+        );
+        // A predicted frame: picture start (type 1) and a frame header.
+        let inter = [0x1f | (1 << 5), 7, 0x80, 0];
+        assert_eq!(
+            probe(&ProbeContext::new(&tag).packet(&inter)),
+            PROBE_CONFIDENCE_HEADER_OK
+        );
+        // Frame type 5 and an intra frame whose subsampling code is 3.
+        let bad_type = [0x1f | (5 << 5), 0, 0, 0];
+        assert_eq!(probe(&ProbeContext::new(&tag).packet(&bad_type)), 0.0);
+        // The fixture's gop_flags (byte 2) carry a 16-bit header size,
+        // so the subsampling code is in bits 0..2 of byte 5.
+        let mut bad_sub = frame.to_vec();
+        bad_sub[5] = (bad_sub[5] & !7) | 3;
+        assert_eq!(probe(&ProbeContext::new(&tag).packet(&bad_sub)), 0.0);
     }
 
     #[test]
