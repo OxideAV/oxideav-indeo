@@ -6,6 +6,20 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.4](https://github.com/OxideAV/oxideav-indeo/compare/v0.0.3...v0.0.4) - 2026-11-07
+
+### Fixed
+
+- fixup for #6: indeo3_pixels doc — the 176x144 corpus has full-pel vectors only
+- fixup for #6: pin mc_copy (all four half-pel modes, McOutOfRange edges) and to_pixels crop against per-sample models
+- fixup for #6: destructure DecodedPicture in clone_from so new fields cannot be missed
+
+### Other
+
+- Merge master into #6 (keep #[non_exhaustive] on DecodedPicture; CHANGELOG entry under [Unreleased])
+- API hygiene: non_exhaustive error enums, output enums and decoded/header/stats records
+- faster picture decode, same output; criterion decode bench
+
 ### Changed
 
 - indeo3: about 4x faster picture decode with identical output; criterion
