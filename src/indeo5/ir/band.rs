@@ -142,6 +142,23 @@ impl RvMap {
     }
 }
 
+#[cfg(test)]
+impl RvMap {
+    /// The symbol that stands for (run, value code), for building test
+    /// streams.
+    pub fn symbol_for(&self, run: u8, code: u16) -> Option<u32> {
+        (0..256u32).find(|&s| {
+            let e = self.0[s as usize];
+            e.kind == 0 && e.run == run && e.code == code
+        })
+    }
+
+    /// The end-of-block symbol.
+    pub fn eob(&self) -> u32 {
+        (0..256u32).find(|&s| self.0[s as usize].kind == 1).unwrap()
+    }
+}
+
 /// Quantiser steps, `bank[matrix][class][q][position]` (spec 06, 5.1).
 pub(crate) type Bank = [[[[u8; 64]; 24]; 2]; 6];
 

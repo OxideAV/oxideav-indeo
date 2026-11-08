@@ -234,8 +234,11 @@ impl Iv50Decoder {
         }
         if ftype == 0 {
             let gop = headers::read_gop(&mut r)?;
-            if gop.width > MAX_SIDE || gop.height > MAX_SIDE {
-                return Err(Iv50Error::Unsupported("picture size"));
+            if gop.width > MAX_SIDE
+                || gop.height > MAX_SIDE
+                || gop.width as u64 * gop.height as u64 > super::MAX_PICTURE_PIXELS
+            {
+                return Err(Iv50Error::Unsupported("picture larger than 4096 x 4096"));
             }
             self.set_gop(gop);
         } else {
@@ -612,3 +615,6 @@ fn build_layout(gop: &GopHeader) -> Vec<PlaneLayout> {
     }
     layouts
 }
+
+#[cfg(test)]
+mod tests;
