@@ -9,8 +9,11 @@
 //! coefficient data that an inverse Slant transform and wavelet
 //! recomposition turn into pixels (`spec/05`-`spec/08`).
 //!
-//! This module builds the decode stack from the bottom up. Landed so
-//! far:
+//! [`Iv50Decoder`] is the complete decoder: it decodes every frame type
+//! and gives the same 8-bit planes as the vendor driver, and the
+//! registry bridge ([`Indeo5RegistryDecoder`]) uses it. The other
+//! modules are an earlier structural decode stack, kept for its typed
+//! trace API ([`decode_intra_picture`], [`Indeo5Decoder`]), including:
 //!
 //! * [`BitReader`] — the LSB-first 32-bit-accumulator bit reader
 //!   (`spec/00 §3`, `spec/01 §3.1`).
@@ -19,10 +22,6 @@
 //! * [`PictureStart`] — the `spec/01 §3` picture-start triplet (PSC +
 //!   frame_type + frame_number + the §3.4 NULL soft-correction).
 //! * [`pic_size`] — the `spec/02 §1.6` standard picture-size tables.
-//!
-//! The bitstream payload of a real Indeo 5 frame (GOP / frame / band
-//! headers and the per-tile coefficient stream) is parsed by the
-//! later modules as they land.
 
 mod assemble;
 mod band;

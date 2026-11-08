@@ -6,7 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- indeo5: `Iv50Decoder`, a complete IV50 decoder (intra, inter and NULL
+  frames, 1-band and 4-band luma, transparency windows) whose planes
+  match the vendor driver's on the Rent-A-Hero corpus; `Iv50Error` and
+  `Iv50Plane` with it, and the `iv50_dump` example
+
 ### Changed
+
+- indeo5: `Indeo5RegistryDecoder` and `decode_video_frame` decode with
+  `Iv50Decoder`, so registry packets now give the real pictures
 
 - indeo3: about 4x faster picture decode with identical output; criterion
   bench `indeo3_decode` over the staged IV32 corpora
