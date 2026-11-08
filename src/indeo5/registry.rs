@@ -18,11 +18,10 @@
 //! ## Output pixel format
 //!
 //! Indeo 5 decodes to 4:1:0: chroma planes a quarter of the luma size in
-//! each direction (half with GOP flag bit 1). The framework has no 4:1:0
-//! pixel format, so each chroma sample is repeated over the 4 by 4 (or 2
-//! by 2) luma area it covers and the frame is emitted as
-//! [`PixelFormat::Yuv444P`]: three planes at the luma size, in Y, U, V
-//! order.
+//! each direction. The framework has no 4:1:0 pixel format, so each
+//! chroma sample is repeated over the 4 by 4 luma area it covers and the
+//! frame is emitted as [`PixelFormat::Yuv444P`]: three planes at the luma
+//! size, in Y, U, V order.
 
 use oxideav_core::{
     CodecCapabilities, CodecId, CodecInfo, CodecParameters, CodecRegistry, CodecTag, Decoder,
@@ -103,15 +102,15 @@ fn map_decode_error(e: Iv50Error) -> Error {
     Error::invalid(format!("indeo5: {e}"))
 }
 
-/// Repeat each chroma sample over the luma area it covers, giving a plane
-/// of `width` by `height`.
+/// Repeat each chroma sample over the 4 by 4 luma pixels it covers,
+/// giving a plane of `width` by `height`. Luma pixel (x, y) takes chroma
+/// sample (x / 4, y / 4): the chroma planes are `ceil(width / 4)` by
+/// `ceil(height / 4)` ([`Iv50Decoder`] refuses half-size chroma).
 fn upsample(p: &Iv50Plane, width: usize, height: usize) -> Vec<u8> {
-    let sx = width.div_ceil(p.width.max(1)).max(1);
-    let sy = height.div_ceil(p.height.max(1)).max(1);
     let mut out = Vec::with_capacity(width * height);
     for y in 0..height {
-        let row = p.row((y / sy).min(p.height - 1));
-        out.extend((0..width).map(|x| row[(x / sx).min(p.width - 1)]));
+        let row = p.row((y / 4).min(p.height - 1));
+        out.extend((0..width).map(|x| row[(x / 4).min(p.width - 1)]));
     }
     out
 }
@@ -265,6 +264,24 @@ pub fn register(ctx: &mut RuntimeContext) {
 mod tests {
     use super::*;
     use oxideav_core::stream::CodecResolver;
+
+    #[test]
+    fn chroma_sample_covers_four_by_four_luma_pixels() {
+        // A 9 by 5 picture has 3 by 2 chroma samples; luma column x takes
+        // chroma column x / 4, also when 9 / 3 would suggest a factor of 3.
+        let data: Vec<u8> = (0..2 * 32)
+            .map(|i| (i % 32) as u8 + 10 * (i / 32) as u8)
+            .collect();
+        let p = Iv50Plane {
+            width: 3,
+            height: 2,
+            stride: 32,
+            data: &data,
+        };
+        let up = upsample(&p, 9, 5);
+        assert_eq!(&up[..9], &[0, 0, 0, 0, 1, 1, 1, 1, 2]);
+        assert_eq!(&up[4 * 9..], &[10, 10, 10, 10, 11, 11, 11, 11, 12]);
+    }
 
     #[test]
     fn codec_id_for_fourcc_maps_iv50() {
