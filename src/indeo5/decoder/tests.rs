@@ -432,3 +432,22 @@ fn transparency_rectangles_outside_the_picture_write_nothing() {
         assert!(rows(dec.y().unwrap()).iter().flatten().all(|&v| v == 0));
     }
 }
+
+#[test]
+fn failed_intra_frame_with_a_new_size_leaves_no_picture() {
+    let mut dec = Iv50Decoder::new();
+    dec.decode(&intra_frame()).unwrap();
+    // A different size whose band data is missing: the GOP header is
+    // taken, which clears the buffers, and then the frame fails.
+    let mut w = BitWriter::new();
+    picture_start(&mut w, 0, 1, Some((32, 8)));
+    frame_header(&mut w, 0);
+    assert_eq!(dec.decode(&w.bytes), Err(Iv50Error::Truncated));
+    assert!(dec.y().is_none());
+    assert_eq!(dec.decode(&inter_frame(2)), Err(Iv50Error::NoReference));
+    // A failed frame of the same size keeps the picture.
+    dec.decode(&intra_frame()).unwrap();
+    let f = intra_frame();
+    assert!(dec.decode(&f[..f.len() - 4]).is_err());
+    assert!(dec.y().is_some());
+}

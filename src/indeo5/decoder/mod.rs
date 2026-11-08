@@ -57,7 +57,11 @@ pub enum FrameType {
 }
 
 /// Errors of [`Iv50Decoder::decode`]. Every one of them means the frame
-/// was not decoded; the planes keep the previous picture.
+/// was not decoded, and the planes keep the previous picture. The one
+/// exception is an intra frame whose GOP header changes the picture size
+/// or the band counts: the decoder takes the new layout before it decodes
+/// the bands, which clears the picture, so after such a frame fails
+/// there is none until the next intra frame decodes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Iv50Error {
