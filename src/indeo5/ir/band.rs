@@ -653,6 +653,31 @@ mod tests {
         assert_eq!(dequant(81, 200).unwrap(), 201 + 100 - 1);
     }
 
+    /// The bank equals the DLL's runtime bank, dumped in
+    /// `tests/data/iv50-quant-matrices-1007b000.csv` (id, class, q, then
+    /// 64 steps; the 4x4 id holds its rows at stride 8).
+    #[test]
+    fn bank_matches_runtime_dump() {
+        let csv = include_str!("../../../tests/data/iv50-quant-matrices-1007b000.csv");
+        let bank = build_bank();
+        let mut rows = 0;
+        for line in csv.lines().skip(1) {
+            let f: Vec<&str> = line.split(',').collect();
+            let m: usize = f[0].parse().unwrap();
+            let cls: usize = f[1].parse().unwrap();
+            let q: usize = f[2].parse().unwrap();
+            let v: Vec<u8> = f[6..70].iter().map(|x| x.parse().unwrap()).collect();
+            for p in 0..64 {
+                if m == 5 && (p / 8 >= 4 || p % 8 >= 4) {
+                    continue;
+                }
+                assert_eq!(bank[m][cls][q][p], v[p], "id {m} class {cls} q {q} pos {p}");
+            }
+            rows += 1;
+        }
+        assert_eq!(rows, 6 * 2 * 24);
+    }
+
     #[test]
     fn rv_map_ranks() {
         let m = RvMap::new(0, &[]).unwrap();
