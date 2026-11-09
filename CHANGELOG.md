@@ -20,12 +20,6 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   checks the headers with the same parser
 - indeo5: `FrameType` is `#[non_exhaustive]` and has lost `from_bits`
   and `to_bits`; `MAX_PICTURE_PIXELS` now bounds `Iv50Decoder`
-- indeo3: about 4x faster picture decode with identical output; criterion
-  bench `indeo3_decode` over the staged IV32 corpora
-- `#[non_exhaustive]` on every error enum and the output-shape enums:
-  `AssembleError`, `BandError`, `BitReaderError`, `CellDecodeError`, `CellEmitError`, `CellReconstructError`, `CellRectDecodeError`, `CellUnpackError`, `ChromaLayout`, `ChromaUpsampleError`, `CodebookError`, `CopyUpperError`, `DecodeError`, `DecoderError`, `Error`, `FrameDecodeError`, `FrameError`, `GopError`, `HeaderError`, `MacroblockError`, `MarkEdgeError`, `MbHeaderError`, `McAddressError`, `McCopyError`, `McError`, `McKernelGeometryError`, `OutputConversion`, `OutputDispatchError`, `OutputError`, `OutputFormat`, `PerCellEdgeFixupError`, `PictureDecodeError`, `PictureError`, `PictureLayerError`, `PlaneAssembleError`, `PlaneExecError`, `PlaneReconstructError`, `RowStreamError`, `RvTableError`, `SeedAreaError`, `SessionError`, `StripEdgeApplyError`, `VqError`, `YuvError`.
-- `#[non_exhaustive]` on the decoded-output, header and statistics
-  records: `AdmittedFrame`, `BitstreamHeader`, `CellEmitStats`, `CopyUpperStats`, `DecodeStats`, `DecodedFrame`, `DecodedOutput`, `DecodedPicture`, `DecodedPlane`, `DispositionCounts`, `FormatDescriptor`, `FrameHeader`, `FrameReconstructStats`, `GopHeader`, `MarkEdgeStats`, `PictureHeader`, `PlaneCellStats`, `PlaneExecStats`, `PlaneStats`, `ReconstructedFrame`, `SessionOutput`, `VqNullDriveStats`, `YuvFrame`, `YuvPlane`.
 
 ### Removed
 
@@ -38,6 +32,20 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `indeo5_session` fuzz targets (replaced by `indeo5_decoder`). It
   failed on most inter frames of real movies and its pictures differed
   from the vendor driver's; `Iv50Decoder` replaces it
+
+## [0.0.4](https://github.com/OxideAV/oxideav-indeo/compare/v0.0.3...v0.0.4) - 2026-11-07
+
+### Fixed
+
+- fixup for #6: indeo3_pixels doc — the 176x144 corpus has full-pel vectors only
+- fixup for #6: pin mc_copy (all four half-pel modes, McOutOfRange edges) and to_pixels crop against per-sample models
+- fixup for #6: destructure DecodedPicture in clone_from so new fields cannot be missed
+
+### Other
+
+- Merge master into #6 (keep #[non_exhaustive] on DecodedPicture; CHANGELOG entry under [Unreleased])
+- API hygiene: non_exhaustive error enums, output enums and decoded/header/stats records
+- faster picture decode, same output; criterion decode bench
 
 ## [0.0.3](https://github.com/OxideAV/oxideav-indeo/compare/v0.0.2...v0.0.3) - 2026-10-23
 
