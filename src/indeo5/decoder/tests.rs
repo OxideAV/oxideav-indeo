@@ -268,6 +268,36 @@ fn bad_headers_are_rejected() {
             Err(Iv50Error::Unsupported(_))
         ));
     }
+    // Seven luma bands (codes 2 and 6) are refused, also when every band
+    // of the frame is empty.
+    for sub in [2, 6] {
+        let (luma, chroma) = if sub == 2 { (7, 1) } else { (7, 4) };
+        let mut w = BitWriter::new();
+        w.put(0x1f, 5);
+        w.put(0, 3);
+        w.put(0, 8);
+        w.put(0, 8);
+        w.put(sub, 3);
+        w.put(15, 4);
+        w.put((16 << 13) | 8, 26);
+        for _ in 0..luma {
+            w.put(0, 6);
+        }
+        for _ in 0..chroma {
+            w.put(6, 6);
+        }
+        w.align();
+        w.put(2 << 19, 24);
+        w.align();
+        frame_header(&mut w, 0);
+        for _ in 0..luma + 2 * chroma {
+            w.put(1, 8);
+        }
+        assert!(matches!(
+            Iv50Decoder::new().decode(&w.bytes),
+            Err(Iv50Error::Unsupported(_))
+        ));
+    }
     // Truncated band data.
     let f = intra_frame();
     assert!(dec.decode(&f[..f.len() - 4]).is_err());

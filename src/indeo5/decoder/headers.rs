@@ -24,10 +24,6 @@ const PICTURE_SIZES: [(u32, u32); 15] = [
     (0, 0),
 ];
 
-/// Largest picture side the decoder accepts. A custom size is 13 bits
-/// per side, so 8191 is the most a stream can ask for.
-pub(crate) const MAX_SIDE: u32 = 8191;
-
 /// The picture start fields (spec 01, "Picture start").
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PictureStart {
@@ -136,6 +132,13 @@ pub(crate) fn read_gop(r: &mut Bits) -> Result<GopHeader, Iv50Error> {
     let sub = r.read(3);
     if !matches!(sub, 0 | 1 | 2 | 6) {
         return Err(Iv50Error::BadHeader("subsampling code"));
+    }
+    if sub & 2 != 0 {
+        // Codes 2 and 6: seven luma bands (and four chroma bands for 6).
+        // The DLL leaves a seven-band plane unwritten (spec 08, 8.7).
+        return Err(Iv50Error::Unsupported(
+            "seven-band luma or four-band chroma (subsampling codes 2 and 6)",
+        ));
     }
     let luma_bands = ((sub & 3) * 3 + 1) as usize;
     let chroma_bands = ((sub >> 2) * 3 + 1) as usize;

@@ -107,12 +107,6 @@ impl Bits<'_> {
         self.pos >> 3
     }
 
-    /// Move to the start of byte `byte`.
-    #[inline]
-    pub fn seek_byte(&mut self, byte: usize) {
-        self.pos = byte * 8;
-    }
-
     /// Whether the reader has gone past the end of the frame.
     #[inline]
     pub fn overrun(&self) -> bool {

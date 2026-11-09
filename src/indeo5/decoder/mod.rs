@@ -25,7 +25,7 @@ mod xform;
 
 use band::{B0Rec, BandGeom, BandJob, Bank, TileGeom, build_bank, fill_empty_band};
 use bits::PaddedFrame;
-use headers::{GopHeader, MAX_SIDE};
+use headers::GopHeader;
 use huff::Huff;
 use synth::{OutPlane, Window};
 
@@ -62,6 +62,12 @@ pub enum FrameType {
 /// or the band counts: the decoder takes the new layout before it decodes
 /// the bands, which clears the picture, so after such a frame fails
 /// there is none until the next intra frame decodes.
+///
+/// An intra frame decodes in place into the reference buffers, as the
+/// DLL's does. When one fails, the planes keep the previous picture, but
+/// the bands it decoded before the error stay in the reference, so the
+/// inter frames that follow predict from that mix until the next intra
+/// frame decodes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Iv50Error {
@@ -266,10 +272,7 @@ impl Iv50Decoder {
         }
         if ftype == 0 {
             let gop = headers::read_gop(&mut r)?;
-            if gop.width > MAX_SIDE
-                || gop.height > MAX_SIDE
-                || gop.width as u64 * gop.height as u64 > MAX_PICTURE_PIXELS
-            {
+            if gop.width as u64 * gop.height as u64 > MAX_PICTURE_PIXELS {
                 return Err(Iv50Error::Unsupported(
                     "picture area above 4096 x 4096 pixels",
                 ));
@@ -400,8 +403,9 @@ impl Iv50Decoder {
         fh: &headers::FrameHeader,
     ) -> Result<Vec<(u32, u32, u32, u32)>, Iv50Error> {
         let mb_idx = Self::huff_index(&mut self.mb_huffs, &fh.mb_rows)?;
-        let gop = self.gop.clone().expect("GOP checked by the caller");
+        let gop = self.gop.as_ref().expect("GOP checked by the caller");
         let b0_mb_size = gop.luma_info[0].mb_size;
+        let transparency = gop.transparency;
         let b0 = &self.layout[0].bands[0];
         let b0_drifts =
             b0.info.mb_size == b0.info.blk_size && b0.tiles.iter().any(|t| t.cols % 2 == 1);
@@ -444,7 +448,7 @@ impl Iv50Decoder {
                 };
             }
         }
-        if gop.transparency {
+        if transparency {
             let mut r = frame.reader_at(pos);
             let rects = headers::read_transparency_rects(&mut r, fh.flags);
             if r.overrun() {
@@ -510,12 +514,11 @@ impl Iv50Decoder {
             };
             let lay = &self.layout[plane];
             let area = &self.sets[set][plane];
-            match lay.bands.len() {
-                1 => synth::one_band(area, &lay.bands[0], win, &mut self.out[plane]),
-                4 => synth::four_band(area, &lay.bands, win, &mut self.out[plane]),
-                // Seven bands: the DLL doesn't write the plane (spec 08,
-                // 8.7).
-                _ => {}
+            // One or four bands: the GOP header reader refuses seven.
+            if lay.bands.len() == 1 {
+                synth::one_band(area, &lay.bands[0], win, &mut self.out[plane]);
+            } else {
+                synth::four_band(area, &lay.bands, win, &mut self.out[plane]);
             }
         }
     }
@@ -579,12 +582,9 @@ fn build_layout(gop: &GopHeader) -> Vec<PlaneLayout> {
         let mut bands = Vec::with_capacity(n);
         let mut off = MARGIN;
         for (bi, info) in infos.iter().enumerate() {
-            let (bw, bh) = match n {
-                1 => (pw, ph),
-                4 => (pw >> 1, ph >> 1),
-                _ if bi < 4 => (pw >> 2, ph >> 2),
-                _ => (pw >> 1, ph >> 1),
-            };
+            // One or four bands (seven-band planes are refused by the GOP
+            // header reader).
+            let (bw, bh) = if n == 1 { (pw, ph) } else { (pw >> 1, ph >> 1) };
             let (bw, bh) = (bw.max(1), bh.max(1));
             let pitch = ((2 * bw + 31) & !31) / 2;
             let rows = bh.next_multiple_of(16);

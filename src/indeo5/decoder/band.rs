@@ -332,7 +332,6 @@ impl BandJob<'_> {
                 if r.byte_pos() - tile_start != size as usize {
                     return Err(Iv50Error::BadBlockData("tile size mismatch"));
                 }
-                r.seek_byte(tile_start + size as usize);
             } else if t + 1 < ntiles {
                 return Err(Iv50Error::Unsupported("coded tile without a size"));
             }
