@@ -117,6 +117,60 @@ fn registry_decoder_emits_pixel_exact_yuv444_frames() {
     assert_eq!(vf.planes[0].data, reference(INTRA_YUV, 0, w, h).0);
 }
 
+/// Size and pixel format are stream metadata: unknown before the first
+/// frame, then the picture's; another size after a seek is announced by
+/// one event before the first frame of the new size.
+#[test]
+fn registry_decoder_reports_stream_parameters() {
+    use oxideav_core::PixelFormat;
+    let mut dec = Indeo3RegistryDecoder::new(CodecId::new("indeo3"));
+    assert!(dec.output_params().is_none());
+    let shape = |dec: &Indeo3RegistryDecoder| {
+        let p = dec.output_params().unwrap();
+        assert_eq!(dec.output_pixel_format(), p.pixel_format);
+        (p.width.unwrap(), p.height.unwrap(), p.pixel_format.unwrap())
+    };
+    let send = |dec: &mut Indeo3RegistryDecoder, data: &[u8]| {
+        dec.send_packet(&Packet::new(0, TimeBase::new(1, 1000), data.to_vec()))
+            .unwrap();
+    };
+    // The 160x120 corpus: no event, the counter stays.
+    for frame in frames(INTRA_BIN, INTRA_IDX).iter().take(3) {
+        send(&mut dec, frame);
+        assert!(matches!(dec.receive_frame(), Ok(Frame::Video(_))));
+        assert_eq!(shape(&dec), (160, 120, PixelFormat::Yuv444P));
+        assert_eq!(dec.output_params_generation(), 0);
+    }
+    // The picture decoder refuses a new size inside a stream, so a
+    // size can only change across a seek: the intra frame of the
+    // 176x144 corpus after a reset.
+    send(&mut dec, frames(INTER_BIN, INTER_IDX)[0]);
+    assert!(dec.receive_frame().is_err());
+    assert_eq!(shape(&dec), (160, 120, PixelFormat::Yuv444P));
+    dec.reset().unwrap();
+    send(&mut dec, frames(INTER_BIN, INTER_IDX)[0]);
+    let Frame::StreamParams(p) = dec.receive_frame().unwrap() else {
+        panic!("expected the stream parameters event");
+    };
+    assert_eq!((p.width, p.height), (Some(176), Some(144)));
+    assert_eq!(shape(&dec), (176, 144, PixelFormat::Yuv444P));
+    assert_eq!(dec.output_params_generation(), 1);
+    let Frame::Video(vf) = dec.receive_frame().unwrap() else {
+        panic!("the frame follows its event");
+    };
+    assert_eq!(vf.planes[0].data.len(), 176 * 144);
+    assert!(matches!(
+        dec.receive_frame(),
+        Err(oxideav_core::Error::NeedMore)
+    ));
+    // A seek keeps the description.
+    dec.reset().unwrap();
+    assert_eq!(shape(&dec), (176, 144, PixelFormat::Yuv444P));
+    send(&mut dec, frames(INTER_BIN, INTER_IDX)[0]);
+    assert!(matches!(dec.receive_frame(), Ok(Frame::Video(_))));
+    assert_eq!(dec.output_params_generation(), 1);
+}
+
 #[test]
 fn hostile_dimensions_are_refused_before_allocation() {
     // A fuzz artefact frame (r459) declaring a 21062x44032 picture:

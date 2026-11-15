@@ -122,6 +122,14 @@ pub struct Indeo3RegistryDecoder {
     inner: Indeo3PictureDecoder,
     pending: Option<Packet>,
     eof: bool,
+    /// Width and height of the frame returned last. They are stream
+    /// metadata ([`Decoder::output_params`]), never per frame.
+    shape: Option<(u32, u32)>,
+    /// Moves when `shape` changes after the first frame.
+    generation: u64,
+    /// A decoded frame held back behind its [`Frame::StreamParams`]
+    /// event.
+    held: Option<VideoFrame>,
 }
 
 impl Indeo3RegistryDecoder {
@@ -132,6 +140,9 @@ impl Indeo3RegistryDecoder {
             inner: Indeo3PictureDecoder::new(),
             pending: None,
             eof: false,
+            shape: None,
+            generation: 0,
+            held: None,
         }
     }
 }
@@ -202,6 +213,9 @@ impl Decoder for Indeo3RegistryDecoder {
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
+        if let Some(frame) = self.held.take() {
+            return Ok(Frame::Video(frame));
+        }
         let Some(pkt) = self.pending.take() else {
             return if self.eof {
                 Err(Error::Eof)
@@ -210,7 +224,21 @@ impl Decoder for Indeo3RegistryDecoder {
             };
         };
         let out = self.inner.decode(&pkt.data).map_err(map_decoder_error)?;
-        Ok(Frame::Video(picture_to_video_frame(&out, pkt.pts)))
+        let frame = picture_to_video_frame(&out, pkt.pts);
+        let shape = Some((out.width, out.height));
+        if self.shape.is_some() && shape != self.shape {
+            // A new picture size (the picture decoder accepts one only
+            // on a fresh start, so this is the first frame after a
+            // seek): the description and the counter move with the
+            // event, the frame follows it.
+            self.shape = shape;
+            self.generation = self.generation.wrapping_add(1);
+            self.held = Some(frame);
+            let params = self.output_params().expect("shape known");
+            return Ok(Frame::StreamParams(Box::new(params)));
+        }
+        self.shape = shape;
+        Ok(Frame::Video(frame))
     }
 
     fn flush(&mut self) -> Result<()> {
@@ -224,9 +252,29 @@ impl Decoder for Indeo3RegistryDecoder {
         // packet decodes as a fresh INTRA frame (the session's
         // first-frame / seek INTRA gate, spec/01 §3.2 / §4).
         self.pending = None;
+        self.held = None;
         self.eof = false;
         self.inner = Indeo3PictureDecoder::new();
         Ok(())
+    }
+
+    fn output_pixel_format(&self) -> Option<PixelFormat> {
+        self.output_params().and_then(|p| p.pixel_format)
+    }
+
+    /// Width, height and [`PixelFormat::Yuv444P`] of the frames, known
+    /// once the first one has been returned.
+    fn output_params(&self) -> Option<CodecParameters> {
+        let (width, height) = self.shape?;
+        let mut p = CodecParameters::video(self.codec_id.clone());
+        p.width = Some(width);
+        p.height = Some(height);
+        p.pixel_format = Some(PixelFormat::Yuv444P);
+        Some(p)
+    }
+
+    fn output_params_generation(&self) -> u64 {
+        self.generation
     }
 }
 

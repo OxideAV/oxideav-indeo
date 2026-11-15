@@ -46,6 +46,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   half-size chroma, inherited vectors, escapes), and the picture-area
   bound
 
+- indeo3: `Indeo3RegistryDecoder` reports width, height and
+  `PixelFormat::Yuv444P` through `Decoder::output_params`, and announces
+  a new picture size after a seek with `output_params_generation` and a
+  `Frame::StreamParams` event
 - indeo5: `benches/indeo5_decode.rs`, a criterion bench of the decoder
   and of the registry bridge over the staged fixtures; fuzz seeds for
   the inter fixture and for synthetic half-size-chroma, motion and
