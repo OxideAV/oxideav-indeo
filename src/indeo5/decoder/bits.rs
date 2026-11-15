@@ -1,5 +1,4 @@
-//! LSB-first bit reader for the IV50 bitstream (spec 00, "Byte and bit
-//! order").
+//! LSB-first bit reader for the IV50 bitstream (`spec/00-scope.md` §3).
 //!
 //! Bytes are taken in file order and bit 0 of a byte comes first. A
 //! field of n bits has its first bit in bit 0 of the value. The reader

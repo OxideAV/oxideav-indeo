@@ -1,5 +1,5 @@
 //! The row-width prefix codes of the macroblock and block layers
-//! (spec 03, "Huffman codes"; spec 04, 1.2).
+//! (descriptors: `spec/04-entropy.md` §1.3 to §1.6).
 //!
 //! A descriptor is a list of row widths. Row i is a prefix of i one-bits
 //! and a zero-bit (the last row has no zero-bit), followed by w[i] bits
@@ -11,10 +11,10 @@
 
 use super::bits::Bits;
 
-/// Longest code the builder accepts (spec 03, "Huffman codes").
+/// Longest code the builder accepts.
 const MAX_LEN: u32 = 13;
 
-/// The MB-layer presets (spec 02, 2.3).
+/// The MB-layer presets (spec/04 §1.5; `tables/region_1008d710`).
 pub(crate) const MB_PRESETS: [&[u8]; 8] = [
     &[0, 4, 5, 4, 4, 4, 6, 6],
     &[0, 2, 2, 3, 3, 3, 3, 5, 3, 2, 2, 2],
@@ -26,7 +26,7 @@ pub(crate) const MB_PRESETS: [&[u8]; 8] = [
     &[0, 4, 4, 4, 3, 3, 2, 3, 2, 2, 2, 2],
 ];
 
-/// The block-layer presets (spec 02, 3.2; spec 04, 1.3).
+/// The block-layer presets (spec/04 §1.4; `tables/region_1008d798`).
 pub(crate) const BLOCK_PRESETS: [&[u8]; 8] = [
     &[1, 2, 3, 4, 4, 7, 5, 5, 4, 1],
     &[2, 3, 4, 4, 4, 7, 5, 4, 3, 3, 2],
@@ -49,8 +49,7 @@ pub(crate) struct Huff {
 
 impl Huff {
     /// Build the table for a descriptor. Returns `None` when a row is
-    /// wider than 8 bits or a code is longer than 13 bits, which the DLL
-    /// rejects (spec 03, "Huffman codes").
+    /// wider than 8 bits or a code is longer than 13 bits.
     pub fn new(rows: &[u8]) -> Option<Huff> {
         let n = rows.len();
         if n == 0 || n > 16 {
@@ -115,14 +114,16 @@ impl Huff {
 }
 
 /// Read a descriptor carried in the stream: a 4-bit row count and that
-/// many 4-bit row widths (spec 02, 2.3).
+/// many 4-bit row widths (spec/02 §2.6; spec/04 §1.6).
 pub(crate) fn read_descriptor(r: &mut Bits) -> Vec<u8> {
     let n = r.read(4);
     (0..n).map(|_| r.read(4) as u8).collect()
 }
 
-/// The signed value of a macroblock-layer symbol (spec 03, section 3):
-/// odd symbols are positive, even ones negative, and 255 is -128.
+/// The signed value of a macroblock-layer symbol: symbol `s` is entry
+/// `s + 1` of `tables/level_unmap_1009e438` (spec/04 §3.4), so odd
+/// symbols are positive and even ones negative; 255, past that table,
+/// is -128.
 #[inline]
 pub(crate) fn signed(s: u32) -> i32 {
     if s & 1 == 1 {
@@ -164,7 +165,7 @@ mod tests {
     #[test]
     fn presets_cover_256_symbols() {
         // Preset 7 has room for 264 symbols; the codes of symbols 256 and
-        // above are not entered (see impl-questions.md).
+        // above are not entered.
         for rows in BLOCK_PRESETS {
             let total: u32 = rows.iter().map(|&w| 1u32 << w).sum();
             assert!(total >= 256);
@@ -189,5 +190,107 @@ mod tests {
         assert_eq!(signed(253), 127);
         assert_eq!(signed(254), -127);
         assert_eq!(signed(255), -128);
+    }
+
+    /// The presets equal the staged 17-byte records (a row count, then
+    /// the row widths; spec/04 §1.3 to §1.5).
+    #[test]
+    fn presets_equal_the_staged_records() {
+        for (csv, presets) in [
+            (
+                include_str!("../../../tests/data/iv50-tables/region_1008d710_records.csv"),
+                &MB_PRESETS,
+            ),
+            (
+                include_str!("../../../tests/data/iv50-tables/region_1008d798_records.csv"),
+                &BLOCK_PRESETS,
+            ),
+        ] {
+            let mut rows = 0;
+            for (line, preset) in csv.lines().skip(1).zip(presets) {
+                let b: Vec<u8> = line
+                    .split(',')
+                    .skip(2)
+                    .map(|x| u8::from_str_radix(x.trim_start_matches("0x"), 16).unwrap())
+                    .collect();
+                assert_eq!(b.len(), 17);
+                let n = b[0] as usize;
+                assert_eq!(&b[1..1 + n], *preset);
+                assert!(b[1 + n..].iter().all(|&x| x == 0));
+                rows += 1;
+            }
+            assert_eq!(rows, 8);
+        }
+    }
+
+    /// Symbol `s` is entry `s + 1` of the staged signed unmap table
+    /// (`tables/level_unmap_1009e438.csv`: index, byte, hex, signed).
+    #[test]
+    fn signed_equals_the_staged_unmap_table() {
+        let csv = include_str!("../../../tests/data/iv50-tables/level_unmap_1009e438.csv");
+        let table: Vec<Option<i32>> = csv
+            .lines()
+            .skip(1)
+            .map(|l| l.split(',').nth(3).unwrap().parse().ok())
+            .collect();
+        assert_eq!(table.len(), 256);
+        assert_eq!(table[0], None);
+        for s in 0..255u32 {
+            assert_eq!(Some(signed(s)), table[s as usize + 1], "symbol {s}");
+        }
+    }
+
+    /// Every symbol of every preset decodes back from its code, and the
+    /// code of symbol `s` in row `i` is `i` ones, a zero (not for the
+    /// last row) and the row's width in bits.
+    #[test]
+    fn every_preset_symbol_round_trips() {
+        for rows in MB_PRESETS.iter().chain(&BLOCK_PRESETS) {
+            let h = Huff::new(rows).unwrap();
+            let mut base = 0u32;
+            for (i, &w) in rows.iter().enumerate() {
+                let last = i == rows.len() - 1;
+                for x in 0..(1u32 << w) {
+                    let sym = base + x;
+                    if sym >= 256 {
+                        break;
+                    }
+                    let mut bits = vec![1u8; i];
+                    if !last {
+                        bits.push(0);
+                    }
+                    bits.extend((0..w).rev().map(|j| ((x >> j) & 1) as u8));
+                    let n = bits.len();
+                    // Follow with ones: a decoder that read too far would
+                    // land in another row.
+                    bits.extend([1u8; 16]);
+                    let stream = pack(&bits);
+                    let f = PaddedFrame::new(&stream);
+                    let mut r = f.reader_at(0);
+                    assert_eq!(h.decode(&mut r), Some(sym), "rows {rows:?}");
+                    assert_eq!(r.bit_pos(), n, "rows {rows:?} symbol {sym}");
+                }
+                base += 1 << w;
+            }
+        }
+    }
+
+    /// A two-row code, and a descriptor carried in the stream.
+    #[test]
+    fn two_row_code_and_stream_descriptor() {
+        // Two rows: "0" + 1 bit (symbols 0 and 1), then the last row,
+        // "1" with no zero bit and no extra bits (symbol 2).
+        let h = Huff::new(&[1, 0]).unwrap();
+        let stream = pack(&[1, 0, 0, 0, 1]);
+        let f = PaddedFrame::new(&stream);
+        let mut r = f.reader_at(0);
+        assert_eq!(h.decode(&mut r), Some(2));
+        assert_eq!(h.decode(&mut r), Some(0));
+        assert_eq!(h.decode(&mut r), Some(1));
+        // A descriptor carried in the stream: 4-bit count, 4-bit widths.
+        let stream = pack(&[1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0]);
+        let f = PaddedFrame::new(&stream);
+        let mut r = f.reader_at(0);
+        assert_eq!(read_descriptor(&mut r), vec![1, 2, 3]);
     }
 }

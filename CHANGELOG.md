@@ -14,6 +14,18 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and seven inter frames) decodes byte-exact against the vendor
   driver's `YUY2` output, luma and chroma, as do both intra keyframes;
   per-plane SHA-256 pins for every staged frame
+- indeo5: unit tests that compare every decoder table with the staged
+  `tables/` files (run/value expansion of all nine slots, scans,
+  quantiser bases and scales, reconstruction values, signed unmap, code
+  presets, picture sizes, the transform basis), the transforms with the
+  recurrence of `spec/06` §1.2, and every header field of `spec/02`
+
+### Changed
+
+- indeo5: the decoder's comments cite the staged specification
+  (`docs/video/indeo/indeo5/spec/`) by chapter and section; the module
+  docs list where the decoder follows the fixtures rather than the
+  text, what it carries beyond the text, and what it refuses
 
 ## [0.0.5](https://github.com/OxideAV/oxideav-indeo/compare/v0.0.4...v0.0.5) - 2026-11-15
 

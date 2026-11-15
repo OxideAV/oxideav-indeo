@@ -1,4 +1,5 @@
-//! Band recombination into the 8-bit output planes (spec 08).
+//! Band recombination into the 8-bit output planes
+//! (`spec/08-output-reconstruction.md` §3).
 
 use super::band::BandGeom;
 
@@ -12,7 +13,7 @@ pub(crate) struct Window {
 }
 
 /// An 8-bit output plane with room for the columns and rows the
-/// recombination writes past the visible picture (spec 08, 8.3).
+/// recombination writes past the visible picture.
 #[derive(Debug, Clone)]
 pub(crate) struct OutPlane {
     pub width: usize,
@@ -34,7 +35,7 @@ impl OutPlane {
     }
 }
 
-/// One band plane (spec 08, 8.5): `pixel = clamp(s, -128, 127) + 128`
+/// One band plane (spec/08 §3.0): `pixel = clamp(s, -128, 127) + 128`
 /// over the window, columns widened to multiples of 16.
 pub(crate) fn one_band(area: &[i16], b: &BandGeom, win: Window, out: &mut OutPlane) {
     let x0 = win.x & !15;
@@ -55,7 +56,10 @@ pub(crate) fn one_band(area: &[i16], b: &BandGeom, win: Window, out: &mut OutPla
     }
 }
 
-/// Four band plane (spec 08, 8.6): the DLL's integer synthesis filter
+/// Four band plane (spec/08 §3.0 and §3.2: accumulator at 64 times the
+/// sample, `clamp((acc >> 6) + 128, 0, 255)`; the filter taps follow the
+/// 5/3 synthesis pair of spec/06 §3.2, whose integer form the staged
+/// specification does not pin): the integer synthesis filter
 /// over the window, with rows started on an even row and columns widened
 /// to multiples of 32.
 pub(crate) fn four_band(area: &[i16], bands: &[BandGeom], win: Window, out: &mut OutPlane) {

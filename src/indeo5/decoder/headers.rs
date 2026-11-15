@@ -1,11 +1,12 @@
-//! Picture start, GOP header, frame header and band header (spec 01 and
-//! spec 02).
+//! Picture start (`spec/01-file-header.md` §3), GOP header, frame header
+//! and band header (`spec/02-gop-and-band-layer.md` §1 to §3).
 
 use super::Iv50Error;
 use super::bits::Bits;
 use super::huff::read_descriptor;
 
-/// Picture sizes of ids 0 to 14 (spec 02, 1.3), as (width, height).
+/// Picture sizes of ids 0 to 14 (spec/02 §1.6; `tables/region_10088c90`
+/// and `tables/region_10088cd0`), as (width, height).
 const PICTURE_SIZES: [(u32, u32); 15] = [
     (640, 480),
     (320, 240),
@@ -24,7 +25,7 @@ const PICTURE_SIZES: [(u32, u32); 15] = [
     (0, 0),
 ];
 
-/// The picture start fields (spec 01, "Picture start").
+/// The picture start fields (spec/01 §3.2 to §3.4).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PictureStart {
     pub frame_type: u32,
@@ -46,7 +47,7 @@ pub(crate) fn read_picture_start(r: &mut Bits) -> Result<PictureStart, Iv50Error
     })
 }
 
-/// One band's entry of the GOP header's band info (spec 02, 1.4).
+/// One band's entry of the GOP header's band info (spec/02 §1.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BandInfo {
     /// Motion vectors in half samples.
@@ -55,11 +56,13 @@ pub(crate) struct BandInfo {
     pub mb_size: u32,
     /// Block size in samples.
     pub blk_size: u32,
-    /// Transform type, the band class of spec 02, 1.4 (06, 2.1).
+    /// Transform type: the transform id of spec/02 §1.7, 0 to 3 for a
+    /// luma band (2D, row, column, none) and 4 to 7 for a chroma band
+    /// (spec/06 §2.3 lists the kernels).
     pub xform: u32,
 }
 
-/// The GOP header (spec 02, section 1).
+/// The GOP header (spec/02 §1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GopHeader {
     pub flags: u32,
@@ -77,20 +80,22 @@ pub(crate) struct GopHeader {
 }
 
 impl GopHeader {
-    /// Chroma plane size, a quarter of the luma size (spec 02, 1.3).
+    /// Chroma plane size (spec/02 §1.6).
     pub fn chroma_size(&self) -> (u32, u32) {
         ((self.width + 3) >> 2, (self.height + 3) >> 2)
     }
 }
 
-/// Read the 6-bit band info of one band (spec 02, 1.4). `p` is 0 for
-/// luma and 1 for chroma.
+/// Read the band info of one band (spec/02 §1.7): bit 0 `mv_res`, bit 1
+/// `mb_size_id`, bit 2 `blk_size_id`, bit 3 `trans_flg`; with `trans_flg`
+/// set, bits 4 and 5 are `ext_trans` and a 2-bit `end_marker` follows,
+/// else bits 4 and 5 are the `end_marker`. `p` is 0 for luma and 1 for
+/// chroma.
 fn read_band_info(r: &mut Bits, index: usize, p: u32) -> Result<BandInfo, Iv50Error> {
     let v = r.read(6);
     let s = (v >> 1) & 3;
     let class = if v >= 8 {
-        // A 2-bit field follows that must be 0; the DLL stops the
-        // process otherwise.
+        // The end marker after `ext_trans` must be 0 (spec/02 §1.7).
         if r.read(2) != 0 {
             return Err(Iv50Error::BadHeader("band info guard bits"));
         }
@@ -111,22 +116,22 @@ fn read_band_info(r: &mut Bits, index: usize, p: u32) -> Result<BandInfo, Iv50Er
 pub(crate) fn read_gop(r: &mut Bits) -> Result<GopHeader, Iv50Error> {
     let flags = r.read(8);
     if flags & 1 != 0 {
-        // GOP header size: the DLL skips it.
+        // `gop_hdr_size`: informational (spec/02 §1.2).
         r.read(16);
     }
     if flags & 0x20 != 0 {
-        // Access key (spec 02, section 6): a locked stream needs a key
-        // that this decoder has no way to receive.
+        // `lock_word`: spec/02 §1.3 and §6 item 1 leave its position
+        // and the key check open.
         return Err(Iv50Error::Unsupported("locked stream (gop_flags bit 5)"));
     }
     if flags & 0x40 != 0 {
-        // Several tiles: how a chroma band's tile size follows from the
-        // luma tile is unclear (impl-questions.md, Q3).
+        // `slice_size_id` (spec/02 §1.4): spec/02 §4.1 and spec/03 §1.1
+        // give different tile counts for a decomposed band and neither
+        // gives a chroma band's tile size.
         return Err(Iv50Error::Unsupported("multiple tiles (gop_flags bit 6)"));
     }
     if flags & 2 != 0 {
-        // Half-size chroma: spec 08 gives the window scaling for
-        // quarter-size chroma only (impl-questions.md, Q4).
+        // Half-size chroma (spec/02 §1.6).
         return Err(Iv50Error::Unsupported("half-size chroma (gop_flags bit 1)"));
     }
     let sub = r.read(3);
@@ -135,7 +140,9 @@ pub(crate) fn read_gop(r: &mut Bits) -> Result<GopHeader, Iv50Error> {
     }
     if sub & 2 != 0 {
         // Codes 2 and 6: seven luma bands (and four chroma bands for 6).
-        // The DLL leaves a seven-band plane unwritten (spec 08, 8.7).
+        // spec/06 §3.3 and §3.4 leave the synthesis arithmetic of a
+        // second decomposition level, and spec/06 §5.1 the matrix group
+        // of a four-band chroma plane, unestablished.
         return Err(Iv50Error::Unsupported(
             "seven-band luma or four-band chroma (subsampling codes 2 and 6)",
         ));
@@ -175,8 +182,9 @@ pub(crate) fn read_gop(r: &mut Bits) -> Result<GopHeader, Iv50Error> {
     let version_word = r.read(24);
     let version = (version_word >> 19) & 0xf;
     if version != 2 {
-        // Other versions make the DLL draw a "version" picture over the
-        // output (spec 02, 1.7; spec 08, 8.10).
+        // `value4` of spec/02 §1.9: every staged stream carries 2. The
+        // section gives the field no meaning, so other values are
+        // refused rather than guessed at.
         return Err(Iv50Error::Unsupported("bitstream version other than 2"));
     }
     if version_word & (1 << 23) != 0 {
@@ -201,7 +209,7 @@ pub(crate) fn read_gop(r: &mut Bits) -> Result<GopHeader, Iv50Error> {
     })
 }
 
-/// The frame header (spec 02, section 2).
+/// The frame header (spec/02 §2).
 #[derive(Debug, Clone)]
 pub(crate) struct FrameHeader {
     pub flags: u32,
@@ -213,16 +221,16 @@ pub(crate) struct FrameHeader {
 pub(crate) fn read_frame_header(r: &mut Bits) -> Result<FrameHeader, Iv50Error> {
     let flags = r.read(8);
     if flags & 1 != 0 {
-        // Frame size: only used for a check this decoder skips (2.2).
+        // `pic_hdr_size`: not range-checked (spec/02 §2.3).
         r.read(24);
     }
     if flags & 0x10 != 0 {
-        // Frame checksum: read only by the access key check.
+        // `frm_checksum`: parsed and stored only (spec/08 §7.1).
         r.read(16);
     }
     if flags & 0x20 != 0 {
-        // Frame extension: chunks of an 8-bit length and that many
-        // bytes, ended by a length of 0.
+        // `frm_hdr_ext` (spec/02 §2.5): chunks of an 8-bit length and
+        // that many bytes, ended by a length of 0.
         loop {
             let n = r.read(8);
             if n == 0 || r.overrun() {
@@ -240,7 +248,7 @@ pub(crate) fn read_frame_header(r: &mut Bits) -> Result<FrameHeader, Iv50Error> 
             super::huff::MB_PRESETS[sel as usize].to_vec()
         };
     }
-    // Plane filter bits (2.4); see impl-questions.md.
+    // `value5` (spec/02 §2.7).
     r.read(3);
     r.align();
     if r.overrun() {
@@ -249,13 +257,13 @@ pub(crate) fn read_frame_header(r: &mut Bits) -> Result<FrameHeader, Iv50Error> 
     Ok(FrameHeader { flags, mb_rows })
 }
 
-/// The band header (spec 02, section 3).
+/// The band header (spec/02 §3).
 #[derive(Debug, Clone)]
 pub(crate) struct BandHeader {
     pub flags: u32,
     /// Byte length of the whole band, if the frame carries band sizes.
     pub size: Option<u32>,
-    /// Correction pairs (spec 04, 3.5).
+    /// Symbol swap pairs `(a, b)` (spec/02 §3.4; spec/05 §2.4).
     pub corrections: Vec<(u8, u8)>,
     /// Run/value table slot.
     pub rv_table: usize,
@@ -324,13 +332,15 @@ pub(crate) fn read_band_header(r: &mut Bits, frame_flags: u32) -> Result<BandHea
         };
     }
     if r.bit() {
-        // Band checksum: no reader in the DLL.
+        // `band_checksum`: parsed and stored only (spec/02 §3.7;
+        // spec/08 §7.2).
         r.read(16);
     }
     h.gq = r.read(5);
     if flags & 0x20 != 0 {
-        // Band extension: align, then chunks of an 8-bit length, that
-        // many bytes and a bit that says whether another chunk follows.
+        // `band_hdr_ext` (spec/02 §3.9): align, then chunks of an 8-bit
+        // length, that many bytes and a bit that says whether another
+        // chunk follows.
         r.align();
         loop {
             let n = r.read(8);
@@ -347,8 +357,12 @@ pub(crate) fn read_band_header(r: &mut Bits, frame_flags: u32) -> Result<BandHea
     Ok(h)
 }
 
-/// Transparency rectangles of the frame trailer (spec 02, section 5;
-/// spec 08, 8.9). Returns the rectangles as (x, y, w, h).
+/// Transparency rectangles of the frame trailer, as (x, y, w, h): after
+/// the last band, a 24-bit size when frame_flags bit 0 is set, a 3-bit
+/// count and four 16-bit fields per rectangle. The staged specification
+/// covers the GOP header's transparency block (spec/02 §1.8) but not
+/// this trailer; see "Beyond the staged specification" in the module
+/// docs.
 pub(crate) fn read_transparency_rects(r: &mut Bits, frame_flags: u32) -> Vec<(u32, u32, u32, u32)> {
     if frame_flags & 1 != 0 {
         r.read(24);
@@ -363,4 +377,351 @@ pub(crate) fn read_transparency_rects(r: &mut Bits, frame_flags: u32) -> Vec<(u3
             (x, y, w, h)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::bits::PaddedFrame;
+    use super::*;
+
+    /// Fields written least significant bit first.
+    #[derive(Default)]
+    struct W {
+        bytes: Vec<u8>,
+        bit: usize,
+    }
+
+    impl W {
+        fn put(&mut self, value: u32, n: u32) -> &mut Self {
+            for i in 0..n {
+                if self.bit.is_multiple_of(8) {
+                    self.bytes.push(0);
+                }
+                *self.bytes.last_mut().unwrap() |= (((value >> i) & 1) as u8) << (self.bit % 8);
+                self.bit += 1;
+            }
+            self
+        }
+        fn align(&mut self) -> &mut Self {
+            self.bit = self.bit.next_multiple_of(8);
+            self
+        }
+    }
+
+    fn gop(w: &W) -> Result<GopHeader, Iv50Error> {
+        let f = PaddedFrame::new(&w.bytes);
+        read_gop(&mut f.reader_at(0))
+    }
+
+    /// The tail every GOP header ends with: align, `value1` to `value3`,
+    /// `value4 = 2`, no extension, align (spec/02 §1.9).
+    fn gop_tail(w: &mut W) {
+        w.align().put(2 << 19, 24).align();
+    }
+
+    /// The picture sizes equal the staged width and height tables
+    /// (spec/02 §1.6), including the 704x480 of id 3.
+    #[test]
+    fn picture_sizes_equal_the_staged_tables() {
+        let col = |csv: &str| -> Vec<u32> {
+            csv.lines()
+                .skip(1)
+                .map(|l| l.split(',').nth(3).unwrap().parse().unwrap())
+                .collect()
+        };
+        let widths = col(include_str!(
+            "../../../tests/data/iv50-tables/region_10088c90_u32.csv"
+        ));
+        let heights = col(include_str!(
+            "../../../tests/data/iv50-tables/region_10088cd0_u32.csv"
+        ));
+        for (id, &(w, h)) in PICTURE_SIZES.iter().enumerate() {
+            assert_eq!((w, h), (widths[id], heights[id]), "id {id}");
+        }
+        assert_eq!(PICTURE_SIZES[3], (704, 480));
+    }
+
+    #[test]
+    fn picture_start_fields() {
+        // 0x1f, type 3, number 0xa5.
+        let f = PaddedFrame::new(&[0x1f | (3 << 5), 0xa5]);
+        let s = read_picture_start(&mut f.reader_at(0)).unwrap();
+        assert_eq!((s.frame_type, s.frame_number), (3, 0xa5));
+        for bad in [[0x1e, 0], [0x1f | (5 << 5), 0], [0x1f | (7 << 5), 0]] {
+            let f = PaddedFrame::new(&bad);
+            assert_eq!(
+                read_picture_start(&mut f.reader_at(0)).unwrap_err(),
+                Iv50Error::BadPictureStart
+            );
+        }
+    }
+
+    /// Every standard size id, with the header size field present, one
+    /// luma and one chroma band.
+    #[test]
+    fn gop_header_standard_sizes() {
+        for id in 0..12u32 {
+            let mut w = W::default();
+            w.put(1, 8).put(0xbeef, 16).put(0, 3).put(id, 4);
+            w.put(0, 6).put(6, 6);
+            gop_tail(&mut w);
+            let g = gop(&w).unwrap();
+            assert_eq!((g.width, g.height), PICTURE_SIZES[id as usize]);
+            assert_eq!((g.luma_bands, g.chroma_bands), (1, 1));
+            assert_eq!(g.chroma_size(), (g.width.div_ceil(4), g.height.div_ceil(4)));
+            assert!(!g.transparency && !g.intra_only);
+        }
+        // Ids 12 to 14 are 0x0.
+        for id in 12..15u32 {
+            let mut w = W::default();
+            w.put(0, 8).put(0, 3).put(id, 4).put(0, 6).put(6, 6);
+            gop_tail(&mut w);
+            assert!(matches!(gop(&w), Err(Iv50Error::Unsupported(_))));
+        }
+    }
+
+    /// Band info (spec/02 §1.7): the size tables, `mv_res`, the default
+    /// transform of each band position and an explicit `ext_trans`.
+    #[test]
+    fn band_info_fields() {
+        // Four luma bands with the four size combinations, band 2 with
+        // half-sample vectors; one chroma band.
+        let mut w = W::default();
+        w.put(0, 8).put(1, 3).put(2, 4);
+        w.put(0b0000, 6)
+            .put(0b0010, 6)
+            .put(0b0101, 6)
+            .put(0b0110, 6);
+        w.put(0b0110, 6);
+        gop_tail(&mut w);
+        let g = gop(&w).unwrap();
+        assert_eq!((g.width, g.height), (160, 120));
+        let sizes: Vec<(u32, u32)> = g
+            .luma_info
+            .iter()
+            .map(|b| (b.mb_size, b.blk_size))
+            .collect();
+        assert_eq!(sizes, [(16, 8), (8, 8), (8, 4), (4, 4)]);
+        let half: Vec<bool> = g.luma_info.iter().map(|b| b.half_pel).collect();
+        assert_eq!(half, [false, false, true, false]);
+        let xf: Vec<u32> = g.luma_info.iter().map(|b| b.xform).collect();
+        assert_eq!(xf, [0, 1, 2, 3]);
+        assert_eq!(g.chroma_info[0].xform, 4);
+        // `trans_flg` with `ext_trans` 2 on the luma band: 8 bits.
+        let mut w = W::default();
+        w.put(0, 8).put(0, 3).put(2, 4);
+        w.put(0b10_1000, 6).put(0, 2).put(6, 6);
+        gop_tail(&mut w);
+        let g = gop(&w).unwrap();
+        assert_eq!(g.luma_info[0].xform, 2);
+        assert_eq!(
+            g.chroma_info[0],
+            BandInfo {
+                half_pel: false,
+                mb_size: 4,
+                blk_size: 4,
+                xform: 4
+            }
+        );
+        // A non-zero end marker after `ext_trans`.
+        let mut w = W::default();
+        w.put(0, 8)
+            .put(0, 3)
+            .put(2, 4)
+            .put(0b10_1000, 6)
+            .put(1, 2)
+            .put(6, 6);
+        gop_tail(&mut w);
+        assert_eq!(gop(&w), Err(Iv50Error::BadHeader("band info guard bits")));
+    }
+
+    /// `decomp_levels` (spec/02 §1.5) accepts 0, 1, 2 and 6 only.
+    #[test]
+    fn decomposition_codes() {
+        for code in [3u32, 4, 5, 7] {
+            let mut w = W::default();
+            w.put(0, 8).put(code, 3).put(2, 4);
+            assert_eq!(gop(&w), Err(Iv50Error::BadHeader("subsampling code")));
+        }
+        for code in [2u32, 6] {
+            let mut w = W::default();
+            w.put(0, 8).put(code, 3).put(2, 4);
+            assert!(matches!(gop(&w), Err(Iv50Error::Unsupported(_))));
+        }
+    }
+
+    /// The transparency block (spec/02 §1.8): three zero bits, a colour
+    /// flag and an optional 24-bit colour; then the trailing fields with
+    /// an extension of 16-bit words that ends at a clear top bit.
+    #[test]
+    fn transparency_block_and_extension() {
+        let mut w = W::default();
+        w.put(8 | 4, 8).put(0, 3).put(2, 4).put(0, 6).put(6, 6);
+        w.put(8, 4).put(0x123456, 24);
+        w.align().put((2 << 19) | (1 << 23), 24);
+        w.put(0x8001, 16).put(0xffff, 16).put(0x7fff, 16);
+        w.align();
+        // The frame header follows on the next byte.
+        w.put(0x40, 8).put(3, 3).put(5, 3).align();
+        let f = PaddedFrame::new(&w.bytes);
+        let mut r = f.reader_at(0);
+        let g = read_gop(&mut r).unwrap();
+        assert!(g.transparency && g.intra_only);
+        let fh = read_frame_header(&mut r).unwrap();
+        assert_eq!(fh.flags, 0x40);
+        assert_eq!(fh.mb_rows, super::super::huff::MB_PRESETS[3]);
+        assert_eq!(r.byte_pos(), w.bytes.len());
+        // Non-zero alignment bits in the transparency block.
+        let mut w = W::default();
+        w.put(8, 8)
+            .put(0, 3)
+            .put(2, 4)
+            .put(0, 6)
+            .put(6, 6)
+            .put(1, 4);
+        assert_eq!(gop(&w), Err(Iv50Error::BadHeader("transparency flags")));
+    }
+
+    /// The frame header (spec/02 §2): every optional field at once.
+    #[test]
+    fn frame_header_optional_fields() {
+        let mut w = W::default();
+        w.put(0x01 | 0x10 | 0x20 | 0x40 | 0x80, 8);
+        w.put(0x00abcd, 24); // pic_hdr_size
+        w.put(0x55aa, 16); // frm_checksum
+        w.put(2, 8).put(0x1111, 16).put(1, 8).put(0x22, 8).put(0, 8); // frm_hdr_ext
+        w.put(7, 3).put(3, 4).put(1, 4).put(2, 4).put(8, 4); // custom code
+        w.put(0, 3).align();
+        let f = PaddedFrame::new(&w.bytes);
+        let mut r = f.reader_at(0);
+        let fh = read_frame_header(&mut r).unwrap();
+        assert_eq!(fh.flags, 0xf1);
+        assert_eq!(fh.mb_rows, [1, 2, 8]);
+        assert_eq!(r.byte_pos(), w.bytes.len());
+        // Without bit 6 the macroblock code is preset 7 (spec/04 §1.1).
+        let f = PaddedFrame::new(&[0, 0]);
+        let fh = read_frame_header(&mut f.reader_at(0)).unwrap();
+        assert_eq!(fh.mb_rows, super::super::huff::MB_PRESETS[7]);
+        // A header that runs off the frame.
+        let f = PaddedFrame::new(&[0x01, 0]);
+        assert_eq!(
+            read_frame_header(&mut f.reader_at(0)).unwrap_err(),
+            Iv50Error::Truncated
+        );
+    }
+
+    /// The band header (spec/02 §3): every optional field at once, in
+    /// order, and the defaults when none is present.
+    #[test]
+    fn band_header_fields() {
+        let mut w = W::default();
+        w.put(0x02 | 0x04 | 0x10 | 0x20 | 0x40 | 0x80, 8);
+        w.put(0x000123, 24); // band_data_size
+        w.put(2, 8).put(4, 8).put(220, 8).put(4, 8).put(6, 8); // swap pairs
+        w.put(5, 3); // rv_tab_sel
+        w.put(2, 3); // block code preset 2
+        w.put(1, 1).put(0xee60, 16); // band_checksum
+        w.put(19, 5); // band_glob_quant
+        w.align()
+            .put(1, 8)
+            .put(0x77, 8)
+            .put(1, 1)
+            .put(0, 8)
+            .put(0, 1); // band_hdr_ext
+        w.align();
+        let f = PaddedFrame::new(&w.bytes);
+        let mut r = f.reader_at(0);
+        let h = read_band_header(&mut r, 0x80).unwrap();
+        assert_eq!(h.size, Some(0x123));
+        assert_eq!(h.corrections, [(4, 220), (4, 6)]);
+        assert_eq!(h.rv_table, 5);
+        assert_eq!(h.blk_rows, super::super::huff::BLOCK_PRESETS[2]);
+        assert_eq!(h.gq, 19);
+        assert!(h.inherit() && h.has_delta() && h.reads_delta() && !h.empty());
+        assert_eq!(r.byte_pos(), w.bytes.len());
+        // No optional field: default tables, slot 8 (spec/02 §3.5),
+        // block code preset 7 (spec/02 §3.6), two bytes in all.
+        let mut w = W::default();
+        w.put(0x0c, 8).put(0, 1).put(31, 5).align();
+        let f = PaddedFrame::new(&w.bytes);
+        let mut r = f.reader_at(0);
+        let h = read_band_header(&mut r, 0).unwrap();
+        assert_eq!((h.size, h.rv_table, h.gq), (None, 8, 31));
+        assert_eq!(h.blk_rows, super::super::huff::BLOCK_PRESETS[7]);
+        assert!(h.has_delta() && !h.reads_delta());
+        assert_eq!(r.byte_pos(), 2);
+        // An empty band is its flag byte alone (spec/02 §3.3), also in a
+        // frame that carries band sizes.
+        let f = PaddedFrame::new(&[0x01, 0xff, 0xff, 0xff]);
+        let mut r = f.reader_at(0);
+        assert!(read_band_header(&mut r, 0x80).unwrap().empty());
+        assert_eq!(r.bit_pos(), 8);
+        // More than 61 swap pairs (spec/02 §3.4).
+        let mut w = W::default();
+        w.put(0x10, 8).put(62, 8);
+        let f = PaddedFrame::new(&w.bytes);
+        assert_eq!(
+            read_band_header(&mut f.reader_at(0), 0).unwrap_err(),
+            Iv50Error::BadHeader("correction count above 61")
+        );
+        // 61 is accepted.
+        let mut w = W::default();
+        w.put(0x10, 8).put(61, 8);
+        for i in 0..61 {
+            w.put(i, 8).put(255 - i, 8);
+        }
+        w.put(0, 1).put(0, 5).align();
+        let f = PaddedFrame::new(&w.bytes);
+        let h = read_band_header(&mut f.reader_at(0), 0).unwrap();
+        assert_eq!(h.corrections.len(), 61);
+        assert_eq!(h.corrections[60], (60, 195));
+    }
+
+    /// The header fields of the staged 320x240 keyframe that its notes
+    /// and spec/05 §2.4 record.
+    #[test]
+    fn staged_keyframe_headers() {
+        let data: &[u8] = include_bytes!("../../../tests/data/intra-320x240-indeo5.iv50");
+        let f = PaddedFrame::new(data);
+        let mut r = f.reader_at(0);
+        let s = read_picture_start(&mut r).unwrap();
+        assert_eq!((s.frame_type, s.frame_number), (0, 0));
+        let g = read_gop(&mut r).unwrap();
+        assert_eq!(
+            (g.width, g.height, g.luma_bands, g.chroma_bands),
+            (320, 240, 1, 1)
+        );
+        let fh = read_frame_header(&mut r).unwrap();
+        assert_eq!(fh.flags, 0xdd);
+        // Band chain: Y at 20 (1064 bytes), V at 1084 (242), U at 1326.
+        assert_eq!(r.byte_pos(), 20);
+        let y = read_band_header(&mut r, fh.flags).unwrap();
+        assert_eq!(y.size, Some(1064));
+        assert_eq!((y.rv_table, y.gq), (4, 9));
+        assert_eq!(
+            y.corrections,
+            [
+                (4, 220),
+                (4, 6),
+                (8, 61),
+                (7, 80),
+                (5, 23),
+                (12, 59),
+                (13, 171),
+                (15, 100),
+                (18, 103)
+            ]
+        );
+        let v = read_band_header(&mut f.reader_at(1084), fh.flags).unwrap();
+        assert_eq!(
+            (v.size, &v.corrections[..]),
+            (Some(242), &[(5u8, 48u8)][..])
+        );
+        let u = read_band_header(&mut f.reader_at(1326), fh.flags).unwrap();
+        assert_eq!(
+            (u.size, &u.corrections[..]),
+            (Some(298), &[(5u8, 12u8)][..])
+        );
+        assert_eq!(1326 + 298 + 8, data.len());
+    }
 }

@@ -1,8 +1,10 @@
-//! Data tables of the Indeo 5 decoder, transcribed from the
-//! specification's `tables/` files (generated, do not edit).
+//! Data tables of the Indeo 5 decoder. Unit tests in this module compare
+//! every one of them with the staged `tables/` files of
+//! `docs/video/indeo/indeo5/` (copies under `tests/data/iv50-tables/`).
 
-/// Run/value tables (spec 04, 3.4): per slot, the number of value
-/// pairs for run 1, 2, ... and the rank of each symbol.
+/// Run/value tables (spec/05 §2.2; `tables/rv_tables_100972f4`): per
+/// slot, the count `n_r` of level pairs for run 1, 2, ... and the rank
+/// of each symbol.
 pub(crate) struct RvSlot {
     pub runs: &'static [u8],
     pub rank: [u8; 256],
@@ -208,8 +210,10 @@ pub(crate) static RV_SLOTS: [RvSlot; 9] = [
     },
 ];
 
-/// Scans 0 to 3 (spec 05, 2.2): coefficient position (row * 8 +
-/// column) of each scan position. Scan 3 has 16 entries.
+/// Scans 0 to 3 (spec/06 §2.5; `tables/scan_tables_10098528`:
+/// `zigzag_8x8`, `column_8x8`, `raster_8x8`, `zigzag_4x4`): coefficient
+/// position (row * 8 + column) of each scan position. Scan 3 has 16
+/// entries.
 pub(crate) static SCAN_0: [u8; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
     13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
@@ -227,8 +231,9 @@ pub(crate) static SCAN_2: [u8; 64] = [
 ];
 pub(crate) static SCAN_3: [u8; 16] = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 25, 18, 11, 19, 26, 27];
 
-/// Quantisation base matrices (spec 06, 5.1), [id][class][position];
-/// id 5 holds its 16 entries row-major with stride 4.
+/// Quantisation base matrices (spec/06 §5.1; `tables/quant_base_1008cf00`),
+/// [group][class][position]; group 5 holds its 16 entries row-major with
+/// stride 4.
 pub(crate) static QUANT_BASE: [[[u8; 64]; 2]; 6] = [
     [
         [
@@ -308,7 +313,8 @@ pub(crate) static QUANT_BASE: [[[u8; 64]; 2]; 6] = [
     ],
 ];
 
-/// Quantisation scale factors (spec 06, 5.1), [id][class][q].
+/// Quantisation scale factors (spec/06 §5.1;
+/// `tables/quant_scale_1008d200`), [group][class][q].
 pub(crate) static QUANT_SCALE: [[[u16; 24]; 2]; 6] = [
     [
         [

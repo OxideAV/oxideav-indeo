@@ -1,19 +1,78 @@
-//! Complete IV50 picture decoder that reproduces the vendor driver's
-//! internal 8-bit planes.
+//! IV50 picture decoder that reproduces the vendor driver's internal
+//! 8-bit planes.
 //!
 //! [`Iv50Decoder`] takes one compressed frame at a time (one AVI video
 //! chunk) and keeps the state that spans frames: the GOP header, three
-//! sets of band buffers that rotate by frame type (spec 07, 7.2), the
-//! luma band 0 macroblock records that later bands inherit from (spec
-//! 03, section 6), the transparency bounding box, and the output planes,
-//! which persist because a transparency frame only rebuilds its bounding
-//! box (spec 08, 8.3).
+//! sets of band buffers that rotate by frame type (spec/07 §1.2, §1.3), the
+//! luma band 0 macroblock records that later bands inherit from (spec/06
+//! §5.2), the transparency bounding box, and the output planes, which
+//! persist because a transparency frame only rebuilds its bounding box.
 //!
-//! A frame is decoded in this order: picture start (spec 01), GOP header
-//! for intra frames and frame header (spec 02), every band in bitstream
-//! order (luma bands, then the bands of chroma plane 1 (V), then those of
-//! chroma plane 2 (U)), the transparency trailer, the buffer rotation and
-//! the recombination of the bands into the 8-bit planes (spec 08).
+//! A frame is decoded in this order: picture start (spec/01 §3), GOP
+//! header for intra frames and frame header (spec/02 §1, §2), every band
+//! in bitstream order (luma bands, then the bands of chroma plane 1 (V),
+//! then those of chroma plane 2 (U); spec/02 §4.4), the transparency
+//! trailer, the buffer rotation and the recombination of the bands into
+//! the 8-bit planes (spec/08 §3).
+//!
+//! # Specification
+//!
+//! Section numbers in this module's comments (`spec/NN §x.y`) refer to
+//! the staged clean-room specification, `docs/video/indeo/indeo5/spec/`
+//! in the OxideAV workspace, and `tables/...` to its extracted tables.
+//! The staged streams of its `fixtures/` (two intra keyframes and a
+//! vendor-encoded sequence of one intra and seven inter frames) decode
+//! byte-exact against the vendor driver's output
+//! (`tests/indeo5_fixtures.rs`).
+//!
+//! ## Where the decoder follows the fixtures, not the text
+//!
+//! The staged text states these differently; the streams only decode
+//! the way the code reads them.
+//!
+//! * **Code descriptors** (spec/04 §1.3, §3.2 call the entries canonical
+//!   Huffman code lengths): entry `i` is the width of row `i`; a code is
+//!   `i` one-bits, a zero-bit unless the row is the last, then that many
+//!   bits, most significant first.
+//! * **Macroblock header order** (spec/03 §4.5): coded flag, type bit
+//!   (inter frames, band not inheriting), block pattern, quantiser
+//!   delta, vertical then horizontal vector delta. The delta is read
+//!   only when the pattern is non-zero or frame_flags bit 3 is set.
+//! * **Macroblock symbols** use the frame header's macroblock code
+//!   (spec/03 §4.2, spec/04 §5.2 and §5.3 name the band's block code).
+//! * **Signed symbols**: symbol `s` is entry `s + 1` of
+//!   `tables/level_unmap_1009e438` (spec/04 §3.4 indexes it by `s`).
+//! * **Block end and escape** are the two sentinel symbols of spec/05
+//!   §2.2: rank 0 ends the block, rank 1 escapes to a run symbol and two
+//!   6-bit halves of the level index (spec/05 §4.1 and §4.3 describe a
+//!   counter-driven end instead).
+//! * **Custom picture size** (spec/02 §1.6): the first 13 bits read are
+//!   the height, the next 13 the width.
+//!
+//! ## Beyond the staged specification
+//!
+//! Carried over from the decoder's first implementation and kept;
+//! the staged text has no section for them. The staged fixtures
+//! exercise the first group, nothing staged exercises the second.
+//!
+//! * Exercised: intra DC prediction (a running sum per tile, uncoded
+//!   intra blocks filled with half of it), the vector and type
+//!   inheritance of a chroma band from luma band 0 with its rounding,
+//!   the clamp of the macroblock quantiser to 0..23, `value4 == 2` in
+//!   the GOP header.
+//! * Not exercised: the four-band synthesis filter, the four-point
+//!   transform, the fill values of an empty band, the transparency
+//!   trailer and its window, the extra block of an odd row of one-block
+//!   macroblocks, frame types 2 and 3, half-sample vectors, empty tiles.
+//!
+//! ## Refused
+//!
+//! [`Iv50Error::Unsupported`] for what the staged text leaves open:
+//! several tiles (spec/02 §4.1 against spec/03 §1.1), a locked stream
+//! (spec/02 §1.3), seven-band luma and four-band chroma (spec/06 §3.3,
+//! §5.1), a transform whose size differs from the block size and the
+//! one-axis and identity transforms of a chroma band (spec/06 §6 item
+//! 3), `value4` other than 2 (spec/02 §1.9).
 
 mod band;
 mod bits;
@@ -35,7 +94,7 @@ use synth::{OutPlane, Window};
 /// are refused before any buffer is allocated.
 pub const MAX_PICTURE_PIXELS: u64 = 4096 * 4096;
 
-/// The type of a decoded frame (spec 01, "Frame types").
+/// The type of a decoded frame (spec/01 §3.3; spec/07 §1.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum FrameType {
@@ -65,7 +124,7 @@ pub enum FrameType {
 /// there is none until the next intra frame decodes.
 ///
 /// An intra frame decodes in place into the reference buffers, as the
-/// DLL's does. When one fails, the planes keep the previous picture, but
+/// vendor driver's does (spec/07 §1.2). When one fails, the planes keep the previous picture, but
 /// the bands it decoded before the error stay in the reference, so the
 /// inter frames that follow predict from that mix until the next intra
 /// frame decodes.
@@ -140,10 +199,11 @@ struct PlaneLayout {
 }
 
 /// Samples before the first band and after the last one of a plane
-/// area. Band reads that leave the bands (spec 07, 7.5; the neighbour
-/// rules of spec 08, 8.6) land here and read zero.
+/// area. Band reads that leave the bands (motion vectors, spec/07 §5.4;
+/// the neighbour taps of the four-band synthesis) land here and read
+/// zero.
 const MARGIN: usize = 8192 + 512;
-/// The gap the DLL leaves after each band: 0x400 bytes (spec 08, 8.2).
+/// Samples kept between the bands of a plane.
 const BAND_GAP: usize = 0x200;
 
 /// Stateful IV50 decoder.
@@ -153,7 +213,7 @@ pub struct Iv50Decoder {
     /// Three buffer sets, each one plane area per plane.
     sets: [Vec<Vec<i16>>; 3],
     /// Indices into `sets`: W (decoded into), R1, R2, and whether R2
-    /// holds a usable frame (spec 07, 7.2).
+    /// holds a usable frame (spec/07 §1.2, §1.3 and §4.3).
     w: usize,
     r1: usize,
     r2: usize,
@@ -275,7 +335,7 @@ impl Iv50Decoder {
         let mut r = frame.reader_at(0);
         let start = headers::read_picture_start(&mut r)?;
         let mut ftype = start.frame_type;
-        // The repeated-number rule (spec 01): a non-intra frame with the
+        // The repeated-number rule (spec/01 §3.4): a non-intra frame with the
         // previous frame's number is a NULL frame.
         if ftype != 0 && self.prev_number == Some(start.frame_number) {
             ftype = 4;
@@ -308,7 +368,7 @@ impl Iv50Decoder {
         }
         let fh = headers::read_frame_header(&mut r)?;
         let saved = (self.w, self.r1, self.r2, self.r2_valid);
-        // Buffer rotation before decoding (spec 07, 7.2).
+        // Buffer rotation before decoding (spec/07 §1.2).
         match ftype {
             0 => {
                 std::mem::swap(&mut self.w, &mut self.r1);
@@ -333,7 +393,7 @@ impl Iv50Decoder {
                 return Err(e);
             }
         }
-        // Rotation after decoding.
+        // Rotation after decoding (spec/07 §1.3).
         match ftype {
             0 | 1 => std::mem::swap(&mut self.w, &mut self.r1),
             2 => {
@@ -360,7 +420,8 @@ impl Iv50Decoder {
     }
 
     /// Take a new GOP header. A change of picture size or band counts
-    /// rebuilds and clears every buffer (spec 02, 1.3).
+    /// rebuilds and clears every buffer (spec/02 §1.6: the GOP header
+    /// overrides the picture size per GOP).
     fn set_gop(&mut self, gop: GopHeader) {
         let rebuild = match &self.gop {
             Some(old) => {
@@ -476,8 +537,7 @@ impl Iv50Decoder {
         Ok(Vec::new())
     }
 
-    /// Store the union of the frame's transparency rectangles (spec 08,
-    /// 8.9).
+    /// Store the union of the frame's transparency rectangles.
     fn set_bbox(&mut self, rects: &[(u32, u32, u32, u32)]) {
         let x0 = rects.iter().map(|r| r.0).min().unwrap_or(0) as usize;
         let y0 = rects.iter().map(|r| r.1).min().unwrap_or(0) as usize;
@@ -487,7 +547,7 @@ impl Iv50Decoder {
     }
 
     /// Recombine the bands of buffer set `set` into the output planes
-    /// over the frame's window (spec 08, 8.1 and 8.3).
+    /// over the frame's window (spec/08 §1.3, §3).
     fn recombine(&mut self, set: usize) {
         let gop = self.gop.as_ref().expect("GOP present");
         let (pw, ph) = (gop.width as usize, gop.height as usize);
@@ -511,7 +571,7 @@ impl Iv50Decoder {
             h = h.max(1);
             w = w.max(1);
             // A bounding box that starts below or right of the picture
-            // gives a window outside the planes. The DLL would write
+            // gives a window outside the planes. The vendor driver would write
             // past its planes there; this decoder writes nothing.
             if y0 >= ph || x0 >= pw {
                 return;
@@ -582,8 +642,8 @@ fn split_sets(
     }
 }
 
-/// Band sizes, buffer layout and tiles for a GOP header (spec 02,
-/// section 4; spec 08, 8.2).
+/// Band sizes, buffer layout and tiles for a GOP header (spec/02 §1.6,
+/// §4; spec/06 §4.2 and §5.1).
 fn build_layout(gop: &GopHeader) -> Vec<PlaneLayout> {
     let (lw, lh) = (gop.width as usize, gop.height as usize);
     let (cw, ch) = gop.chroma_size();

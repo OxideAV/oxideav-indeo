@@ -1,6 +1,6 @@
 //! Band decoding: tiles, macroblock headers, block coefficients,
 //! dequantisation, DC prediction, inverse transforms and motion
-//! compensation (spec 03 to 07).
+//! compensation (`spec/03` to `spec/07` of the staged specification).
 
 use super::Iv50Error;
 use super::bits::Bits;
@@ -14,13 +14,13 @@ use super::xform;
 pub(crate) struct BandGeom {
     /// Band height in samples.
     pub height: usize,
-    /// Row pitch in samples: the DLL's `(2 * width + 31) & ~31` bytes
-    /// (spec 02, section 4).
+    /// Row pitch in samples: the band width rounded up so that a row
+    /// of 16-bit samples is a multiple of 32 bytes (spec/06 §4.2).
     pub pitch: usize,
     /// Offset of sample (0, 0) in the plane area.
     pub offset: usize,
     pub info: BandInfo,
-    /// Quantisation matrix id (spec 05, 2.4).
+    /// Quantiser matrix group `g` (spec/06 §5.1).
     pub matrix: usize,
     /// Tiles of the band, in raster order.
     pub tiles: Vec<TileGeom>,
@@ -41,7 +41,7 @@ pub(crate) struct TileGeom {
 }
 
 /// What a luma band 0 macroblock leaves for the bands that inherit from
-/// it (spec 03, sections 6 and 7). The records persist across frames.
+/// it (spec/06 §5.2; spec/07 §3.4). The records persist across frames.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct B0Rec {
     pub intra: bool,
@@ -73,7 +73,7 @@ struct Mb {
 }
 
 /// Meaning of a block symbol after the run/value table and the
-/// corrections (spec 04, 3.4 and 3.5).
+/// swap pairs (spec/05 §2.2 and §2.4).
 #[derive(Clone, Copy, Default)]
 struct RvSym {
     run: u8,
@@ -122,8 +122,9 @@ impl RvMap {
         }
         // Corrections exchange the meaning of two symbols. End of block
         // and escape stay with their symbols; a pair that involves one of
-        // them leaves the other symbol without a valid meaning (spec 05,
-        // section 7: invalid stream).
+        // them leaves the other symbol without a valid meaning. (spec/05
+        // §2.4 exchanges the table entries with no such check; no staged
+        // stream names a sentinel in a pair.)
         for &(a, b) in corrections {
             let (a, b) = (a as usize, b as usize);
             let (ka, kb) = (map[a].kind, map[b].kind);
@@ -159,7 +160,8 @@ impl RvMap {
     }
 }
 
-/// Quantiser steps, `bank[matrix][class][q][position]` (spec 06, 5.1).
+/// Quantiser steps, `bank[g][class][q][position]` (spec/06 §5.1;
+/// `tables/quant_matrices_1007b000`).
 pub(crate) type Bank = [[[[u8; 64]; 24]; 2]; 6];
 
 /// Build the step bank from the base matrices and scale factors.
@@ -189,9 +191,12 @@ pub(crate) fn build_bank() -> Box<Bank> {
     bank
 }
 
-/// The coefficient value of value code `code` at step `s` (spec 05,
-/// 2.3). A code past the end of the DLL's run for `s` continues into the
-/// run for `s + 1`, as the DLL's table is laid out.
+/// The coefficient value of level index `code` at step `s` (spec/05
+/// §2.3; `tables/recon_lut_formula`): `k = (code + 1) >> 1`, magnitude
+/// `k * s + s / 2 - (s & 1 if s > 1)`, positive for odd `code`. The
+/// per-step tables are contiguous with `8192 / s` levels each (spec/06
+/// §5.1), so a level past the end of step `s` continues into the table
+/// of step `s + 1`.
 #[inline]
 fn dequant(code: u32, s: u32) -> Result<i32, Iv50Error> {
     if code == 0 {
@@ -216,7 +221,8 @@ fn dequant(code: u32, s: u32) -> Result<i32, Iv50Error> {
     Ok(if idx & 1 == 0 { mag } else { -mag })
 }
 
-/// The scan of a transform type (spec 05, 2.2).
+/// The scan of a transform type (spec/06 §2.5;
+/// `tables/scan_tables_10098528`).
 fn scan_for(xform: u32) -> Result<&'static [u8], Iv50Error> {
     match xform {
         0 => Ok(&SCAN_0),
@@ -237,7 +243,8 @@ pub(crate) struct BandJob<'a> {
     /// Macroblock size of luma band 0, for inherited vectors.
     pub b0_mb_size: u32,
     /// Luma band 0 has 1-block macroblocks in rows of odd length, whose
-    /// records the DLL steps through with a drift (00-gaps.md, item 16).
+    /// records are not laid out one per macroblock (not covered by the
+    /// staged specification).
     pub b0_drifts: bool,
     pub mb_huff: &'a Huff,
     pub blk_huff: &'a Huff,
@@ -249,8 +256,9 @@ pub(crate) struct BandJob<'a> {
 }
 
 /// Scale an inherited vector component to a band with smaller
-/// macroblocks (spec 03, section 6): divide by 2^n, halves away from
-/// zero.
+/// macroblocks: divide by 2^n, halves away from zero (the staged
+/// inter fixture's chroma bands inherit this way; spec/07 §3.4 names
+/// the inheritance but not the rounding).
 #[inline]
 fn scale_mv(v: i32, n: u32) -> i32 {
     if n == 0 {
@@ -295,7 +303,7 @@ impl BandJob<'_> {
             let tile = self.geom.tiles[t];
             let tile_start = r.byte_pos();
             if r.bit() {
-                // Empty tile (spec 03, 1.1; spec 07, 7.7).
+                // Empty tile: `value24` set (spec/03 §2.2).
                 if self.frame_type != 0 {
                     self.copy_tile(&tile);
                     if self.is_b0 && !self.hdr.has_delta() {
@@ -339,7 +347,7 @@ impl BandJob<'_> {
         Ok(())
     }
 
-    /// Copy an empty tile's area from the reference (spec 07, 7.7).
+    /// Copy an empty tile's area from the reference (spec/07 §6.4).
     fn copy_tile(&mut self, tile: &TileGeom) {
         let g = self.geom;
         let mb = g.info.mb_size as usize;
@@ -350,7 +358,9 @@ impl BandJob<'_> {
         }
     }
 
-    /// Parse the macroblock headers of a tile (spec 03, section 4).
+    /// Parse the macroblock headers of a tile (spec/03 §4.0 phase 2 and
+    /// §4.1 to §4.5; the type bit and the class it selects are spec/06
+    /// §5.2).
     fn parse_mbs(
         &mut self,
         r: &mut Bits,
@@ -409,7 +419,8 @@ impl BandJob<'_> {
                         let dx = signed(huff.decode(r).ok_or(Iv50Error::BadMbData)?);
                         // The vector is one word with biased byte
                         // components; carries cross from x into y
-                        // (spec 03, section 5).
+                        // (spec/07 §2.4 and §3.2: the delta is added
+                        // to the previous macroblock's vector).
                         p = p
                             .wrapping_add((((dy + 128) & 0xff) as u32) << 8)
                             .wrapping_add(((dx + 128) & 0xff) as u32)
@@ -419,7 +430,7 @@ impl BandJob<'_> {
                     }
                 }
             }
-            // The quantiser (spec 03, section 7).
+            // The quantiser (spec/06 §5.2).
             let stored;
             mb.q = if reads_delta {
                 if !(-24..=23).contains(&delta) {
@@ -453,7 +464,7 @@ impl BandJob<'_> {
     }
 
     /// Decode the block data of a tile and reconstruct its blocks (spec
-    /// 05, spec 06 and spec 07).
+    /// 05, spec/06 and spec/07; spec/03 §4.0 phase 3).
     fn decode_blocks(
         &mut self,
         r: &mut Bits,
@@ -545,8 +556,8 @@ impl BandJob<'_> {
                 }
             }
             // A row of 1-block macroblocks with an odd count gets one more
-            // record, an uncoded intra block (spec 05, 2.1), which the
-            // intra fill writes.
+            // record, an uncoded intra block, which the intra fill writes
+            // (not covered by the staged specification).
             if !four && tile.cols % 2 == 1 {
                 let bx = tile.x + tile.cols * mb_size;
                 let by = tile.y + row * mb_size;
@@ -559,14 +570,15 @@ impl BandJob<'_> {
         Ok(())
     }
 
-    /// Fill an uncoded intra block (spec 05, 4.1).
+    /// Fill an uncoded intra block with the DC predictor (the flat-block
+    /// path of spec/06 §2.3).
     #[inline]
     fn fill_intra(&mut self, off: usize, blk: usize, dc_pred: bool, pred: i32) {
         let v = if dc_pred { ((pred + 1) >> 1) as i16 } else { 0 };
         xform::fill(self.cur, off, self.geom.pitch, blk, v);
     }
 
-    /// Motion compensation of one inter block (spec 07, 7.3 and 7.4):
+    /// Motion compensation of one inter block (spec/07 §5.2 to §5.5):
     /// add the prediction to the residual of a coded block, or write the
     /// prediction into an uncoded one.
     #[inline]
@@ -608,8 +620,8 @@ impl BandJob<'_> {
                     >> 2),
             }
         } else {
-            // Reads outside the plane area: the DLL reads whatever memory
-            // lies there (spec 07, 7.5); this decoder reads zeros.
+            // Reads outside the plane area (spec/07 §5.4 has no clipping
+            // and assumes vectors stay inside the padding): zeros.
             let get = |i: isize| -> i16 {
                 if i >= 0 && (i as usize) < refp.len() {
                     refp[i as usize]
@@ -641,7 +653,8 @@ impl BandJob<'_> {
     }
 }
 
-/// Fill an empty band (spec 08, 8.8, MMX path): bands 0 to 3 of a plane
+/// Fill an empty band (`band_flags` bit 0, spec/02 §3.3; the fill
+/// values are not covered by the staged specification): bands 0 to 3 of a plane
 /// get 0, 1, 3 and 2; later bands get the dword 0x80000000, that is the
 /// samples 0 and -32768 in turn. Nothing is written when the band's
 /// first dword already has its sign bit set.
@@ -678,7 +691,7 @@ mod tests {
         assert_eq!(dequant(81, 200).unwrap(), 201 + 100 - 1);
     }
 
-    /// The bank equals the DLL's runtime bank, dumped in
+    /// The bank equals the staged runtime bank, copied to
     /// `tests/data/iv50-quant-matrices-1007b000.csv` (id, class, q, then
     /// 64 steps; the 4x4 id holds its rows at stride 8).
     #[test]
@@ -727,5 +740,169 @@ mod tests {
         assert_eq!(scale_mv(-5, 2), -1);
         assert_eq!(scale_mv(-6, 2), -2);
         assert_eq!(scale_mv(7, 0), 7);
+    }
+
+    /// Every slot of the run/value tables expands to the staged
+    /// per-symbol table (`tables/rv_expanded_100972f4.csv`: slot,
+    /// rv_tab_sel, slot address, symbol, rank, run, lidx, level): rank 0
+    /// is the end of block, rank 1 the escape, and every other symbol
+    /// carries the listed run and level index (spec/05 §2.2).
+    #[test]
+    fn rv_maps_equal_the_staged_expansion() {
+        let csv = include_str!("../../../tests/data/iv50-tables/rv_expanded_100972f4.csv");
+        let maps: Vec<RvMap> = (0..9).map(|s| RvMap::new(s, &[]).unwrap()).collect();
+        let mut rows = 0;
+        for line in csv.lines().skip(1) {
+            let f: Vec<i32> = line
+                .split(',')
+                .enumerate()
+                .map(|(i, x)| if i == 2 { 0 } else { x.parse().unwrap() })
+                .collect();
+            let (slot, sym, rank, run, lidx, level) = (f[0], f[3], f[4], f[5], f[6], f[7]);
+            let e = maps[slot as usize].0[sym as usize];
+            match rank {
+                0 => assert_eq!(e.kind, 1, "slot {slot} symbol {sym}"),
+                1 => assert_eq!(e.kind, 2, "slot {slot} symbol {sym}"),
+                _ => {
+                    assert_eq!(
+                        (e.kind, e.run as i32, e.code as i32),
+                        (0, run, lidx),
+                        "slot {slot} symbol {sym}"
+                    );
+                    // The level the index stands for at step 1.
+                    assert_eq!(dequant(lidx as u32, 1).unwrap(), level);
+                }
+            }
+            rows += 1;
+        }
+        assert_eq!(rows, 9 * 256);
+    }
+
+    /// Swap pairs exchange run and level index of two symbols, in list
+    /// order, so a symbol named twice moves twice (spec/05 §2.4; the
+    /// pairs are the Y band's of the staged 320x240 keyframe).
+    #[test]
+    fn swap_pairs_apply_in_order() {
+        let pairs = [
+            (4, 220),
+            (4, 6),
+            (8, 61),
+            (7, 80),
+            (5, 23),
+            (12, 59),
+            (13, 171),
+            (15, 100),
+            (18, 103),
+        ];
+        let plain = RvMap::new(4, &[]).unwrap();
+        let swapped = RvMap::new(4, &pairs).unwrap();
+        let mut want: Vec<(u8, u8, u16)> =
+            plain.0.iter().map(|e| (e.kind, e.run, e.code)).collect();
+        for (a, b) in pairs {
+            want.swap(a as usize, b as usize);
+        }
+        let got: Vec<(u8, u8, u16)> = swapped.0.iter().map(|e| (e.kind, e.run, e.code)).collect();
+        assert_eq!(got, want);
+        // Symbol 4 went to 220 first, then what 220 held went on to 6.
+        assert_eq!(
+            got[6],
+            (plain.0[220].kind, plain.0[220].run, plain.0[220].code)
+        );
+        assert_eq!(got[220], (plain.0[4].kind, plain.0[4].run, plain.0[4].code));
+    }
+
+    /// The reconstruction value of every staged (step, k) pair
+    /// (`tables/recon_lut_formula.csv`: step, levels, k, recon): `+recon`
+    /// for level index `2k - 1`, `-recon` for `2k` (spec/05 §2.3).
+    #[test]
+    fn dequant_equals_the_staged_reconstruction_table() {
+        let csv = include_str!("../../../tests/data/iv50-tables/recon_lut_formula.csv");
+        let mut rows = 0;
+        for line in csv.lines().skip(1) {
+            let f: Vec<u32> = line.split(',').map(|x| x.parse().unwrap()).collect();
+            let (step, levels, k, recon) = (f[0], f[1], f[2], f[3] as i32);
+            assert_eq!(levels, 8192 / step);
+            assert_eq!(
+                dequant(2 * k - 1, step).unwrap(),
+                recon,
+                "step {step} k {k}"
+            );
+            assert_eq!(dequant(2 * k, step).unwrap(), -recon, "step {step} k {k}");
+            rows += 1;
+        }
+        assert_eq!(rows, 2040);
+        // The last level of each step's table, and the first past it,
+        // which is the first of the next step's (spec/06 §5.1).
+        for step in 1..255u32 {
+            let n = 8192 / step;
+            let r = |k: u32, b: u32| (k * b + b / 2 - if b > 1 { b & 1 } else { 0 }) as i32;
+            assert_eq!(dequant(2 * n - 1, step).unwrap(), r(n, step));
+            assert_eq!(dequant(2 * n + 1, step).unwrap(), r(1, step + 1));
+        }
+        assert!(dequant(0, 7).is_err());
+    }
+
+    /// The step bank is `clamp((base * scale) >> 8, 1, 255)` of the
+    /// staged base matrices and scales (spec/06 §5.1).
+    #[test]
+    fn bank_inputs_equal_the_staged_tables() {
+        use super::super::tables::{QUANT_BASE, QUANT_SCALE};
+        let base = include_str!("../../../tests/data/iv50-tables/quant_base_1008cf00.csv");
+        let mut rows = 0;
+        for line in base.lines().skip(1) {
+            let f: Vec<&str> = line.split(',').collect();
+            let (g, c): (usize, usize) = (f[0].parse().unwrap(), f[1].parse().unwrap());
+            let v: Vec<u8> = f[5..69].iter().map(|x| x.parse().unwrap()).collect();
+            let n = if g == 5 { 16 } else { 64 };
+            assert_eq!(f[2], if g == 5 { "4x4" } else { "8x8" });
+            assert_eq!(&QUANT_BASE[g][c][..n], &v[..n], "group {g} class {c}");
+            rows += 1;
+        }
+        assert_eq!(rows, 12);
+        let scale = include_str!("../../../tests/data/iv50-tables/quant_scale_1008d200.csv");
+        let mut rows = 0;
+        for line in scale.lines().skip(1) {
+            let f: Vec<&str> = line.split(',').collect();
+            let (g, c, q): (usize, usize, usize) = (
+                f[0].parse().unwrap(),
+                f[1].parse().unwrap(),
+                f[2].parse().unwrap(),
+            );
+            assert_eq!(QUANT_SCALE[g][c][q] as u32, f[5].parse::<u32>().unwrap());
+            rows += 1;
+        }
+        assert_eq!(rows, 6 * 2 * 24);
+    }
+
+    /// The four scans equal the staged scan tables; the 4x4 table's
+    /// raster index `n` is row `n >> 2`, column `n & 3` (spec/06 §2.5).
+    #[test]
+    fn scans_equal_the_staged_tables() {
+        let csv = include_str!("../../../tests/data/iv50-tables/scan_tables_10098528.csv");
+        let mut seen = [0usize; 4];
+        for line in csv.lines().skip(1) {
+            let f: Vec<&str> = line.split(',').collect();
+            let (i, n): (usize, usize) = (f[2].parse().unwrap(), f[3].parse().unwrap());
+            let (t, got) = match f[0] {
+                "zigzag_8x8" => (0, SCAN_0[i] as usize),
+                "column_8x8" => (1, SCAN_1[i] as usize),
+                "raster_8x8" => (2, SCAN_2[i] as usize),
+                "zigzag_4x4" if i < 16 => (3, SCAN_3[i] as usize),
+                "zigzag_4x4" => continue,
+                other => panic!("unknown table {other}"),
+            };
+            let want = if t == 3 { (n >> 2) * 8 + (n & 3) } else { n };
+            assert_eq!(got, want, "{} entry {i}", f[0]);
+            seen[t] += 1;
+        }
+        assert_eq!(seen, [64, 64, 64, 16]);
+        // Transform types 0 to 4 take zigzag, column-major, raster,
+        // raster and the 4x4 zigzag.
+        assert_eq!(scan_for(0).unwrap(), &SCAN_0[..]);
+        assert_eq!(scan_for(1).unwrap(), &SCAN_1[..]);
+        assert_eq!(scan_for(2).unwrap(), &SCAN_2[..]);
+        assert_eq!(scan_for(3).unwrap(), &SCAN_2[..]);
+        assert_eq!(scan_for(4).unwrap(), &SCAN_3[..]);
+        assert!(scan_for(5).is_err());
     }
 }

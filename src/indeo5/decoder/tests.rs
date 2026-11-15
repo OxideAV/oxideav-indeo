@@ -60,7 +60,7 @@ impl BitWriter {
     }
 }
 
-/// The value code that dequantises to `d` at step 1 (spec 05, 2.3).
+/// The level index that dequantises to `d` at step 1 (spec/05 §2.3).
 fn code_for(d: i32) -> u16 {
     if d > 0 {
         (2 * d - 1) as u16
@@ -185,7 +185,7 @@ fn custom_size_is_height_then_width() {
     let mut dec = Iv50Decoder::new();
     assert_eq!(dec.decode(&intra_frame()), Ok(FrameType::Intra));
     // The 26-bit field holds the height in bits 0..12 and the width in
-    // bits 13..25 (spec 02, 1.3).
+    // bits 13..25 (spec/02 §1.6: height is read first).
     assert_eq!(dec.dimensions(), Some((16, 8)));
     let y = dec.y().unwrap();
     assert_eq!((y.width, y.height), (16, 8));
@@ -369,7 +369,7 @@ fn four_band_low_band_is_upsampled() {
 #[test]
 fn four_band_constant_high_bands() {
     // A constant V band of 64 adds +16 to even rows and -16 to odd rows
-    // (spec 08, 8.8 gives the same pattern for a V band of 1, scaled).
+    // (a V band of 1 gives the same pattern, scaled).
     let out = synth_one(1, |_, _| 64);
     for r in 0..32 {
         let want = if r % 2 == 0 { 144 } else { 112 };
