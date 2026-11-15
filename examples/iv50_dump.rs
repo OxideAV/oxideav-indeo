@@ -5,8 +5,8 @@
 //! Each frame is written at the size in the AVI's BITMAPINFOHEADER as
 //! the Y plane, then V, then U (the order the vendor DLL keeps its
 //! planes in), chroma at `ceil(W / 4)` by `ceil(H / 4)`. With
-//! `--yuv410p` the chroma order is U then V instead, as ffmpeg writes
-//! yuv410p. A frame that fails to decode repeats the previous picture.
+//! `--yuv410p` the chroma order is U then V instead, the planar 4:1:0
+//! raw-video order. A frame that fails to decode repeats the previous picture.
 //! The decode time of the whole stream, without file I/O, is printed on
 //! stdout.
 
