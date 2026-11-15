@@ -436,8 +436,7 @@ fn four_band_first_column_repeats_itself() {
 /// An intra frame like [`intra_frame`] in a stream with transparency
 /// (gop_flags bit 3) and the transparency colour `colour`, whose
 /// trailer carries `rects` as (x, y, w, h) and then whatever `rest`
-/// writes: the row-delta bit, the descriptor and the mask data
-/// (spec/02 §5).
+/// writes: the row-delta bit, the descriptor and the mask data.
 fn transparent_intra_frame(
     rects: &[(u32, u32, u32, u32)],
     colour: Option<u32>,

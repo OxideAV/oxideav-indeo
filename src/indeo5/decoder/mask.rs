@@ -1,7 +1,7 @@
 //! The transparency trailer that follows the last band of every frame
-//! of a stream with gop_flags bit 3 (spec/02 §5, spec/08 §8.9): the
-//! rectangles that bound the opaque part of the picture, and a bitmask
-//! that says which pixels are opaque.
+//! of a stream with gop_flags bit 3: the rectangles that bound the
+//! opaque part of the picture, and a bitmask that says which pixels are
+//! opaque.
 //!
 //! Layout, in read order:
 //!
@@ -27,19 +27,20 @@
 //! the vendor driver shows a single-value mask with the bit set as one
 //! value everywhere.
 //!
-//! spec/08 §8.9 reads the run syntax from the code and leaves it
-//! unchecked; the streams settle it. Rent-A-Hero has 21 IV50 movies
-//! with transparency, 4 150 frames. In every run-coded frame the runs
-//! end exactly at the end of the picture and the data ends exactly at
-//! the trailer size. On 1 844 of the frames (every frame of 20 movies
-//! and the first 600 of the credits), the mask's transparent pixels are
+//! The staged specification has no section for the trailer. Its layout
+//! was worked out from the streams and confirmed by measuring the
+//! vendor driver's output. Rent-A-Hero has 21 IV50 movies with
+//! transparency, 4 150 frames. In every run-coded frame the runs end
+//! exactly at the end of the picture and the data ends exactly at the
+//! trailer size. On 1 844 of the frames (every frame of 20 movies and
+//! the first 600 of the credits), the mask's transparent pixels are
 //! exactly the pixels the vendor driver fills with the transparency
 //! colour when it converts the frame to RGB (see
 //! [`Iv50Transparency`](super::Iv50Transparency)).
 //!
 //! The descriptor stays in force for later frames that carry none. The
-//! rectangles' union limits the part of the picture a frame rebuilds
-//! (spec/08 §8.3); the mask changes no plane sample.
+//! rectangles' union limits the part of the picture a frame rebuilds;
+//! the mask changes no plane sample.
 
 use super::Iv50Error;
 use super::bits::Bits;

@@ -93,8 +93,9 @@ the picture a frame rebuilds.
 **Transparency.** For a stream with transparency (gop_flags bit 3),
 `Iv50Decoder::transparency()` gives the GOP header's transparency
 colour, the frame's rectangles and a per-pixel mask decoded from the
-frame trailer's run-length code (`spec/02` §5, `spec/08` §8.9). The
-planes keep the whole picture; the mask says which pixels are opaque.
+frame trailer's run-length code. The planes keep the whole picture;
+the mask says which pixels are opaque. The staged specification has no
+section for the trailer: its layout was worked out from the streams.
 The vendor driver, decoding to an RGB DIB, writes the transparency
 colour (black when the stream has none) to every transparent pixel,
 and on the 21 Rent-A-Hero movies with transparency the decoded mask

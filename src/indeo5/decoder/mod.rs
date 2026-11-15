@@ -13,9 +13,8 @@
 //! header for intra frames and frame header (spec/02 §1, §2), every band
 //! in bitstream order (luma bands, then the bands of chroma plane 1 (V),
 //! then those of chroma plane 2 (U); spec/02 §4.4), the transparency
-//! trailer with its rectangles and mask (spec/02 §5, spec/08 §8.9), the
-//! buffer rotation and the recombination of the bands into the 8-bit
-//! planes (spec/08 §3).
+//! trailer with its rectangles and mask, the buffer rotation and the
+//! recombination of the bands into the 8-bit planes (spec/08 §3).
 //!
 //! # Specification
 //!
@@ -78,15 +77,14 @@
 //!
 //! ## Transparency mask
 //!
-//! spec/08 §8.9 reads the mask's run syntax from the vendor driver's
-//! code and leaves it unchecked, and no staged fixture has transparency.
-//! The decoder reads it as that section describes, and the Rent-A-Hero
-//! movies with transparency settle the details the text leaves open:
-//! which value a run code of 0 keeps, the row delta, and the mask that
-//! is a single value. On those movies every run-coded mask ends exactly
-//! at the end of the picture and at the trailer's size, and the mask
-//! equals the pixels that the vendor driver, converting to RGB, fills
-//! with the transparency colour ([`Iv50Transparency`]).
+//! The staged text has no section for the frame trailer that carries
+//! the rectangles and the mask, and no staged fixture has transparency.
+//! The layout (`mask.rs`) was worked out from the Rent-A-Hero movies
+//! with transparency and confirmed by measuring the vendor driver's
+//! output: on those movies every run-coded mask ends exactly at the end
+//! of the picture and at the trailer's size, and the mask equals the
+//! pixels that the vendor driver, converting to RGB, fills with the
+//! transparency colour ([`Iv50Transparency`]).
 //!
 //! ## Refused
 //!
@@ -219,11 +217,11 @@ impl Iv50Plane<'_> {
 }
 
 /// The transparency of the current picture, for a stream whose GOP
-/// header sets gop_flags bit 3 (spec/02 §1.8, §5; spec/08 §8.9).
+/// header sets gop_flags bit 3 (spec/02 §1.8 for the colour).
 ///
 /// The planes hold the decoded picture everywhere, transparent pixels
 /// included; the mask says which pixels to show. The vendor driver,
-/// asked for RGB output (`ICM_DECOMPRESS` to a 16, 24 or 32-bit DIB),
+/// asked for RGB output (`ICM_DECOMPRESS` to a 16 or 24-bit DIB),
 /// writes every pixel: the picture where the mask is opaque and
 /// [`colour`](Self::colour) where it is transparent, black when the
 /// stream gives no colour. An application keys that colour out, or
@@ -235,8 +233,7 @@ pub struct Iv50Transparency<'a> {
     /// `None` when it carries none.
     pub colour: Option<[u8; 3]>,
     /// The rectangles of the last frame's trailer. A frame with none
-    /// leaves the part of the picture it rebuilds as it was (spec/08
-    /// §8.3).
+    /// leaves the part of the picture it rebuilds as it was.
     pub rects: &'a [Iv50Rect],
     /// One sample per luma pixel: 255 where the picture is opaque, 0
     /// where it is transparent.
