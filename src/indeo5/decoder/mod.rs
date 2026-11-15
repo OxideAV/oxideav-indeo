@@ -46,8 +46,12 @@
 //!   §2.2: rank 0 ends the block, rank 1 escapes to a run symbol and two
 //!   6-bit halves of the level index (spec/05 §4.1 and §4.3 describe a
 //!   counter-driven end instead).
-//! * **Custom picture size** (spec/02 §1.6): the first 13 bits read are
-//!   the height, the next 13 the width.
+//!
+//! One reading no staged stream arbitrates: spec/02 §1.6 lists the
+//! custom picture size as height then width, 13 bits each, and then
+//! places the height in the high half of the 26 bits. The decoder
+//! follows the field list (and the staged wiki page): the first 13 bits
+//! are the height.
 //!
 //! ## Beyond the staged specification
 //!
@@ -73,8 +77,9 @@
 //! §5.1), a transform whose size differs from the block size and the
 //! one-axis and identity transforms of a chroma band (spec/06 §6 item
 //! 3), `value4` other than 2 (spec/02 §1.9), transparency together with
-//! half-size chroma, and a band quantiser above 23 on an intra
-//! macroblock (spec/06 §5.1).
+//! half-size chroma, a half-size chroma band that inherits from luma
+//! band 0 while its macroblocks are not half the size of that band's,
+//! and a band quantiser above 23 on an intra macroblock (spec/06 §5.1).
 
 mod band;
 mod bits;
@@ -509,6 +514,7 @@ impl Iv50Decoder {
         let mb_idx = Self::huff_index(&mut self.mb_huffs, &fh.mb_rows)?;
         let gop = self.gop.as_ref().expect("GOP checked by the caller");
         let b0_mb_size = gop.luma_info[0].mb_size;
+        let half_chroma = gop.half_chroma();
         let transparency = gop.transparency;
         let b0 = &self.layout[0].bands[0];
         let b0_drifts =
@@ -530,9 +536,13 @@ impl Iv50Decoder {
                 // Split the sets so the current one is mutable and the
                 // reference readable.
                 let (cur, refp) = split_sets(&mut self.sets, self.w, self.r1);
+                let geom = &self.layout[plane].bands[bi];
                 let job = BandJob {
-                    geom: &self.layout[plane].bands[bi],
+                    geom,
                     hdr: &hdr,
+                    // A half-size chroma macroblock covers one luma band
+                    // 0 macroblock only when it is half its size.
+                    foreign_grid: plane != 0 && half_chroma && geom.info.mb_size * 2 != b0_mb_size,
                     is_b0: plane == 0 && bi == 0,
                     frame_type: ftype,
                     frame_flags: fh.flags,

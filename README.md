@@ -137,8 +137,9 @@ specification leaves them open: several tiles per band, locked streams
 (access key), seven-band luma and four-band chroma, a transform whose
 size differs from the band's block size, one-axis transforms of a
 chroma band, a GOP header `value4` other than 2, transparency combined
-with half-size chroma, and an intra macroblock at a band quantiser
-above 23.
+with half-size chroma, a half-size chroma band inheriting from luma
+macroblocks that are not twice its own, and an intra macroblock at a
+band quantiser above 23.
 
 ## Selected public API
 

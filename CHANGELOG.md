@@ -22,7 +22,11 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - indeo5: half-size chroma streams (gop_flags bit 1, `spec/02` §1.6)
   decode; `Iv50Decoder::chroma_ratio` tells the layout. Transparency
-  combined with half-size chroma stays refused
+  combined with half-size chroma stays refused, as does a half-size
+  chroma band that inherits from luma macroblocks not twice its own
+- indeo5: a test of the reference chain of every frame type (`spec/07`
+  §1.5): type 2 and 3 frames predict from the last type 2 frame, type 3
+  frames are never a reference, type 1 frames ignore both
 - indeo5: an inter macroblock at a band quantiser of 24 to 31 decodes
   with the step table `spec/06` §5.1 gives it (the intra table of level
   `q - 24`); only an intra macroblock's coded block is refused there

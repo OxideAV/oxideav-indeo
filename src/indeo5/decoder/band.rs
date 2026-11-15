@@ -247,6 +247,9 @@ fn scan_for(xform: u32) -> Result<&'static [u8], Iv50Error> {
 pub(crate) struct BandJob<'a> {
     pub geom: &'a BandGeom,
     pub hdr: &'a BandHeader,
+    /// The band's macroblocks do not lie one to one over luma band 0's
+    /// (half-size chroma with another macroblock size ratio).
+    pub foreign_grid: bool,
     pub is_b0: bool,
     pub frame_type: u32,
     pub frame_flags: u32,
@@ -294,6 +297,11 @@ impl BandJob<'_> {
         if reads_b0 && !self.is_b0 && self.b0_drifts {
             return Err(Iv50Error::Unsupported(
                 "inheriting from 1-block luma band 0 macroblocks in odd rows",
+            ));
+        }
+        if reads_b0 && self.foreign_grid {
+            return Err(Iv50Error::Unsupported(
+                "half-size chroma inheriting across different macroblock grids",
             ));
         }
         let scan = scan_for(info.xform)?;

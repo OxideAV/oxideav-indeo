@@ -776,6 +776,146 @@ fn decoding_is_deterministic_across_decoders() {
     assert_ne!(rows(a.y().unwrap()), rows(flat.y().unwrap()));
 }
 
+/// A half-size chroma band whose macroblocks are not half the luma
+/// macroblock size has no one-to-one luma macroblock to inherit from:
+/// refused, while the same band decodes when it carries its own data.
+#[test]
+fn half_size_chroma_inheritance_needs_matching_grids() {
+    let gop = Gop {
+        flags: 2,
+        chroma: 6, // 4x4 macroblocks under 16x16 luma ones
+        ..Gop::simple(16, 16)
+    };
+    let luma = Band::new(true, vec![Mb::default()]);
+    let own = Band::new(false, vec![Mb::default(); 4]);
+    let intra = frame(0, 0, Some(&gop), 0, &[Some(&luma)], Some(&own), Some(&own));
+    let mut dec = Iv50Decoder::new();
+    assert_eq!(dec.decode(&intra), Ok(FrameType::Intra));
+    let moving = Band::new(
+        true,
+        vec![Mb {
+            inter: true,
+            mv: (1, 1),
+            ..Default::default()
+        }],
+    );
+    let inherit = Band {
+        flags: 2,
+        ..Band::new(false, vec![Mb::default(); 4])
+    };
+    let data = frame(
+        1,
+        1,
+        None,
+        0,
+        &[Some(&moving)],
+        Some(&inherit),
+        Some(&inherit),
+    );
+    assert_eq!(
+        dec.decode(&data),
+        Err(Iv50Error::Unsupported(
+            "half-size chroma inheriting across different macroblock grids"
+        ))
+    );
+    // The failed frame left the picture and the references alone.
+    let own_inter = Band::new(
+        false,
+        vec![
+            Mb {
+                inter: true,
+                ..Default::default()
+            };
+            4
+        ],
+    );
+    let data = frame(
+        1,
+        2,
+        None,
+        0,
+        &[Some(&moving)],
+        Some(&own_inter),
+        Some(&own_inter),
+    );
+    assert_eq!(dec.decode(&data), Ok(FrameType::Inter));
+}
+
+/// The reference of each frame type (spec/07 §1.2, §1.3, §1.5): a type
+/// 1 frame predicts from the last type 0 or 1 frame and replaces it; a
+/// type 2 frame predicts from the last type 2 frame since then (else
+/// from that type 0 or 1 frame) and becomes the reference of later type
+/// 2 and 3 frames only; a type 3 frame predicts like a type 2 frame and
+/// is never a reference.
+#[test]
+fn droppable_frames_keep_their_own_reference_chain() {
+    let gop = Gop::simple(16, 16);
+    let intra = frame(
+        0,
+        0,
+        Some(&gop),
+        0,
+        &[Some(&Band::new(true, vec![dc_mb(&[40])]))],
+        None,
+        None,
+    );
+    let mut dec = Iv50Decoder::new();
+    assert_eq!(dec.decode(&intra), Ok(FrameType::Intra));
+    // The whole picture is the first block's constant.
+    let base = dc_consts(&[40], step(0, 1, 0, 0))[0];
+    assert_samples(dec.y().unwrap(), "intra", |_, _| base);
+
+    // The model: the sample of block 0 in the last type 0 or 1 frame,
+    // and in the last type 2 frame since.
+    let mut main = base;
+    let mut scal: Option<i32> = None;
+    let types = [1, 2, 3, 3, 2, 3, 1, 3, 2, 2, 3, 1, 1, 3];
+    for (n, &ftype) in types.iter().enumerate() {
+        // Every frame adds its own residual to block 0 of its reference.
+        let level = 2 + n as i32;
+        let mb = Mb {
+            inter: true,
+            cbp: 1,
+            blocks: vec![vec![(1, level)]],
+            ..Default::default()
+        };
+        let data = frame(
+            ftype,
+            n as u32 + 1,
+            None,
+            0,
+            &[Some(&Band::new(true, vec![mb]))],
+            None,
+            None,
+        );
+        let want_type = match ftype {
+            1 => FrameType::Inter,
+            2 => FrameType::DroppableInterScalability,
+            _ => FrameType::DroppableInter,
+        };
+        assert_eq!(dec.decode(&data), Ok(want_type), "frame {n}");
+        let residual = (dequant(level_index(level), step(0, 0, 0, 0)).unwrap() + 1) >> 1;
+        let reference = if ftype == 1 {
+            main
+        } else {
+            scal.unwrap_or(main)
+        };
+        let now = reference + residual;
+        match ftype {
+            1 => {
+                main = now;
+                scal = None;
+            }
+            2 => scal = Some(now),
+            _ => {}
+        }
+        // Block 0 holds the sum; the other blocks never change.
+        assert_samples(dec.y().unwrap(), "inter", |x, y| {
+            if x < 8 && y < 8 { now } else { base }
+        });
+    }
+}
+
 /// With `IV50_WRITE_SEEDS` set to a directory, write this module's
 /// synthetic sequences there in the fuzz target's framing (each frame
 /// behind its 16-bit little-endian length). The files under

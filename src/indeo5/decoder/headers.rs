@@ -75,7 +75,8 @@ pub(crate) struct GopHeader {
     pub chroma_info: Vec<BandInfo>,
     /// gop_flags bit 3: frames carry a transparency trailer.
     pub transparency: bool,
-    /// gop_flags bit 2: the stream has intra frames only.
+    /// gop_flags bit 2: the stream has intra frames only (a predicted
+    /// frame under such a GOP header is an error, spec/07 §1.1).
     pub intra_only: bool,
 }
 
