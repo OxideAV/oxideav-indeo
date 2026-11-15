@@ -6,6 +6,24 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/OxideAV/oxideav-indeo/compare/v0.0.4...v0.0.5) - 2026-11-15
+
+### Other
+
+- describe the --yuv410p plane order by layout
+- refuse seven-band luma in the GOP header, tidy the decoder
+- Merge remote-tracking branch 'upstream/master' into indeo5-cleanroom
+- document that a failed intra frame with a new layout clears the picture
+- read each band row once per row pair in the four-band synthesis
+- replace the earlier decode stack with Iv50Decoder
+- map registry chroma by x / 4 and y / 4
+- write nothing for a transparency window outside the picture
+- document Iv50Decoder in the module docs and changelog
+- refuse IV50 features the specification leaves open
+- test the IV50 decoder on synthetic streams and the keyframes
+- decode registry packets with the new IV50 decoder
+- add a complete IV50 decoder that follows the vendor DLL
+
 ### Added
 
 - indeo5: `Iv50Decoder`, a complete IV50 decoder (intra, inter and NULL
