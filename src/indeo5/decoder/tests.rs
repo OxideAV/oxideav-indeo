@@ -5,60 +5,8 @@ use super::band::RvMap;
 use super::headers::{BandInfo, GopHeader};
 use super::huff::{BLOCK_PRESETS, MB_PRESETS};
 use super::synth::{OutPlane, Window, four_band};
+use super::testutil::BitWriter;
 use super::*;
-
-/// Writes fields least significant bit first, the way the decoder reads
-/// them.
-struct BitWriter {
-    bytes: Vec<u8>,
-    bit: usize,
-}
-
-impl BitWriter {
-    fn new() -> Self {
-        BitWriter {
-            bytes: Vec::new(),
-            bit: 0,
-        }
-    }
-
-    fn put(&mut self, value: u32, n: u32) {
-        for i in 0..n {
-            if self.bit.is_multiple_of(8) {
-                self.bytes.push(0);
-            }
-            let b = (value >> i) & 1;
-            *self.bytes.last_mut().unwrap() |= (b as u8) << (self.bit % 8);
-            self.bit += 1;
-        }
-    }
-
-    fn align(&mut self) {
-        self.bit = self.bit.next_multiple_of(8);
-    }
-
-    /// Write symbol `s` of the code described by `rows`.
-    fn sym(&mut self, rows: &[u8], s: u32) {
-        let mut base = 0;
-        for (i, &w) in rows.iter().enumerate() {
-            let size = 1u32 << w;
-            if s < base + size {
-                let last = i == rows.len() - 1;
-                self.put((1 << i) - 1, i as u32);
-                if !last {
-                    self.put(0, 1);
-                }
-                let x = s - base;
-                for j in (0..w as u32).rev() {
-                    self.put((x >> j) & 1, 1);
-                }
-                return;
-            }
-            base += size;
-        }
-        panic!("symbol {s} not in the code");
-    }
-}
 
 /// The level index that dequantises to `d` at step 1 (spec/05 §2.3).
 fn code_for(d: i32) -> u16 {
@@ -254,8 +202,9 @@ fn bad_headers_are_rejected() {
         dec.decode(&w.bytes),
         Err(Iv50Error::BadHeader("subsampling code"))
     );
-    // Several tiles and half-size chroma are refused.
-    for flags in [0x40, 0x02] {
+    // Several tiles, a locked stream and transparency with half-size
+    // chroma are refused.
+    for flags in [0x40, 0x20, 0x0a] {
         let mut w = BitWriter::new();
         w.put(0x1f, 5);
         w.put(0, 3);

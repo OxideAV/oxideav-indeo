@@ -15,13 +15,29 @@
 //!   codec (id + caps + factory + probe + FourCC tag) into a
 //!   [`CodecRegistry`] / [`RuntimeContext`].
 //!
-//! ## Output pixel format
+//! ## Output pixel format and stream parameters
 //!
-//! Indeo 5 decodes to 4:1:0: chroma planes a quarter of the luma size in
-//! each direction. The framework has no 4:1:0 pixel format, so each
-//! chroma sample is repeated over the 4 by 4 luma area it covers and the
-//! frame is emitted as [`PixelFormat::Yuv444P`]: three planes at the luma
-//! size, in Y, U, V order.
+//! The GOP header of every intra frame carries the picture size and the
+//! chroma layout (gop_flags bit 1), so the decoder describes its own
+//! output; the container's width and height are advisory.
+//!
+//! * **Quarter-size chroma** (4:1:0, bit 1 clear; every stream staged so
+//!   far): the framework has no 4:1:0 pixel format, so each chroma
+//!   sample is repeated over the 4 by 4 luma area it covers and the
+//!   frame is emitted as [`PixelFormat::Yuv444P`], three planes at the
+//!   luma size.
+//! * **Half-size chroma** (4:2:0, bit 1 set): the planes are emitted as
+//!   decoded, [`PixelFormat::Yuv420P`], chroma `ceil(w / 2)` by
+//!   `ceil(h / 2)`.
+//!
+//! Planes are in Y, U, V order with the stride equal to the plane
+//! width. Size and pixel format are stream metadata, never per frame:
+//! [`Indeo5RegistryDecoder`] reports them through
+//! [`Decoder::output_params`] once the first frame has been returned,
+//! and when an intra frame changes them mid-stream it moves
+//! [`Decoder::output_params_generation`] and returns one
+//! [`Frame::StreamParams`] event immediately before the first frame of
+//! the new shape.
 
 use oxideav_core::{
     CodecCapabilities, CodecId, CodecInfo, CodecParameters, CodecRegistry, CodecTag, Decoder,
@@ -73,13 +89,20 @@ pub fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {
 ///
 /// Holds the decoder, whose state spans frames, and a single-packet
 /// pending slot. `send_packet` stashes the packet; `receive_frame`
-/// decodes it and returns the picture as a [`PixelFormat::Yuv444P`]
-/// [`VideoFrame`].
+/// decodes it and returns the picture as a [`VideoFrame`] whose layout
+/// [`Decoder::output_params`] describes (see the module docs).
 pub struct Indeo5RegistryDecoder {
     codec_id: CodecId,
     inner: Iv50Decoder,
     pending: Option<Packet>,
     eof: bool,
+    /// Width, height and pixel format of the frame returned last.
+    shape: Option<(u32, u32, PixelFormat)>,
+    /// Moves when `shape` changes after the first frame.
+    generation: u64,
+    /// A decoded frame held back behind its [`Frame::StreamParams`]
+    /// event.
+    held: Option<VideoFrame>,
 }
 
 impl Indeo5RegistryDecoder {
@@ -90,6 +113,9 @@ impl Indeo5RegistryDecoder {
             inner: Iv50Decoder::new(),
             pending: None,
             eof: false,
+            shape: None,
+            generation: 0,
+            held: None,
         }
     }
 }
@@ -104,7 +130,7 @@ fn map_decode_error(e: Iv50Error) -> Error {
 /// Repeat each chroma sample over the 4 by 4 luma pixels it covers,
 /// giving a plane of `width` by `height`. Luma pixel (x, y) takes chroma
 /// sample (x / 4, y / 4): the chroma planes are `ceil(width / 4)` by
-/// `ceil(height / 4)` ([`Iv50Decoder`] refuses half-size chroma).
+/// `ceil(height / 4)`.
 fn upsample(p: &Iv50Plane, width: usize, height: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(width * height);
     for y in 0..height {
@@ -114,34 +140,61 @@ fn upsample(p: &Iv50Plane, width: usize, height: usize) -> Vec<u8> {
     out
 }
 
-/// The decoder's current picture as a [`PixelFormat::Yuv444P`]
-/// [`VideoFrame`] (Y, U, V, each at the luma size).
+/// The visible samples of a plane, rows packed at the plane's width.
+fn packed(p: &Iv50Plane) -> VideoPlane {
+    VideoPlane {
+        stride: p.width,
+        data: (0..p.height)
+            .flat_map(|r| p.row(r).iter().copied())
+            .collect(),
+    }
+}
+
+/// The pixel format of the decoder's current stream: [`PixelFormat::Yuv420P`]
+/// when the chroma planes are half the luma size, [`PixelFormat::Yuv444P`]
+/// (quarter-size chroma repeated 4 by 4) otherwise.
+fn pixel_format_of(dec: &Iv50Decoder) -> Option<PixelFormat> {
+    dec.chroma_ratio().map(|r| {
+        if r == 2 {
+            PixelFormat::Yuv420P
+        } else {
+            PixelFormat::Yuv444P
+        }
+    })
+}
+
+/// The decoder's current picture as a [`VideoFrame`] in Y, U, V order:
+/// [`PixelFormat::Yuv420P`] planes as decoded for half-size chroma,
+/// [`PixelFormat::Yuv444P`] (each plane at the luma size) for
+/// quarter-size chroma.
 fn picture_to_video_frame(dec: &Iv50Decoder, pts: Option<i64>) -> Result<VideoFrame> {
     let (Some(y), Some(u), Some(v)) = (dec.y(), dec.u(), dec.v()) else {
         return Err(Error::invalid("indeo5: no picture decoded yet"));
     };
     let (w, h) = (y.width, y.height);
-    let luma: Vec<u8> = (0..h).flat_map(|r| y.row(r).iter().copied()).collect();
-    let planes = vec![
-        VideoPlane {
-            stride: w,
-            data: luma,
-        },
-        VideoPlane {
-            stride: w,
-            data: upsample(&u, w, h),
-        },
-        VideoPlane {
-            stride: w,
-            data: upsample(&v, w, h),
-        },
-    ];
+    let planes = if dec.chroma_ratio() == Some(2) {
+        vec![packed(&y), packed(&u), packed(&v)]
+    } else {
+        vec![
+            packed(&y),
+            VideoPlane {
+                stride: w,
+                data: upsample(&u, w, h),
+            },
+            VideoPlane {
+                stride: w,
+                data: upsample(&v, w, h),
+            },
+        ]
+    };
     Ok(VideoFrame { pts, planes })
 }
 
 /// One-shot direct decode: decode a single Indeo 5 frame's bytes into an
-/// [`oxideav_core`] [`VideoFrame`] in [`PixelFormat::Yuv444P`] (Y, U, V)
-/// without managing a [`Decoder`] state machine.
+/// [`oxideav_core`] [`VideoFrame`] (Y, U, V) without managing a
+/// [`Decoder`] state machine. The planes are [`PixelFormat::Yuv444P`]
+/// for a quarter-size-chroma stream and [`PixelFormat::Yuv420P`] for a
+/// half-size-chroma one (the chroma planes' stride tells which).
 ///
 /// It decodes `data` with a fresh [`Iv50Decoder`], so `data` must be an
 /// intra frame; any other frame returns [`Error::invalid`]. Callers
@@ -171,6 +224,9 @@ impl Decoder for Indeo5RegistryDecoder {
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
+        if let Some(frame) = self.held.take() {
+            return Ok(Frame::Video(frame));
+        }
         let Some(pkt) = self.pending.take() else {
             return if self.eof {
                 Err(Error::Eof)
@@ -179,7 +235,22 @@ impl Decoder for Indeo5RegistryDecoder {
             };
         };
         self.inner.decode(&pkt.data).map_err(map_decode_error)?;
-        Ok(Frame::Video(picture_to_video_frame(&self.inner, pkt.pts)?))
+        let frame = picture_to_video_frame(&self.inner, pkt.pts)?;
+        let shape = match (self.inner.dimensions(), pixel_format_of(&self.inner)) {
+            (Some((w, h)), Some(format)) => Some((w as u32, h as u32, format)),
+            _ => None,
+        };
+        if self.shape.is_some() && shape != self.shape {
+            // A new shape mid-stream: the description and the counter
+            // move with the event, the frame follows it.
+            self.shape = shape;
+            self.generation = self.generation.wrapping_add(1);
+            self.held = Some(frame);
+            let params = self.output_params().expect("shape known");
+            return Ok(Frame::StreamParams(Box::new(params)));
+        }
+        self.shape = shape;
+        Ok(Frame::Video(frame))
     }
 
     fn flush(&mut self) -> Result<()> {
@@ -190,11 +261,31 @@ impl Decoder for Indeo5RegistryDecoder {
     fn reset(&mut self) -> Result<()> {
         // A container seek restarts the Indeo 5 inter-frame state: drop
         // the pending packet and the decoder, so the next packet must be
-        // an intra frame.
+        // an intra frame. The shape of the last frame returned stays, so
+        // a different one after the seek is announced like any other
+        // change.
         self.pending = None;
+        self.held = None;
         self.eof = false;
         self.inner = Iv50Decoder::new();
         Ok(())
+    }
+
+    fn output_pixel_format(&self) -> Option<PixelFormat> {
+        self.output_params().and_then(|p| p.pixel_format)
+    }
+
+    fn output_params(&self) -> Option<CodecParameters> {
+        let (width, height, format) = self.shape?;
+        let mut p = CodecParameters::video(self.codec_id.clone());
+        p.width = Some(width);
+        p.height = Some(height);
+        p.pixel_format = Some(format);
+        Some(p)
+    }
+
+    fn output_params_generation(&self) -> u64 {
+        self.generation
     }
 }
 
@@ -236,13 +327,14 @@ pub fn probe(ctx: &ProbeContext) -> f32 {
 /// the `IV50` FourCC tag) into a [`CodecRegistry`].
 ///
 /// The capabilities advertise the lossy video codec emitting
-/// [`PixelFormat::Yuv444P`] (the registry decoder repeats each chroma
-/// sample over its 4 by 4 luma pixels). No encoder is registered: the
-/// crate only decodes.
+/// [`PixelFormat::Yuv444P`] (quarter-size chroma, each sample repeated
+/// over its 4 by 4 luma pixels) or [`PixelFormat::Yuv420P`] (half-size
+/// chroma). No encoder is registered: the crate only decodes.
 pub fn register_codecs(reg: &mut CodecRegistry) {
     let caps = CodecCapabilities::video("indeo5_sw")
         .with_lossy(true)
-        .with_pixel_format(PixelFormat::Yuv444P);
+        .with_pixel_format(PixelFormat::Yuv444P)
+        .with_pixel_format(PixelFormat::Yuv420P);
     reg.register(
         CodecInfo::new(CodecId::new(CODEC_ID_STR))
             .capabilities(caps)
@@ -397,5 +489,155 @@ mod tests {
         let mut dec = Indeo5RegistryDecoder::new(CodecId::new(CODEC_ID_STR));
         dec.flush().expect("flush");
         assert!(matches!(dec.receive_frame(), Err(Error::Eof)));
+    }
+
+    use crate::indeo5::decoder::testutil::{Band, Gop, Mb, frame};
+
+    /// An intra frame of `width` by `height` with every macroblock
+    /// skipped and empty chroma bands; `half` selects half-size chroma.
+    fn flat_intra(width: u32, height: u32, half: bool) -> Vec<u8> {
+        let gop = Gop {
+            flags: if half { 2 } else { 0 },
+            chroma: if half { 4 } else { 6 },
+            ..Gop::simple(width, height)
+        };
+        let n = (width.div_ceil(16) * height.div_ceil(16)) as usize;
+        let skip = Mb {
+            skip: true,
+            ..Default::default()
+        };
+        let luma = Band::new(true, vec![skip; n]);
+        frame(0, 0, Some(&gop), 0, &[Some(&luma)], None, None)
+    }
+
+    fn packet(data: Vec<u8>, pts: i64) -> Packet {
+        Packet {
+            stream_index: 0,
+            time_base: oxideav_core::TimeBase::new(1, 1000),
+            pts: Some(pts),
+            dts: Some(pts),
+            duration: None,
+            flags: Default::default(),
+            data,
+        }
+    }
+
+    fn shape_of(dec: &Indeo5RegistryDecoder) -> Option<(u32, u32, PixelFormat)> {
+        let p = dec.output_params()?;
+        assert_eq!(p.codec_id, CodecId::new(CODEC_ID_STR));
+        assert_eq!(dec.output_pixel_format(), p.pixel_format);
+        Some((p.width?, p.height?, p.pixel_format?))
+    }
+
+    /// Size and pixel format are stream metadata: unknown before the
+    /// first frame, then the GOP header's; a change is one event before
+    /// the first frame of the new shape, with the counter moved.
+    #[test]
+    fn stream_parameters_follow_the_gop_header() {
+        let mut dec = Indeo5RegistryDecoder::new(CodecId::new(CODEC_ID_STR));
+        assert_eq!(shape_of(&dec), None);
+        assert_eq!(dec.output_params_generation(), 0);
+
+        // First shape: 32x16, quarter-size chroma, emitted as 4:4:4.
+        dec.send_packet(&packet(flat_intra(32, 16, false), 0))
+            .unwrap();
+        let Frame::Video(f) = dec.receive_frame().unwrap() else {
+            panic!("the first shape is not announced by an event");
+        };
+        assert_eq!(
+            f.planes.iter().map(|p| p.stride).collect::<Vec<_>>(),
+            [32, 32, 32]
+        );
+        assert!(f.planes.iter().all(|p| p.data.len() == 32 * 16));
+        assert_eq!(shape_of(&dec), Some((32, 16, PixelFormat::Yuv444P)));
+        assert_eq!(dec.output_params_generation(), 0);
+
+        // The same shape again: no event.
+        dec.send_packet(&packet(flat_intra(32, 16, false), 1))
+            .unwrap();
+        assert!(matches!(dec.receive_frame(), Ok(Frame::Video(_))));
+        assert_eq!(dec.output_params_generation(), 0);
+
+        // Half-size chroma at the same size: the pixel format changes.
+        dec.send_packet(&packet(flat_intra(32, 16, true), 2))
+            .unwrap();
+        let Frame::StreamParams(p) = dec.receive_frame().unwrap() else {
+            panic!("expected the stream parameters event");
+        };
+        assert_eq!((p.width, p.height), (Some(32), Some(16)));
+        assert_eq!(p.pixel_format, Some(PixelFormat::Yuv420P));
+        assert_eq!(shape_of(&dec), Some((32, 16, PixelFormat::Yuv420P)));
+        assert_eq!(dec.output_params_generation(), 1);
+        let Frame::Video(f) = dec.receive_frame().unwrap() else {
+            panic!("the frame follows its event");
+        };
+        assert_eq!(f.pts, Some(2));
+        assert_eq!(
+            f.planes.iter().map(|p| p.stride).collect::<Vec<_>>(),
+            [32, 16, 16]
+        );
+        assert_eq!(
+            f.planes.iter().map(|p| p.data.len()).collect::<Vec<_>>(),
+            [32 * 16, 16 * 8, 16 * 8]
+        );
+        assert!(matches!(dec.receive_frame(), Err(Error::NeedMore)));
+
+        // A new size with an odd half: chroma rounds up.
+        dec.send_packet(&packet(flat_intra(18, 10, true), 3))
+            .unwrap();
+        assert!(matches!(dec.receive_frame(), Ok(Frame::StreamParams(_))));
+        assert_eq!(shape_of(&dec), Some((18, 10, PixelFormat::Yuv420P)));
+        assert_eq!(dec.output_params_generation(), 2);
+        let Frame::Video(f) = dec.receive_frame().unwrap() else {
+            panic!("the frame follows its event");
+        };
+        assert_eq!(
+            f.planes.iter().map(|p| p.stride).collect::<Vec<_>>(),
+            [18, 9, 9]
+        );
+        assert_eq!(f.planes[1].data.len(), 9 * 5);
+
+        // A seek keeps the description; the same shape after it is not
+        // a change, a different one is.
+        dec.reset().unwrap();
+        assert_eq!(shape_of(&dec), Some((18, 10, PixelFormat::Yuv420P)));
+        dec.send_packet(&packet(flat_intra(18, 10, true), 4))
+            .unwrap();
+        assert!(matches!(dec.receive_frame(), Ok(Frame::Video(_))));
+        assert_eq!(dec.output_params_generation(), 2);
+        dec.reset().unwrap();
+        dec.send_packet(&packet(flat_intra(32, 16, false), 5))
+            .unwrap();
+        assert!(matches!(dec.receive_frame(), Ok(Frame::StreamParams(_))));
+        // A seek between the event and its frame drops the frame.
+        dec.reset().unwrap();
+        assert!(matches!(dec.receive_frame(), Err(Error::NeedMore)));
+        assert_eq!(shape_of(&dec), Some((32, 16, PixelFormat::Yuv444P)));
+        assert_eq!(dec.output_params_generation(), 3);
+    }
+
+    /// A frame that fails to decode changes nothing in the description.
+    #[test]
+    fn failed_frames_leave_the_stream_parameters() {
+        let mut dec = Indeo5RegistryDecoder::new(CodecId::new(CODEC_ID_STR));
+        dec.send_packet(&packet(flat_intra(32, 16, false), 0))
+            .unwrap();
+        dec.receive_frame().unwrap();
+        let mut bad = flat_intra(64, 48, true);
+        bad.truncate(bad.len() - 3);
+        dec.send_packet(&packet(bad, 1)).unwrap();
+        assert!(dec.receive_frame().is_err());
+        assert_eq!(shape_of(&dec), Some((32, 16, PixelFormat::Yuv444P)));
+        assert_eq!(dec.output_params_generation(), 0);
+    }
+
+    #[test]
+    fn registry_built_decoder_starts_without_a_description() {
+        let mut reg = CodecRegistry::new();
+        register_codecs(&mut reg);
+        let params = CodecParameters::video(CodecId::new(CODEC_ID_STR));
+        let dec = reg.first_decoder(&params).expect("registry decoder");
+        assert!(dec.output_params().is_none());
+        assert_eq!(dec.output_pixel_format(), None);
     }
 }

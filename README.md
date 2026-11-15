@@ -16,7 +16,7 @@ staged under `docs/video/indeo/`:
 | Codec | FourCC | State |
 | ----- | ------ | ----- |
 | Indeo 3 | `IV31` / `IV32` | **Decodes.** Both staged corpora (160×120 all-intra, 176×144 with a 4-frame intra period) reproduce the reference decode **pixel-exact on every frame and every plane** — 16 / 16 frames: intra (families A / E), inter (motion compensation with full- and half-pel vectors, families B / F), VQ_NULL cells, NULL-frame repeat, the two-bank reference ping-pong. |
-| Indeo 5 | `IV50` | **Decodes.** Intra, inter and NULL frames, one-band and four-band luma, transparency windows. On the 40 IV50 movies of Rent-A-Hero (5 245 frames) the 8-bit planes equal the vendor driver's on every frame of 22 movies; in the other 18, all with transparency, the only difference is one run of at most 31 luma pixels that the driver never initialises. |
+| Indeo 5 | `IV50` | **Decodes.** Intra, inter and NULL frames, one-band and four-band luma, quarter- and half-size chroma, transparency windows. All ten staged frames (two intra keyframes, a vendor-encoded intra + 7 inter sequence) are **byte-exact against the vendor driver's `YUY2` output**, luma and chroma. On the 40 IV50 movies of Rent-A-Hero (5 245 frames) the 8-bit planes equal the vendor driver's on every frame of 22 movies; in the other 18, all with transparency, the only difference is one run of at most 31 luma pixels that the driver never initialises. |
 | Indeo 2 / 4 | `RT21` / `IV41` | Wiki-snapshot documentation only under `docs/video/indeo/indeoN/wiki/` (no formal `spec/`); scaffold pending docs work. |
 
 All truth is drawn from the staged spec / trace docs — no external
@@ -75,28 +75,48 @@ output).
 ### Indeo 5 (`IV50`)
 
 Entry points: `indeo5::Iv50Decoder` (stateful; `decode(frame) ->
-FrameType`, then the `y()`, `u()` and `v()` planes) and the
+FrameType`, then the `y()`, `u()` and `v()` planes, or `yuy2()` for the
+packed layout the vendor driver hands a `YUY2` host) and the
 `oxideav_core` bridge `indeo5::Indeo5RegistryDecoder` /
-`decode_video_frame` (`PixelFormat::Yuv444P`, each chroma sample
-repeated over its 4×4 luma pixels).
+`decode_video_frame`.
 
-The decoder was written from a clean-room specification of the vendor
-driver IR50_32.DLL (R.5.06.15.2.44, MMX path), with no other decoder's
-source consulted, and reproduces that driver: picture start and the
-repeated-number NULL rule, GOP, frame and band headers, the row-width
-prefix codes, macroblock headers with quantiser deltas and inherited
-vectors, run/value tables with corrections and escapes,
+The decoder reproduces the vendor driver's 8-bit planes: picture start
+and the repeated-number NULL rule, GOP, frame and band headers, the
+row-width prefix codes, macroblock headers with quantiser deltas and
+inherited vectors, run/value tables with swap pairs and escapes,
 dequantisation, DC prediction, the inverse Slant transforms,
 half-sample motion compensation from the rotating reference buffers,
-the driver's four-band synthesis filter, and the transparency bounding
-box that limits which part of the picture a frame rebuilds. The planes
-keep what earlier frames wrote outside that box, as the driver's do.
+the four-band synthesis filter, half-size as well as quarter-size
+chroma, and the transparency bounding box that limits which part of
+the picture a frame rebuilds.
 
-Refused with `Iv50Error::Unsupported` because no known stream uses them
-and their decoding isn't established: several tiles per band, half-size
-chroma, locked streams (access key), seven-band luma and four-band
-chroma, bitstream versions other than 2, and a few inheritance cases
-the driver handles in ways not yet traced.
+**Specification.** Comments cite the staged clean-room specification
+(`docs/video/indeo/indeo5/spec/` by chapter and section, and its
+`tables/`). Every decoder table is compared with the staged table files
+in unit tests, the transforms with the recurrence of `spec/06` §1.2,
+and all ten staged frames (two intra keyframes, and one intra plus
+seven inter frames from the vendor encoder) decode **byte-exact against
+the vendor driver's `YUY2` output, luma and chroma**. The module docs of
+`indeo5::Iv50Decoder`'s module list where the decoder follows the
+fixtures rather than the staged text, and what it carries that the text
+does not cover.
+
+**Output.** Planes are Y, U, V. Size and pixel format are stream
+metadata (`Decoder::output_params`, with a `Frame::StreamParams` event
+and a moved generation counter when an intra frame changes them):
+
+| Stream chroma | Decoder planes | Registry frames |
+| ------------- | -------------- | --------------- |
+| quarter size (4:1:0, every staged stream) | `ceil(w / 4)` × `ceil(h / 4)` | `PixelFormat::Yuv444P`, each chroma sample repeated over its 4×4 luma pixels (the framework has no 4:1:0 format) |
+| half size (4:2:0, gop_flags bit 1) | `ceil(w / 2)` × `ceil(h / 2)` | `PixelFormat::Yuv420P`, as decoded |
+
+**Refused** with `Iv50Error::Unsupported`, because the staged
+specification leaves them open: several tiles per band, locked streams
+(access key), seven-band luma and four-band chroma, a transform whose
+size differs from the band's block size, one-axis transforms of a
+chroma band, a GOP header `value4` other than 2, transparency combined
+with half-size chroma, and an intra macroblock at a band quantiser
+above 23.
 
 ## Selected public API
 
@@ -113,7 +133,8 @@ the driver handles in ways not yet traced.
 - `indeo3::DecodeSession` — the inter-frame sequencer (first-frame /
   seek INTRA gate, NULL repeat, reference bank).
 - `indeo5::Iv50Decoder::decode` → `FrameType`; `y()` / `u()` / `v()`
-  → `Iv50Plane` (width, height, stride, samples); `Iv50Error`.
+  → `Iv50Plane` (width, height, stride, samples); `chroma_ratio()`;
+  `yuy2()`; `Iv50Error`.
 - Registry: `register` (crate root), `indeo3::register_codecs` /
   `indeo5::register`, `codec_id_for_fourcc`, `probe`.
 

@@ -16,7 +16,13 @@ fuzz_target!(|data: &[u8]| {
         let take = len.min(rest.len());
         let (frame, tail) = rest.split_at(take);
         if dec.decode(frame).is_ok() {
-            let _ = dec.y();
+            // Every plane row must be readable at its stated size.
+            for p in [dec.y(), dec.u(), dec.v()].into_iter().flatten() {
+                for r in 0..p.height {
+                    let _ = p.row(r);
+                }
+            }
+            let _ = dec.yuy2();
         }
         rest = tail;
         frames += 1;

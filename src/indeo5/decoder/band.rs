@@ -158,6 +158,11 @@ impl RvMap {
     pub fn eob(&self) -> u32 {
         (0..256u32).find(|&s| self.0[s as usize].kind == 1).unwrap()
     }
+
+    /// The escape symbol.
+    pub fn esc(&self) -> u32 {
+        (0..256u32).find(|&s| self.0[s as usize].kind == 2).unwrap()
+    }
 }
 
 /// Quantiser steps, `bank[g][class][q][position]` (spec/06 §5.1;
@@ -198,7 +203,7 @@ pub(crate) fn build_bank() -> Box<Bank> {
 /// §5.1), so a level past the end of step `s` continues into the table
 /// of step `s + 1`.
 #[inline]
-fn dequant(code: u32, s: u32) -> Result<i32, Iv50Error> {
+pub(super) fn dequant(code: u32, s: u32) -> Result<i32, Iv50Error> {
     if code == 0 {
         return Err(Iv50Error::BadBlockData("value code 0"));
     }
@@ -490,14 +495,27 @@ impl BandJob<'_> {
         for row in 0..tile.rows {
             for col in 0..tile.cols {
                 let mb = &mbs[row * tile.cols + col];
-                let steps = &bank[mb.intra as usize][mb.q.min(23) as usize];
+                // The step table of the macroblock's class and quantiser
+                // (spec/06 §5.1, §5.2): class 1 for an intra macroblock,
+                // class 0 for an inter one. The 48 tables are one array,
+                // class 1 after class 0, so an inter macroblock at a
+                // quantiser of 24 to 31 lands on the class 1 table of
+                // level q - 24; an intra one would land past the array.
+                let steps = match (mb.q, mb.intra) {
+                    (0..=23, intra) => &bank[intra as usize][mb.q as usize],
+                    (24..=47, false) => &bank[1][mb.q as usize - 24],
+                    _ => &bank[1][23],
+                };
+                let no_steps = mb.intra && mb.q > 23;
                 for j in 0..nblk {
                     let bx = tile.x + col * mb_size + (j & 1) * blk;
                     let by = tile.y + row * mb_size + (j >> 1) * blk;
                     let off = g.offset + by * pitch + bx;
                     if mb.cbp & (1 << j) != 0 {
-                        if mb.q > 23 {
-                            return Err(Iv50Error::Unsupported("global quantiser above 23"));
+                        if no_steps {
+                            return Err(Iv50Error::Unsupported(
+                                "band quantiser above 23 on an intra macroblock",
+                            ));
                         }
                         coefs = [0; 64];
                         let mut pos: i32 = -1;

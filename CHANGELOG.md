@@ -20,6 +20,22 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   presets, picture sizes, the transform basis), the transforms with the
   recurrence of `spec/06` §1.2, and every header field of `spec/02`
 
+- indeo5: half-size chroma streams (gop_flags bit 1, `spec/02` §1.6)
+  decode; `Iv50Decoder::chroma_ratio` tells the layout. Transparency
+  combined with half-size chroma stays refused
+- indeo5: an inter macroblock at a band quantiser of 24 to 31 decodes
+  with the step table `spec/06` §5.1 gives it (the intra table of level
+  `q - 24`); only an intra macroblock's coded block is refused there
+- indeo5: `Indeo5RegistryDecoder` reports width, height and pixel
+  format through `Decoder::output_params`, moves
+  `output_params_generation` and returns a `Frame::StreamParams` event
+  when an intra frame changes them, and emits half-size-chroma streams
+  as `PixelFormat::Yuv420P` (quarter-size ones stay `Yuv444P`)
+- indeo5: tests on streams built by a test-side writer: half-size
+  chroma (intra, inherited vectors), the four motion-compensation
+  phases, whole-sample vectors, intra and skipped macroblocks in inter
+  frames, runs and escapes, quantiser deltas, the quantiser range
+
 ### Changed
 
 - indeo5: the decoder's comments cite the staged specification

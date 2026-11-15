@@ -3,8 +3,9 @@
 //! Usage: `iv50_dump IN.avi OUT.yuv [--yuv410p]`
 //!
 //! Each frame is written at the size in the AVI's BITMAPINFOHEADER as
-//! the Y plane, then V, then U (the order the vendor DLL keeps its
-//! planes in), chroma at `ceil(W / 4)` by `ceil(H / 4)`. With
+//! the Y plane, then V, then U (the order the bands come in the
+//! stream), chroma at `ceil(W / 4)` by `ceil(H / 4)`, or at
+//! `ceil(W / 2)` by `ceil(H / 2)` for a half-size-chroma stream. With
 //! `--yuv410p` the chroma order is U then V instead, the planar 4:1:0
 //! raw-video order. A frame that fails to decode repeats the previous picture.
 //! The decode time of the whole stream, without file I/O, is printed on
@@ -129,6 +130,9 @@ fn main() {
             failed += 1;
             eprintln!("frame {i}: {e}");
         }
+        // The chroma planes follow the stream's layout.
+        let ratio = dec.chroma_ratio().unwrap_or(4);
+        let (cw, ch) = (w.div_ceil(ratio), h.div_ceil(ratio));
         put(&mut out, dec.y(), w, h);
         if yuv410p {
             put(&mut out, dec.u(), cw, ch);

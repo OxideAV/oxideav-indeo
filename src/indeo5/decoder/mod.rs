@@ -72,7 +72,9 @@
 //! (spec/02 §1.3), seven-band luma and four-band chroma (spec/06 §3.3,
 //! §5.1), a transform whose size differs from the block size and the
 //! one-axis and identity transforms of a chroma band (spec/06 §6 item
-//! 3), `value4` other than 2 (spec/02 §1.9).
+//! 3), `value4` other than 2 (spec/02 §1.9), transparency together with
+//! half-size chroma, and a band quantiser above 23 on an intra
+//! macroblock (spec/06 §5.1).
 
 mod band;
 mod bits;
@@ -301,10 +303,18 @@ impl Iv50Decoder {
     /// chroma, whose `YUY2` conversion that section does not cover.
     pub fn yuy2(&self) -> Option<Vec<u8>> {
         let (y, u, v) = (self.y()?, self.u()?, self.v()?);
-        if u.width != y.width.div_ceil(4) || u.height != y.height.div_ceil(4) {
+        if self.gop.as_ref()?.half_chroma() {
             return None;
         }
         Some(yuy2::pack(&y, &u, &v))
+    }
+
+    /// How many luma samples one chroma sample spans in each direction:
+    /// 4 (the planes of [`u`](Self::u) and [`v`](Self::v) are
+    /// `ceil(size / 4)`; gop_flags bit 1 clear) or 2 (`ceil(size / 2)`;
+    /// bit 1 set, spec/02 §1.6). `None` before the first GOP header.
+    pub fn chroma_ratio(&self) -> Option<usize> {
+        self.gop.as_ref().map(|g| 1 << g.chroma_shift())
     }
 
     fn plane(&self, i: usize) -> Option<Iv50Plane<'_>> {
@@ -429,6 +439,7 @@ impl Iv50Decoder {
                     || old.height != gop.height
                     || old.luma_bands != gop.luma_bands
                     || old.chroma_bands != gop.chroma_bands
+                    || old.half_chroma() != gop.half_chroma()
             }
             None => true,
         };
@@ -581,12 +592,17 @@ impl Iv50Decoder {
             let win = if plane == 0 {
                 Window { y: y0, x: x0, h, w }
             } else {
-                let (yc, xc) = (y0 >> 2, x0 >> 2);
+                // The chroma samples the luma window covers. (With
+                // half-size chroma the window is always the picture:
+                // the GOP header reader refuses transparency there.)
+                let s = gop.chroma_shift();
+                let r = (1usize << s) - 1;
+                let (yc, xc) = (y0 >> s, x0 >> s);
                 Window {
                     y: yc,
                     x: xc,
-                    h: ((y0 + 3 + h) >> 2) - yc,
-                    w: ((x0 + 3 + w) >> 2) - xc,
+                    h: ((y0 + r + h) >> s) - yc,
+                    w: ((x0 + r + w) >> s) - xc,
                 }
             };
             let lay = &self.layout[plane];
@@ -704,4 +720,8 @@ fn build_layout(gop: &GopHeader) -> Vec<PlaneLayout> {
 }
 
 #[cfg(test)]
+mod stream_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) mod testutil;

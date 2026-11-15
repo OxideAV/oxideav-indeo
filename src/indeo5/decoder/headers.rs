@@ -80,9 +80,23 @@ pub(crate) struct GopHeader {
 }
 
 impl GopHeader {
-    /// Chroma plane size (spec/02 §1.6).
+    /// gop_flags bit 1: the chroma planes are half the luma size in each
+    /// direction, not a quarter (spec/02 §1.1, §1.6).
+    pub fn half_chroma(&self) -> bool {
+        self.flags & 2 != 0
+    }
+
+    /// Base-2 logarithm of the luma to chroma size ratio: 1 or 2.
+    pub fn chroma_shift(&self) -> u32 {
+        if self.half_chroma() { 1 } else { 2 }
+    }
+
+    /// Chroma plane size (spec/02 §1.6): `(size + 1) >> 1` with half-size
+    /// chroma, `(size + 3) >> 2` otherwise.
     pub fn chroma_size(&self) -> (u32, u32) {
-        ((self.width + 3) >> 2, (self.height + 3) >> 2)
+        let s = self.chroma_shift();
+        let r = (1 << s) - 1;
+        ((self.width + r) >> s, (self.height + r) >> s)
     }
 }
 
@@ -130,9 +144,13 @@ pub(crate) fn read_gop(r: &mut Bits) -> Result<GopHeader, Iv50Error> {
         // gives a chroma band's tile size.
         return Err(Iv50Error::Unsupported("multiple tiles (gop_flags bit 6)"));
     }
-    if flags & 2 != 0 {
-        // Half-size chroma (spec/02 §1.6).
-        return Err(Iv50Error::Unsupported("half-size chroma (gop_flags bit 1)"));
+    if flags & 0x0a == 0x0a {
+        // Half-size chroma (spec/02 §1.6) with transparency: how the
+        // window of a transparency frame maps to half-size planes is
+        // not in the staged specification.
+        return Err(Iv50Error::Unsupported(
+            "transparency with half-size chroma (gop_flags bits 1 and 3)",
+        ));
     }
     let sub = r.read(3);
     if !matches!(sub, 0 | 1 | 2 | 6) {
