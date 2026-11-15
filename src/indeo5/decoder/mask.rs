@@ -154,3 +154,83 @@ pub(crate) fn read_mask(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::bits::PaddedFrame;
+    use super::super::testutil::BitWriter;
+    use super::*;
+
+    /// Symbol 0 is one bit, 1 to 128 and 129 to 256 nine bits.
+    const ROWS: [u8; 3] = [0, 7, 7];
+
+    /// Run-coded mask data without a size: the first value and the run
+    /// codes.
+    fn runs(first: u32, codes: &[u32]) -> Vec<u8> {
+        let mut w = BitWriter::new();
+        w.put(0, 1);
+        w.put(0, 1);
+        w.align();
+        w.put(first, 1);
+        for &c in codes {
+            w.sym(&ROWS, c);
+        }
+        w.bytes
+    }
+
+    fn decode(data: &[u8], row_delta: bool, stride: usize, len: usize) -> Vec<u8> {
+        let code = Huff::new(&ROWS).unwrap();
+        let f = PaddedFrame::new(data);
+        let mut mask = vec![7; len];
+        read_mask(
+            &mut f.reader_at(0),
+            Some(&code),
+            row_delta,
+            stride,
+            &mut mask,
+        )
+        .unwrap();
+        mask
+    }
+
+    #[test]
+    fn stride_is_the_width_rounded_up_to_32() {
+        assert_eq!(stride(1), 32);
+        assert_eq!(stride(32), 32);
+        assert_eq!(stride(33), 64);
+        // The largest coded width (13 bits).
+        assert_eq!(stride(8191), 8192);
+    }
+
+    #[test]
+    fn runs_go_on_across_rows() {
+        // A picture 33 wide has rows of 64. Runs of 40, 50 and 102
+        // cover three rows: 0..40 transparent, 40..90 opaque, then
+        // transparent.
+        let data = runs(0, &[40, 50, 102]);
+        let m = decode(&data, false, 64, 192);
+        let want: Vec<u8> = (0..192)
+            .map(|i| if (40..90).contains(&i) { OPAQUE } else { 0 })
+            .collect();
+        assert_eq!(m, want);
+        // With the row delta, each row is XORed with the row above as
+        // it stands after its own XOR.
+        let d = decode(&data, true, 64, 192);
+        for i in 0..64 {
+            assert_eq!(d[i], want[i]);
+            assert_eq!(d[64 + i], want[64 + i] ^ want[i]);
+            assert_eq!(d[128 + i], want[128 + i] ^ d[64 + i]);
+        }
+    }
+
+    #[test]
+    fn a_single_value_ignores_the_code_and_the_row_delta() {
+        let mut w = BitWriter::new();
+        w.put(1, 1);
+        w.put(1, 1);
+        let f = PaddedFrame::new(&w.bytes);
+        let mut mask = vec![0; 96];
+        read_mask(&mut f.reader_at(0), None, true, 32, &mut mask).unwrap();
+        assert!(mask.iter().all(|&v| v == OPAQUE));
+    }
+}

@@ -407,7 +407,8 @@ impl Iv50Decoder {
 
     /// The transparency of the current picture: `None` when the stream
     /// has none (gop_flags bit 3 clear) or before the first picture. A
-    /// NULL frame keeps the last frame's.
+    /// NULL frame and a frame that fails keep the last frame's; a frame
+    /// of a GOP without transparency drops it.
     pub fn transparency(&self) -> Option<Iv50Transparency<'_>> {
         let gop = self.gop.as_ref()?;
         if !gop.transparency || !self.have_picture || !self.have_mask {
@@ -515,7 +516,13 @@ impl Iv50Decoder {
                 std::mem::swap(&mut self.mask, &mut self.mask_next);
                 self.have_mask = true;
             }
-            Ok(None) => {}
+            Ok(None) => {
+                // A frame of a GOP without transparency: the last mask
+                // doesn't describe its picture, nor the one a later
+                // frame that fails leaves in place.
+                self.rects.clear();
+                self.have_mask = false;
+            }
             Err(e) => {
                 (self.w, self.r1, self.r2, self.r2_valid) = saved;
                 return Err(e);
