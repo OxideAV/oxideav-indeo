@@ -775,3 +775,92 @@ fn decoding_is_deterministic_across_decoders() {
         .unwrap();
     assert_ne!(rows(a.y().unwrap()), rows(flat.y().unwrap()));
 }
+
+/// With `IV50_WRITE_SEEDS` set to a directory, write this module's
+/// synthetic sequences there in the fuzz target's framing (each frame
+/// behind its 16-bit little-endian length). The files under
+/// `fuzz/seeds/indeo5_decoder/synthetic-*.seq` come from here.
+#[test]
+fn synthetic_sequences_as_fuzz_seeds() {
+    let (_, half_intra, _) = half_chroma_intra();
+    let (_, ref32, _) = reference_32(1);
+    let mv = |ftype: u32, number: u32, dy: i32, dx: i32| {
+        let mb = Mb {
+            inter: true,
+            cbp: 6,
+            mv: (dy, dx),
+            blocks: vec![vec![(1, 4), (1, -2)], vec![(64, 1)]],
+            ..Default::default()
+        };
+        frame(
+            ftype,
+            number,
+            None,
+            0,
+            &[Some(&Band::new(true, vec![mb; 4]))],
+            None,
+            None,
+        )
+    };
+    let inherit = {
+        let luma = Band::new(
+            true,
+            vec![Mb {
+                inter: true,
+                mv: (-3, 7),
+                ..Default::default()
+            }],
+        );
+        let chroma = Band {
+            flags: 2,
+            ..Band::new(
+                true,
+                vec![Mb {
+                    cbp: 9,
+                    blocks: vec![vec![(1, 1)], vec![(2, -1)]],
+                    ..Default::default()
+                }],
+            )
+        };
+        frame(
+            1,
+            1,
+            None,
+            0x80,
+            &[Some(&luma)],
+            Some(&chroma),
+            Some(&chroma),
+        )
+    };
+    let seeds: [(&str, Vec<Vec<u8>>); 3] = [
+        ("half-chroma", vec![half_intra, inherit]),
+        (
+            "motion",
+            vec![
+                ref32,
+                mv(1, 1, 3, -5),
+                mv(2, 2, -1, 1),
+                mv(3, 3, 0, 2),
+                mv(1, 4, 1, 0),
+            ],
+        ),
+        (
+            "four-band",
+            vec![four_band_intra([5, -3, 9, 2, -7, 4, 11, -6], true)],
+        ),
+    ];
+    for (name, frames) in &seeds {
+        // Every sequence decodes.
+        let mut dec = Iv50Decoder::new();
+        let mut packed = Vec::new();
+        for f in frames {
+            dec.decode(f).unwrap();
+            packed.extend_from_slice(&(f.len() as u16).to_le_bytes());
+            packed.extend_from_slice(f);
+        }
+        if let Some(dir) = std::env::var_os("IV50_WRITE_SEEDS") {
+            let path = std::path::Path::new(&dir).join(format!("synthetic-{name}.seq"));
+            std::fs::write(path, &packed).unwrap();
+        }
+    }
+}

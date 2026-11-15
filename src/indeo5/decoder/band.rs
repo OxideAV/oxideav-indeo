@@ -89,21 +89,23 @@ impl RvMap {
     /// Build the map for slot `slot` with the band's correction pairs.
     pub fn new(slot: usize, corrections: &[(u8, u8)]) -> Result<RvMap, Iv50Error> {
         let t = &RV_SLOTS[slot];
-        // Rank to (run, value code).
-        let mut by_rank: Vec<(u8, u16)> = vec![(0, 0), (0, 0)];
+        // Rank to (run, level index), on the stack: a band builds its map
+        // once per frame.
+        let mut by_rank = [(0u8, 0u16); 256];
+        let mut ranks = 2;
         for (i, &c) in t.runs.iter().enumerate() {
             let run = (i + 1) as u8;
-            let c = c as u16;
-            for k in 0..c {
-                by_rank.push((run, 2 * c - 2 * k));
+            let c = c as usize;
+            if ranks + 2 * c > 256 {
+                return Err(Iv50Error::BadHeader("run/value table"));
             }
             for k in 0..c {
-                by_rank.push((run, 2 * k + 1));
+                by_rank[ranks + k] = (run, (2 * c - 2 * k) as u16);
+                by_rank[ranks + c + k] = (run, (2 * k + 1) as u16);
             }
+            ranks += 2 * c;
         }
-        if by_rank.len() > 256 {
-            return Err(Iv50Error::BadHeader("run/value table"));
-        }
+        let by_rank = &by_rank[..ranks];
         let mut map = [RvSym {
             run: 0,
             kind: 3,
@@ -209,7 +211,9 @@ pub(super) fn dequant(code: u32, s: u32) -> Result<i32, Iv50Error> {
     }
     let mut idx = code - 1;
     let mut s = s;
-    loop {
+    // Every step up to 255 has at least 32 levels, so the first 64
+    // level indices never leave their table: no division for them.
+    while idx >= 64 {
         let n = 2 * (8192 / s);
         if idx < n {
             break;
@@ -220,6 +224,7 @@ pub(super) fn dequant(code: u32, s: u32) -> Result<i32, Iv50Error> {
             return Err(Iv50Error::BadBlockData("value code past the table"));
         }
     }
+    debug_assert!(s <= 256 && idx < 2 * (8192 / s));
     let k = idx / 2 + 1;
     let adj = if s & 1 == 1 && s > 1 { 1 } else { 0 };
     let mag = (k * s + s / 2 - adj) as i32;
@@ -518,6 +523,7 @@ impl BandJob<'_> {
                             ));
                         }
                         coefs = [0; 64];
+                        let mut occ = xform::Occupancy { rows: 0, cols: 0 };
                         let mut pos: i32 = -1;
                         loop {
                             let s = self
@@ -553,6 +559,7 @@ impl BandJob<'_> {
                             }
                             let p = scan[pos as usize] as usize;
                             coefs[p] = dequant(code, steps[p] as u32)? as i16;
+                            occ.set(p);
                             if r.overrun() {
                                 return Err(Iv50Error::Truncated);
                             }
@@ -561,8 +568,9 @@ impl BandJob<'_> {
                             let d = coefs[0] as i32;
                             coefs[0] = (pred + d) as i16;
                             pred += d;
+                            occ.set(0);
                         }
-                        xform::inverse(xform, &coefs, self.cur, off, pitch);
+                        xform::inverse_sparse(xform, &coefs, occ, self.cur, off, pitch);
                         if !mb.intra {
                             self.motion(off, blk, mb.mvx, mb.mvy, half_pel, true);
                         }
@@ -601,72 +609,119 @@ impl BandJob<'_> {
     /// prediction into an uncoded one.
     #[inline]
     fn motion(&mut self, off: usize, n: usize, mvx: i32, mvy: i32, half_pel: bool, coded: bool) {
-        let pitch = self.geom.pitch as isize;
+        let pitch = self.geom.pitch;
         let (ix, iy, fx, fy) = if half_pel {
             (mvx >> 1, mvy >> 1, (mvx & 1) as usize, (mvy & 1) as usize)
         } else {
             (mvx, mvy, 0, 0)
         };
-        let src = off as isize + iy as isize * pitch + ix as isize;
-        let last = src + (n + fy - 1) as isize * pitch + (n + fx) as isize;
+        let src = off as isize + iy as isize * pitch as isize + ix as isize;
+        let last = src + ((n + fy - 1) * pitch + n + fx) as isize;
+        if src >= 0 && last <= self.refp.len() as isize {
+            let src = src as usize;
+            if n == 8 {
+                predict_block::<8>(self.cur, self.refp, off, src, pitch, fx, fy, coded);
+            } else {
+                predict_block::<4>(self.cur, self.refp, off, src, pitch, fx, fy, coded);
+            }
+            return;
+        }
+        // Reads outside the plane area (spec/07 §5.4 has no clipping
+        // and assumes vectors stay inside the padding): zeros.
         let refp = self.refp;
         let cur = &mut *self.cur;
-        let pitch = pitch as usize;
-        if src >= 0 && last <= refp.len() as isize {
-            let src = src as usize;
-            macro_rules! run {
-                ($f:expr) => {
-                    for rr in 0..n {
-                        let s = src + rr * pitch;
-                        let d = off + rr * pitch;
-                        for c in 0..n {
-                            let p: i16 = $f(s + c);
-                            let o = &mut cur[d + c];
-                            *o = if coded { o.wrapping_add(p) } else { p };
-                        }
+        let get = |i: isize| -> i16 {
+            if i >= 0 && (i as usize) < refp.len() {
+                refp[i as usize]
+            } else {
+                0
+            }
+        };
+        let pi = pitch as isize;
+        for rr in 0..n {
+            for c in 0..n {
+                let i = src + rr as isize * pi + c as isize;
+                let p = match (fx, fy) {
+                    (0, 0) => get(i),
+                    (1, 0) => get(i).wrapping_add(get(i + 1)) >> 1,
+                    (0, 1) => get(i).wrapping_add(get(i + pi)) >> 1,
+                    _ => {
+                        get(i)
+                            .wrapping_add(get(i + 1))
+                            .wrapping_add(get(i + pi))
+                            .wrapping_add(get(i + pi + 1))
+                            >> 2
                     }
                 };
+                let o = &mut cur[off + rr * pitch + c];
+                *o = if coded { o.wrapping_add(p) } else { p };
             }
-            match (fx, fy) {
-                (0, 0) => run!(|i: usize| refp[i]),
-                (1, 0) => run!(|i: usize| refp[i].wrapping_add(refp[i + 1]) >> 1),
-                (0, 1) => run!(|i: usize| refp[i].wrapping_add(refp[i + pitch]) >> 1),
-                _ => run!(|i: usize| refp[i]
-                    .wrapping_add(refp[i + 1])
-                    .wrapping_add(refp[i + pitch])
-                    .wrapping_add(refp[i + pitch + 1])
-                    >> 2),
+        }
+    }
+}
+
+/// One row of `N` reference samples starting at `at`.
+#[inline(always)]
+fn ref_row<const N: usize>(refp: &[i16], at: usize) -> &[i16; N] {
+    refp[at..at + N]
+        .first_chunk::<N>()
+        .expect("slice of N samples")
+}
+
+/// The prediction of an `N` by `N` block read at `src` of `refp`, with
+/// the horizontal and vertical half-sample flags `fx` and `fy` (spec/07
+/// §5.2: the truncating average of two or four samples in 16-bit
+/// arithmetic), added to `cur` at `off` for a coded block or written
+/// over it. Every read lies inside `refp`. Row by row over fixed-width
+/// arrays, so each row is a handful of vector operations.
+#[allow(clippy::too_many_arguments)] // one call site, all plain scalars
+#[inline(always)]
+fn predict_block<const N: usize>(
+    cur: &mut [i16],
+    refp: &[i16],
+    off: usize,
+    src: usize,
+    pitch: usize,
+    fx: usize,
+    fy: usize,
+    coded: bool,
+) {
+    for rr in 0..N {
+        let s = src + rr * pitch;
+        let mut pred = *ref_row::<N>(refp, s);
+        match (fx, fy) {
+            (0, 0) => {}
+            (1, 0) => {
+                let b = ref_row::<N>(refp, s + 1);
+                for (p, &b) in pred.iter_mut().zip(b) {
+                    *p = p.wrapping_add(b) >> 1;
+                }
+            }
+            (0, 1) => {
+                let b = ref_row::<N>(refp, s + pitch);
+                for (p, &b) in pred.iter_mut().zip(b) {
+                    *p = p.wrapping_add(b) >> 1;
+                }
+            }
+            _ => {
+                let b = ref_row::<N>(refp, s + 1);
+                let c = ref_row::<N>(refp, s + pitch);
+                let d = ref_row::<N>(refp, s + pitch + 1);
+                for (i, p) in pred.iter_mut().enumerate() {
+                    *p = p.wrapping_add(b[i]).wrapping_add(c[i]).wrapping_add(d[i]) >> 2;
+                }
+            }
+        }
+        let d = off + rr * pitch;
+        let dst = cur[d..d + N]
+            .first_chunk_mut::<N>()
+            .expect("slice of N samples");
+        if coded {
+            for (o, p) in dst.iter_mut().zip(pred) {
+                *o = o.wrapping_add(p);
             }
         } else {
-            // Reads outside the plane area (spec/07 §5.4 has no clipping
-            // and assumes vectors stay inside the padding): zeros.
-            let get = |i: isize| -> i16 {
-                if i >= 0 && (i as usize) < refp.len() {
-                    refp[i as usize]
-                } else {
-                    0
-                }
-            };
-            let pi = pitch as isize;
-            for rr in 0..n {
-                for c in 0..n {
-                    let i = src + rr as isize * pi + c as isize;
-                    let p = match (fx, fy) {
-                        (0, 0) => get(i),
-                        (1, 0) => get(i).wrapping_add(get(i + 1)) >> 1,
-                        (0, 1) => get(i).wrapping_add(get(i + pi)) >> 1,
-                        _ => {
-                            get(i)
-                                .wrapping_add(get(i + 1))
-                                .wrapping_add(get(i + pi))
-                                .wrapping_add(get(i + pi + 1))
-                                >> 2
-                        }
-                    };
-                    let o = &mut cur[off + rr * pitch + c];
-                    *o = if coded { o.wrapping_add(p) } else { p };
-                }
-            }
+            *dst = pred;
         }
     }
 }

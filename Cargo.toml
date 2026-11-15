@@ -27,3 +27,9 @@ criterion = "0.5"
 [[bench]]
 name = "indeo3_decode"
 harness = false
+
+# `indeo5_decode` times the Indeo 5 decoder and its registry bridge over
+# the staged IV50 fixtures in tests/data/.
+[[bench]]
+name = "indeo5_decode"
+harness = false

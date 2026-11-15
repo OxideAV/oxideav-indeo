@@ -140,20 +140,31 @@ fn map_decode_error(e: Iv50Error) -> Error {
 /// `ceil(height / 4)`.
 fn upsample(p: &Iv50Plane, width: usize, height: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(width * height);
-    for y in 0..height {
-        let row = p.row((y / 4).min(p.height - 1));
-        out.extend((0..width).map(|x| row[(x / 4).min(p.width - 1)]));
+    let mut line = vec![0u8; width];
+    for cy in 0..height.div_ceil(4) {
+        // Widen the chroma row once, then repeat it for its luma rows.
+        let row = p.row(cy.min(p.height - 1));
+        let last = row[p.width - 1];
+        let mut samples = row.iter().copied().chain(std::iter::repeat(last));
+        for quad in line.chunks_mut(4) {
+            quad.fill(samples.next().unwrap_or(last));
+        }
+        for _ in 0..(height - 4 * cy).min(4) {
+            out.extend_from_slice(&line);
+        }
     }
     out
 }
 
 /// The visible samples of a plane, rows packed at the plane's width.
 fn packed(p: &Iv50Plane) -> VideoPlane {
+    let mut data = Vec::with_capacity(p.width * p.height);
+    for r in 0..p.height {
+        data.extend_from_slice(p.row(r));
+    }
     VideoPlane {
         stride: p.width,
-        data: (0..p.height)
-            .flat_map(|r| p.row(r).iter().copied())
-            .collect(),
+        data,
     }
 }
 

@@ -46,8 +46,20 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   half-size chroma, inherited vectors, escapes), and the picture-area
   bound
 
+- indeo5: `benches/indeo5_decode.rs`, a criterion bench of the decoder
+  and of the registry bridge over the staged fixtures; fuzz seeds for
+  the inter fixture and for synthetic half-size-chroma, motion and
+  four-band sequences
+
 ### Changed
 
+- indeo5: decoding is 1.6 to 1.9 times as fast and the registry bridge
+  2.2 to 3 times (176x144 inter sequence 63.7 to 38.1 µs per frame,
+  320x240 intra 65.7 to 34.2 µs; through the registry 103.7 to 47.1 and
+  162.5 to 58.7 µs), output unchanged: fixed-width row kernels for
+  motion compensation and block fills, transforms that skip the passes
+  a block's occupied rows and columns make trivial, no allocation for
+  the run/value map, whole-row copies in the registry bridge
 - indeo5: the decoder's comments cite the staged specification
   (`docs/video/indeo/indeo5/spec/`) by chapter and section; the module
   docs list where the decoder follows the fixtures rather than the

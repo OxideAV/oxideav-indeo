@@ -110,6 +110,28 @@ and a moved generation counter when an intra frame changes them):
 | quarter size (4:1:0, every staged stream) | `ceil(w / 4)` × `ceil(h / 4)` | `PixelFormat::Yuv444P`, each chroma sample repeated over its 4×4 luma pixels (the framework has no 4:1:0 format) |
 | half size (4:2:0, gop_flags bit 1) | `ceil(w / 2)` × `ceil(h / 2)` | `PixelFormat::Yuv420P`, as decoded |
 
+**Speed.** Single thread, release build, Apple M-series, best of 300
+passes over each staged sequence (three runs agree within 3 %; the
+harness is `benches/indeo5_decode.rs`, the stage shares come from a
+sampling profile of the same loop):
+
+| Sequence | `Iv50Decoder::decode` | Registry decoder (with the `VideoFrame` copy) |
+| -------- | --------------------- | --------------------------------------------- |
+| 176×144, 1 intra + 7 inter (vendor encoder) | 63.7 → 38.1 µs/frame (15.7 k → 26.2 k fps) | 103.7 → 47.1 µs/frame (9.6 k → 21.2 k fps) |
+| 320×240 intra, 1 105 coded blocks | 65.7 → 34.2 µs/frame (15.2 k → 29.3 k fps) | 162.5 → 58.7 µs/frame (6.2 k → 17.0 k fps) |
+| 240×180 intra, flat | 20.9 → 12.9 µs/frame (47.8 k → 77.4 k fps) | 82.1 → 27.6 µs/frame (12.2 k → 36.2 k fps) |
+
+Before, the inter sequence spent 44 % in motion compensation (a
+per-sample closure with a bounds check), 28 % in entropy decoding and
+macroblock headers, 26 % in the inverse transforms and 2 % in the plane
+writer; the intra keyframe 52 % in the transforms. Motion compensation
+now works on fixed-width rows, the transforms skip the passes that a
+block's occupied rows and columns make trivial (flat blocks, first-row
+blocks, empty columns), uncoded blocks are filled with fixed-width
+stores, the run/value map is built without allocating, and the registry
+bridge widens a chroma row once and copies rows whole. Output is
+bit-identical (the fixture digests did not move).
+
 **Refused** with `Iv50Error::Unsupported`, because the staged
 specification leaves them open: several tiles per band, locked streams
 (access key), seven-band luma and four-band chroma, a transform whose

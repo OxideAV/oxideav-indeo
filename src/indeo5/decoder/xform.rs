@@ -57,30 +57,105 @@ fn fin(v: i32) -> i16 {
     (w(v) >> 1) as i16
 }
 
+/// Which rows and which columns of a coefficient block hold values:
+/// bit `r` of `rows` is set when row `r` may be non-zero, bit `k` of
+/// `cols` when column `k` may be. A clear bit promises zeros; a set bit
+/// promises nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Occupancy {
+    pub rows: u8,
+    pub cols: u8,
+}
+
+impl Occupancy {
+    /// Nothing known: every row and column may hold values.
+    #[cfg(test)]
+    pub const FULL: Occupancy = Occupancy {
+        rows: 0xff,
+        cols: 0xff,
+    };
+
+    /// The exact occupancy of `c`.
+    #[cfg(test)]
+    pub fn of(c: &[i16; 64]) -> Occupancy {
+        let mut o = Occupancy { rows: 0, cols: 0 };
+        for (r, row) in c.as_chunks::<8>().0.iter().enumerate() {
+            for (k, &v) in row.iter().enumerate() {
+                if v != 0 {
+                    o.rows |= 1 << r;
+                    o.cols |= 1 << k;
+                }
+            }
+        }
+        o
+    }
+
+    /// Mark raster position `p` (row * 8 + column) as holding a value.
+    #[inline(always)]
+    pub fn set(&mut self, p: usize) {
+        self.rows |= 1 << (p >> 3);
+        self.cols |= 1 << (p & 7);
+    }
+}
+
 /// Apply transform type `t` (0 to 4) to the coefficient array `c`
 /// (8-wide, row-major) and write the block to `out` at `off` with row
 /// pitch `pitch`.
+#[cfg(test)]
 pub(crate) fn inverse(t: u32, c: &[i16; 64], out: &mut [i16], off: usize, pitch: usize) {
+    inverse_sparse(t, c, Occupancy::of(c), out, off, pitch);
+}
+
+/// [`inverse`] for a block whose occupancy the caller knows. A pass over
+/// a line of zeros gives zeros and a pass over a line with only its
+/// first value gives that value (plus the bias) everywhere, so those
+/// lines skip the butterflies; the result is the same for every
+/// occupancy that covers the block's values.
+pub(crate) fn inverse_sparse(
+    t: u32,
+    c: &[i16; 64],
+    occ: Occupancy,
+    out: &mut [i16],
+    off: usize,
+    pitch: usize,
+) {
     match t {
-        0 => slant8x8(c, out, off, pitch),
+        0 => slant8x8(c, occ, out, off, pitch),
         1 => {
             // Rows only.
             for r in 0..8 {
-                let x = std::array::from_fn(|k| c[r * 8 + k] as i32);
-                let y = slant8(x, 1);
                 let o = &mut out[off + r * pitch..off + r * pitch + 8];
-                for k in 0..8 {
-                    o[k] = fin(y[k]);
+                if occ.rows & (1 << r) == 0 {
+                    o.fill(0);
+                } else if occ.cols == 1 {
+                    o.fill(fin(c[r * 8] as i32 + 1));
+                } else {
+                    let x = std::array::from_fn(|k| c[r * 8 + k] as i32);
+                    let y = slant8(x, 1);
+                    for k in 0..8 {
+                        o[k] = fin(y[k]);
+                    }
                 }
             }
         }
         2 => {
             // Columns only.
             for k in 0..8 {
-                let x = std::array::from_fn(|r| c[r * 8 + k] as i32);
-                let y = slant8(x, 1);
-                for r in 0..8 {
-                    out[off + r * pitch + k] = fin(y[r]);
+                if occ.cols & (1 << k) == 0 {
+                    for r in 0..8 {
+                        out[off + r * pitch + k] = 0;
+                    }
+                } else if occ.rows == 1 {
+                    let v = fin(c[k] as i32 + 1);
+                    for r in 0..8 {
+                        out[off + r * pitch + k] = v;
+                    }
+                } else {
+                    let x = std::array::from_fn(|r| c[r * 8 + k] as i32);
+                    let y = slant8(x, 1);
+                    for r in 0..8 {
+                        out[off + r * pitch + k] = fin(y[r]);
+                    }
                 }
             }
         }
@@ -89,14 +164,31 @@ pub(crate) fn inverse(t: u32, c: &[i16; 64], out: &mut [i16], off: usize, pitch:
                 out[off + r * pitch..off + r * pitch + 8].copy_from_slice(&c[r * 8..r * 8 + 8]);
             }
         }
-        _ => slant4x4(c, out, off, pitch),
+        _ => slant4x4(c, occ, out, off, pitch),
     }
 }
 
-fn slant8x8(c: &[i16; 64], out: &mut [i16], off: usize, pitch: usize) {
+fn slant8x8(c: &[i16; 64], occ: Occupancy, out: &mut [i16], off: usize, pitch: usize) {
+    if occ.rows <= 1 && occ.cols <= 1 {
+        // The value at (0, 0) alone: a flat block (spec/06 §2.3).
+        fill(out, off, pitch, 8, fin(c[0] as i32 + 1));
+        return;
+    }
+    if occ.rows == 1 {
+        // Values in the first row only: the column pass copies that row
+        // to every row, so the row pass gives one line for all eight.
+        let y = slant8(std::array::from_fn(|k| c[k] as i32), 1).map(fin);
+        for r in 0..8 {
+            out[off + r * pitch..off + r * pitch + 8].copy_from_slice(&y);
+        }
+        return;
+    }
     // Columns with b = 0, cut to 16 bits.
     let mut m = [0i32; 64];
     for k in 0..8 {
+        if occ.cols & (1 << k) == 0 {
+            continue;
+        }
         let x = std::array::from_fn(|r| c[r * 8 + k] as i32);
         let y = slant8(x, 0);
         for r in 0..8 {
@@ -105,16 +197,24 @@ fn slant8x8(c: &[i16; 64], out: &mut [i16], off: usize, pitch: usize) {
     }
     // Rows with b = 1, then the final shift.
     for r in 0..8 {
+        let o = &mut out[off + r * pitch..off + r * pitch + 8];
+        if occ.cols == 1 {
+            o.fill(fin(m[r * 8] + 1));
+            continue;
+        }
         let x = std::array::from_fn(|k| m[r * 8 + k]);
         let y = slant8(x, 1);
-        let o = &mut out[off + r * pitch..off + r * pitch + 8];
         for k in 0..8 {
             o[k] = fin(y[k]);
         }
     }
 }
 
-fn slant4x4(c: &[i16; 64], out: &mut [i16], off: usize, pitch: usize) {
+fn slant4x4(c: &[i16; 64], occ: Occupancy, out: &mut [i16], off: usize, pitch: usize) {
+    if occ.rows <= 1 && occ.cols <= 1 {
+        fill(out, off, pitch, 4, fin(c[0] as i32 + 1));
+        return;
+    }
     let mut m = [0i32; 16];
     for k in 0..4 {
         let x = std::array::from_fn(|r| c[r * 8 + k] as i32);
@@ -133,11 +233,27 @@ fn slant4x4(c: &[i16; 64], out: &mut [i16], off: usize, pitch: usize) {
     }
 }
 
-/// Fill an `n` by `n` block with `v`.
+/// Fill an `n` by `n` block with `v` (`n` is 8 or 4: fixed-width rows,
+/// so a row is one or two stores, not a call).
 #[inline]
 pub(crate) fn fill(out: &mut [i16], off: usize, pitch: usize, n: usize, v: i16) {
-    for r in 0..n {
-        out[off + r * pitch..off + r * pitch + n].fill(v);
+    #[inline(always)]
+    fn rows<const N: usize>(out: &mut [i16], off: usize, pitch: usize, v: i16) {
+        for r in 0..N {
+            let at = off + r * pitch;
+            *out[at..at + N]
+                .first_chunk_mut::<N>()
+                .expect("slice of N samples") = [v; N];
+        }
+    }
+    match n {
+        8 => rows::<8>(out, off, pitch, v),
+        4 => rows::<4>(out, off, pitch, v),
+        _ => {
+            for r in 0..n {
+                out[off + r * pitch..off + r * pitch + n].fill(v);
+            }
+        }
     }
 }
 
@@ -370,5 +486,76 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Blocks with few coefficients: the transform with the block's
+    /// exact occupancy, with a wider one and with none claimed give the
+    /// same samples, for every transform type.
+    #[test]
+    fn occupancy_shortcuts_change_nothing() {
+        let mut st = 4242;
+        for round in 0..3000u32 {
+            let mut c = [0i16; 64];
+            let n = 1 + lcg(&mut st) % 6;
+            for _ in 0..n {
+                // Mostly the first row and column, where sparse blocks
+                // keep their values.
+                let p = match lcg(&mut st) % 4 {
+                    0 => 0,
+                    1 => (lcg(&mut st) % 8) as usize,
+                    2 => 8 * (lcg(&mut st) % 8) as usize,
+                    _ => (lcg(&mut st) % 64) as usize,
+                };
+                c[p] = (lcg(&mut st) % 2048) as i16 - 1024;
+            }
+            let t = round % 5;
+            if t == 4 {
+                // The four-point transform reads the 4x4 corner only.
+                for r in 0..8 {
+                    for k in 0..8 {
+                        if r >= 4 || k >= 4 {
+                            c[r * 8 + k] = 0;
+                        }
+                    }
+                }
+            }
+            let exact = Occupancy::of(&c);
+            let wider = Occupancy {
+                rows: exact.rows | (lcg(&mut st) as u8),
+                cols: exact.cols | (lcg(&mut st) as u8),
+            };
+            let mut outs = Vec::new();
+            for occ in [exact, wider, Occupancy::FULL] {
+                let mut out = vec![-9i16; 8 * 9];
+                inverse_sparse(t, &c, occ, &mut out, 0, 9);
+                outs.push(out);
+            }
+            assert_eq!(outs[0], outs[2], "type {t} block {c:?}");
+            assert_eq!(outs[1], outs[2], "type {t} block {c:?}");
+        }
+    }
+
+    #[test]
+    fn occupancy_marks_rows_and_columns() {
+        let mut c = [0i16; 64];
+        c[0] = 1;
+        assert_eq!(Occupancy::of(&c), Occupancy { rows: 1, cols: 1 });
+        c[8 * 3 + 5] = -2;
+        assert_eq!(
+            Occupancy::of(&c),
+            Occupancy {
+                rows: 0b1001,
+                cols: 0b10_0001
+            }
+        );
+        let mut o = Occupancy { rows: 0, cols: 0 };
+        o.set(8 * 7 + 2);
+        assert_eq!(
+            o,
+            Occupancy {
+                rows: 0x80,
+                cols: 4
+            }
+        );
     }
 }
