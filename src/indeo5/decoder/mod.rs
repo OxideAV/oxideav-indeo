@@ -22,6 +22,7 @@ mod huff;
 mod synth;
 mod tables;
 mod xform;
+mod yuy2;
 
 use band::{B0Rec, BandGeom, BandJob, Bank, TileGeom, build_bank, fill_empty_band};
 use bits::PaddedFrame;
@@ -228,6 +229,22 @@ impl Iv50Decoder {
     /// The V (Cr) plane of the current picture.
     pub fn v(&self) -> Option<Iv50Plane<'_>> {
         self.plane(1)
+    }
+
+    /// The current picture as packed `YUY2` (`Y0 U Y1 V`, top row
+    /// first, `4 * ceil(width / 2)` bytes per row), the layout the
+    /// vendor driver hands a `YUY2` host: luma unchanged, chroma widened
+    /// by two in each direction with a truncating two-tap average,
+    /// horizontally first (`spec/08-output-reconstruction.md` §3.4a).
+    ///
+    /// `None` before the first picture, and for a picture with half-size
+    /// chroma, whose `YUY2` conversion that section does not cover.
+    pub fn yuy2(&self) -> Option<Vec<u8>> {
+        let (y, u, v) = (self.y()?, self.u()?, self.v()?);
+        if u.width != y.width.div_ceil(4) || u.height != y.height.div_ceil(4) {
+            return None;
+        }
+        Some(yuy2::pack(&y, &u, &v))
     }
 
     fn plane(&self, i: usize) -> Option<Iv50Plane<'_>> {

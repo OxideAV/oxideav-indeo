@@ -37,6 +37,19 @@ quantiser bank (`docs/video/indeo/indeo5/tables/quant_matrices_1007b000.csv`,
 Extractor round 15, live-verified in Validator round 16), the oracle
 for the quantiser bank test in `src/indeo5/decoder/band.rs`.
 
+## `iv50-inter-176x144-8frame-vendor-enc/`
+
+The staged vendor-encoded inter sequence of
+`docs/video/indeo/indeo5/fixtures/inter-176x144-8frame-vendor-enc/`:
+`samples.bin` (eight `IV50` frames concatenated, one INTRA and seven
+INTER, 11 208 bytes, SHA-256
+`d4b41fe1bbe1b60bc7e6a5da2c69df3a0409ef96f791e8efcf2bf8de335a8de0`) and
+`samples-index.csv` (`frame,offset,size,frame_type,frame_number,sha256`).
+The fixture's 405 504-byte `expected.yuv` (eight 176x144 `YUY2` frames
+from the vendor decoder) is not vendored; `tests/indeo5_fixtures.rs`
+pins the SHA-256 of each of its frames and compares the decoder's
+`YUY2` output with them.
+
 ## `iv32-160x120-all-intra/` / `iv32-176x144-4frame-intra-period/`
 
 Real `IV32` (Indeo 3) coded access units with black-box reference

@@ -6,6 +6,15 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- indeo5: `Iv50Decoder::yuy2`, the picture as packed `YUY2` with the
+  vendor driver's chroma interpolation (`spec/08` §3.4a)
+- indeo5: the staged vendor-encoded inter fixture (176x144, one intra
+  and seven inter frames) decodes byte-exact against the vendor
+  driver's `YUY2` output, luma and chroma, as do both intra keyframes;
+  per-plane SHA-256 pins for every staged frame
+
 ## [0.0.5](https://github.com/OxideAV/oxideav-indeo/compare/v0.0.4...v0.0.5) - 2026-11-15
 
 ### Other
