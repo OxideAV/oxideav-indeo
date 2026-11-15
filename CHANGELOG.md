@@ -8,6 +8,14 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- indeo5: `Iv50Decoder::transparency` gives a transparency stream's
+  colour (`[red, green, blue]` from the GOP header), the rectangles of
+  the last frame's trailer (`Iv50Rect`) and the per-pixel mask the
+  trailer codes (`spec/02` §5, `spec/08` §8.9): a single value, or
+  run lengths in a prefix code whose descriptor stays in force for
+  later frames, with an optional XOR of each row with the row above.
+  The trailer is now read to its end, so a frame whose mask data is
+  cut short or uses a code without a descriptor fails
 - indeo5: `Iv50Decoder::yuy2`, the picture as packed `YUY2` with the
   vendor driver's chroma interpolation (`spec/08` §3.4a)
 - indeo5: the staged vendor-encoded inter fixture (176x144, one intra
