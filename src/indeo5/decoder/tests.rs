@@ -300,6 +300,92 @@ fn px(out: &OutPlane, r: usize, c: usize) -> u8 {
     out.data[r * out.stride + c]
 }
 
+/// The four-band recombination against the synthesis filter pair of
+/// spec/06 §3.2, written as a plain upsample-and-filter: a low-pass
+/// axis places band sample `k` on plane position `2k` with the taps
+/// `{1, 2, 1} / 2`, a high-pass axis on position `2k + 1` with
+/// `{1, 2, -6, 2, 1} / 4`; band 1 is high-pass vertically, band 2
+/// horizontally, band 3 in both. The plane sample is a quarter of the
+/// sum of the four bands, truncated: the accumulator of spec/08 §3.0
+/// holds 16 times the sum and is shifted right by 6. Compared away from
+/// the plane's edges, where the neighbour rules differ.
+#[test]
+fn four_band_equals_the_five_three_synthesis_pair() {
+    const LOW: [i32; 3] = [1, 2, 1];
+    const HIGH: [i32; 5] = [1, 2, -6, 2, 1];
+    // The weight of band sample `k` at plane position `pos` along one
+    // axis, with the low-pass taps doubled and the high-pass ones
+    // quadrupled.
+    let weight = |high: bool, k: usize, pos: usize| -> i32 {
+        let (centre, taps): (i32, &[i32]) = if high {
+            (2 * k as i32 + 1, &HIGH)
+        } else {
+            (2 * k as i32, &LOW)
+        };
+        let d = pos as i32 - centre + taps.len() as i32 / 2;
+        if (0..taps.len() as i32).contains(&d) {
+            taps[d as usize]
+        } else {
+            0
+        }
+    };
+    let lay = four_band_layout();
+    let mut state = 2024u32;
+    for round in 0..6 {
+        let mut area = vec![0i16; lay.area_len];
+        let mut bands = [[[0i32; 32]; 16]; 4];
+        let span = [40, 200, 1000][round % 3];
+        for (b, band) in bands.iter_mut().enumerate() {
+            let g = &lay.bands[b];
+            assert_eq!(g.pitch, 32);
+            for (r, row) in band.iter_mut().enumerate() {
+                for (c, v) in row.iter_mut().enumerate() {
+                    state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                    *v = ((state >> 8) % (2 * span)) as i32 - span as i32;
+                    area[g.offset + r * 32 + c] = *v as i16;
+                }
+            }
+        }
+        let mut out = OutPlane::new(64, 32);
+        let win = Window {
+            y: 0,
+            x: 0,
+            h: 32,
+            w: 64,
+        };
+        four_band(&area, &lay.bands, win, &mut out);
+        for y in 4..28 {
+            for x in 4..58 {
+                let mut acc = 0i32;
+                for (b, band) in bands.iter().enumerate() {
+                    let (high_y, high_x) = (b & 1 == 1, b & 2 == 2);
+                    // With the doubled and quadrupled taps a band has a
+                    // gain of 4, 8, 8 or 16; this brings all to 16.
+                    let gain = [4, 2, 2, 1][b];
+                    // The band samples within two of the plane sample.
+                    let near = |pos: usize| pos / 2 - 2..=pos / 2 + 2;
+                    for (r, row) in band.iter().enumerate() {
+                        let wy = weight(high_y, r, y);
+                        if wy == 0 || !near(y).contains(&r) {
+                            continue;
+                        }
+                        acc += gain
+                            * wy
+                            * row
+                                .iter()
+                                .enumerate()
+                                .filter(|(k, _)| near(x).contains(k))
+                                .map(|(k, &v)| weight(high_x, k, x) * v)
+                                .sum::<i32>();
+                    }
+                }
+                let want = (((acc as i16) >> 6) as i32 + 128).clamp(0, 255) as u8;
+                assert_eq!(px(&out, y, x), want, "round {round} sample ({x}, {y})");
+            }
+        }
+    }
+}
+
 #[test]
 fn four_band_low_band_is_upsampled() {
     // L = 16 * c: even columns 16 * L >> 6 = 4c, odd columns average

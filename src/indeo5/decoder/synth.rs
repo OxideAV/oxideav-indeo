@@ -57,9 +57,14 @@ pub(crate) fn one_band(area: &[i16], b: &BandGeom, win: Window, out: &mut OutPla
 }
 
 /// Four band plane (spec/08 §3.0 and §3.2: accumulator at 64 times the
-/// sample, `clamp((acc >> 6) + 128, 0, 255)`; the filter taps follow the
-/// 5/3 synthesis pair of spec/06 §3.2, whose integer form the staged
-/// specification does not pin): the integer synthesis filter
+/// sample, `clamp((acc >> 6) + 128, 0, 255)`). The taps are the 5/3
+/// synthesis pair of spec/06 §3.2: a low-pass axis puts band sample `k`
+/// on position `2k` with `{1, 2, 1} / 2`, a high-pass axis on `2k + 1`
+/// with `{1, 2, -6, 2, 1} / 4`, and the sample is a quarter of the four
+/// bands' sum, so the accumulator holds 16 times that sum and nothing is
+/// rounded before the one shift. The staged specification does not pin
+/// that integer form or the edge rules (first column and row repeat,
+/// the last row mirrors); they are this decoder's: the integer synthesis filter
 /// over the window, with rows started on an even row and columns widened
 /// to multiples of 32.
 pub(crate) fn four_band(area: &[i16], bands: &[BandGeom], win: Window, out: &mut OutPlane) {

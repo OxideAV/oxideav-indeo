@@ -24,6 +24,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decode; `Iv50Decoder::chroma_ratio` tells the layout. Transparency
   combined with half-size chroma stays refused, as does a half-size
   chroma band that inherits from luma macroblocks not twice its own
+- indeo5: a test that the four-band recombination equals the 5/3
+  synthesis filter pair of `spec/06` §3.2 applied as a plain
+  upsample-and-filter (a quarter of the bands' sum, truncated once),
+  away from the plane's edges
 - indeo5: a test of the reference chain of every frame type (`spec/07`
   §1.5): type 2 and 3 frames predict from the last type 2 frame, type 3
   frames are never a reference, type 1 frames ignore both

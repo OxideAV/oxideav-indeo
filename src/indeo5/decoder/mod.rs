@@ -64,10 +64,15 @@
 //!   inheritance of a chroma band from luma band 0 with its rounding,
 //!   the clamp of the macroblock quantiser to 0..23, `value4 == 2` in
 //!   the GOP header.
-//! * Not exercised: the four-band synthesis filter, the four-point
-//!   transform, the fill values of an empty band, the transparency
-//!   trailer and its window, the extra block of an odd row of one-block
-//!   macroblocks, frame types 2 and 3, half-sample vectors, empty tiles.
+//! * Not exercised: the four-point transform (the `(5, 2)` stage alone,
+//!   as spec/06 §2.3 words it), the fill values of an empty band, the
+//!   transparency trailer and its window, the extra block of an odd row
+//!   of one-block macroblocks, half-sample vectors, empty tiles, and the
+//!   edge rules and rounding of the four-band synthesis. Away from the
+//!   edges that synthesis is the filter pair of spec/06 §3.2 applied as
+//!   a plain upsample-and-filter, a quarter of the bands' sum truncated
+//!   once (a unit test compares the two); frame types 2 and 3 follow
+//!   spec/07 §1.5 (also under test).
 //!
 //! ## Refused
 //!
