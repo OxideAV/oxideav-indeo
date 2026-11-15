@@ -94,6 +94,7 @@ use synth::{OutPlane, Window};
 /// Largest picture area, in luma pixels, the decoder accepts. A custom
 /// picture size can ask for up to 8191 by 8191; larger pictures than this
 /// are refused before any buffer is allocated.
+/// [`Iv50Decoder::with_max_pixels`] lowers the bound.
 pub const MAX_PICTURE_PIXELS: u64 = 4096 * 4096;
 
 /// The type of a decoded frame (spec/01 §3.3; spec/07 §1.5).
@@ -227,6 +228,8 @@ pub struct Iv50Decoder {
     /// Transparency bounding box (y, x, h, w).
     bbox: Option<(usize, usize, usize, usize)>,
     bank: Box<Bank>,
+    /// Largest picture area accepted, in luma pixels.
+    max_pixels: u64,
     /// Huffman tables of the macroblock and block layers.
     mb_huffs: Vec<Huff>,
     blk_huffs: Vec<Huff>,
@@ -264,10 +267,22 @@ impl Iv50Decoder {
             out: Vec::new(),
             bbox: None,
             bank: build_bank(),
+            max_pixels: MAX_PICTURE_PIXELS,
             mb_huffs: Vec::new(),
             blk_huffs: Vec::new(),
             have_picture: false,
         }
+    }
+
+    /// Lower the largest picture area the decoder accepts to `pixels`
+    /// luma pixels (never above [`MAX_PICTURE_PIXELS`]). A GOP header
+    /// that asks for more is refused before any buffer is allocated, so
+    /// this bounds the memory a stream can make the decoder take: about
+    /// 8 bytes per luma pixel (three sets of 16-bit band buffers and the
+    /// 8-bit planes) plus fixed margins.
+    pub fn with_max_pixels(mut self, pixels: u64) -> Self {
+        self.max_pixels = pixels.min(MAX_PICTURE_PIXELS);
+        self
     }
 
     /// Picture size from the last GOP header, or `None` before the first
@@ -359,9 +374,9 @@ impl Iv50Decoder {
         }
         if ftype == 0 {
             let gop = headers::read_gop(&mut r)?;
-            if gop.width as u64 * gop.height as u64 > MAX_PICTURE_PIXELS {
+            if gop.width as u64 * gop.height as u64 > self.max_pixels {
                 return Err(Iv50Error::Unsupported(
-                    "picture area above 4096 x 4096 pixels",
+                    "picture area above the decoder's limit",
                 ));
             }
             self.set_gop(gop);

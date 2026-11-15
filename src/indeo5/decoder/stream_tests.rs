@@ -576,3 +576,202 @@ fn macroblock_quantiser_deltas() {
     // The two macroblocks used different steps.
     assert_ne!(step(0, 1, 13, 1), step(0, 1, 8, 1));
 }
+
+/// A 64x32 intra frame with four luma bands of 32x16 (two 16x16
+/// macroblocks each): band 0 holds the DC levels `dc`, and with
+/// `detail` the other three bands carry coefficients through their own
+/// transforms (rows, columns, none).
+fn four_band_intra(dc: [i32; 8], detail: bool) -> Vec<u8> {
+    let gop = Gop {
+        decomp: 1,
+        luma: vec![0; 4],
+        ..Gop::simple(64, 32)
+    };
+    let low = Band::new(true, dc.chunks(4).map(dc_mb).collect());
+    let skipped = Band::new(true, vec![Mb::default(); 2]);
+    let busy = |k: i32| {
+        let mb = Mb {
+            cbp: 0b1010,
+            blocks: vec![vec![(1, k), (3, -1), (9, 2)], vec![(2, -k), (60, 1)]],
+            ..Default::default()
+        };
+        Band {
+            gq: 4,
+            ..Band::new(true, vec![mb.clone(), mb])
+        }
+    };
+    let high: Vec<Band> = (1..4).map(busy).collect();
+    let luma: Vec<Option<&Band>> = if detail {
+        std::iter::once(Some(&low))
+            .chain(high.iter().map(Some))
+            .collect()
+    } else {
+        vec![Some(&low), Some(&skipped), Some(&skipped), Some(&skipped)]
+    };
+    frame(0, 0, Some(&gop), 0, &luma, None, None)
+}
+
+/// Four-band luma with only the low band set: a flat low band of
+/// sample `c` gives a flat picture of `(16 * c) >> 6` (the synthesis
+/// accumulator holds 64 times the sample, spec/08 §3.0, and the low
+/// band enters it with weight 16).
+#[test]
+fn four_band_flat_low_band() {
+    // A first block of level 9 and no further change.
+    let mut dec = Iv50Decoder::new();
+    let levels = [9, 0, 0, 0, 0, 0, 0, 0];
+    // Level 0 is not a coefficient: code only the first block.
+    let gop = Gop {
+        decomp: 1,
+        luma: vec![0; 4],
+        ..Gop::simple(64, 32)
+    };
+    let first = Mb {
+        cbp: 1,
+        blocks: vec![vec![(1, levels[0])]],
+        ..Default::default()
+    };
+    let low = Band::new(true, vec![first, Mb::default()]);
+    let rest = Band::new(true, vec![Mb::default(); 2]);
+    let data = frame(
+        0,
+        0,
+        Some(&gop),
+        0,
+        &[Some(&low), Some(&rest), Some(&rest), Some(&rest)],
+        None,
+        None,
+    );
+    assert_eq!(dec.decode(&data), Ok(FrameType::Intra));
+    assert_eq!(dec.dimensions(), Some((64, 32)));
+    // Group 1 is the low band's matrix group in a four-band plane
+    // (spec/06 §5.1).
+    let c = dc_consts(&[9], step(1, 1, 0, 0))[0];
+    assert_ne!(c, 0);
+    assert_samples(dec.y().unwrap(), "luma", |_, _| (16 * c) >> 6);
+}
+
+/// The synthetic streams of this module with every bit flipped and at
+/// every length: the paths the staged frames do not reach (four bands
+/// with one-axis transforms, half-size chroma, inherited vectors,
+/// escapes) must return as well.
+#[test]
+fn corrupted_synthetic_streams_return() {
+    let (_, half_intra, _) = half_chroma_intra();
+    let inherit = {
+        let luma = Band::new(
+            true,
+            vec![Mb {
+                inter: true,
+                cbp: 5,
+                mv: (-3, 7),
+                blocks: vec![vec![(1, 2)], vec![(1, 300), (40, 2)]],
+                ..Default::default()
+            }],
+        );
+        let chroma = Band {
+            flags: 2,
+            ..Band::new(
+                true,
+                vec![Mb {
+                    cbp: 9,
+                    blocks: vec![vec![(1, 1)], vec![(2, -1)]],
+                    ..Default::default()
+                }],
+            )
+        };
+        frame(
+            1,
+            1,
+            None,
+            0x80,
+            &[Some(&luma)],
+            Some(&chroma),
+            Some(&chroma),
+        )
+    };
+    let (_, ref32, _) = reference_32(1);
+    let moving = {
+        let mb = Mb {
+            inter: true,
+            cbp: 6,
+            mv: (3, -5),
+            blocks: vec![vec![(1, 4), (1, -2)], vec![(64, 1)]],
+            ..Default::default()
+        };
+        frame(
+            3,
+            1,
+            None,
+            0,
+            &[Some(&Band::new(true, vec![mb; 4]))],
+            None,
+            None,
+        )
+    };
+    let four = four_band_intra([5, -3, 9, 2, -7, 4, 11, -6], true);
+    let sequences: [Vec<&[u8]>; 3] = [
+        vec![&half_intra, &inherit],
+        vec![&ref32, &moving],
+        vec![&four],
+    ];
+    for seq in &sequences {
+        // The clean sequence decodes.
+        let mut dec = Iv50Decoder::new();
+        for f in seq {
+            dec.decode(f).unwrap();
+        }
+        for (k, target) in seq.iter().enumerate() {
+            for cut in 0..target.len() {
+                let mut dec = Iv50Decoder::new().with_max_pixels(1 << 16);
+                for f in &seq[..k] {
+                    dec.decode(f).unwrap();
+                }
+                let _ = dec.decode(&target[..cut]);
+                let _ = dec.yuy2();
+            }
+            let mut dec = Iv50Decoder::new().with_max_pixels(1 << 16);
+            for bit in 0..target.len() * 8 {
+                if bit % 32 == 0 {
+                    for f in &seq[..k] {
+                        // A corrupted GOP header may have changed the
+                        // layout; the clean frames restore it.
+                        let _ = dec.decode(f);
+                    }
+                }
+                let mut work = target.to_vec();
+                work[bit / 8] ^= 1 << (bit % 8);
+                if k > 0 {
+                    work[1] = work[1].wrapping_add((bit % 200) as u8 + 1);
+                }
+                let _ = dec.decode(&work);
+                for p in [dec.y(), dec.u(), dec.v()].into_iter().flatten() {
+                    let _ = p.row(p.height - 1);
+                }
+            }
+        }
+    }
+}
+
+/// Decoding is a function of the frames alone: two decoders fed the
+/// same sequence hold the same planes, also after an error in between.
+#[test]
+fn decoding_is_deterministic_across_decoders() {
+    let four = four_band_intra([5, -3, 9, 2, -7, 4, 11, -6], true);
+    let (_, ref32, _) = reference_32(1);
+    let mut a = Iv50Decoder::new();
+    let mut b = Iv50Decoder::new();
+    a.decode(&four).unwrap();
+    // `b` first sees another layout and a broken frame.
+    b.decode(&ref32).unwrap();
+    assert!(b.decode(&four[..four.len() - 2]).is_err());
+    b.decode(&four).unwrap();
+    for (pa, pb) in [(a.y(), b.y()), (a.u(), b.u()), (a.v(), b.v())] {
+        assert_eq!(rows(pa.unwrap()), rows(pb.unwrap()));
+    }
+    // The detail bands change the picture.
+    let mut flat = Iv50Decoder::new();
+    flat.decode(&four_band_intra([5, -3, 9, 2, -7, 4, 11, -6], false))
+        .unwrap();
+    assert_ne!(rows(a.y().unwrap()), rows(flat.y().unwrap()));
+}

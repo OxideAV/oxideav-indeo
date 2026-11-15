@@ -77,11 +77,15 @@ pub fn codec_id_for_fourcc(fourcc: &[u8; 4]) -> Option<CodecId> {
 ///
 /// The parameters' `width` / `height` / `pixel_format` are advisory —
 /// the Indeo 5 bitstream carries its own dimensions in the GOP header of
-/// every intra frame, so the decoder is self-describing.
+/// every intra frame, so the decoder is self-describing. The parameters'
+/// [`limits`](CodecParameters::limits) bound the picture area a GOP
+/// header may ask for (`max_pixels_per_frame`, never above
+/// [`MAX_PICTURE_PIXELS`](super::MAX_PICTURE_PIXELS)).
 pub fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {
-    Ok(Box::new(Indeo5RegistryDecoder::new(
-        params.codec_id.clone(),
-    )))
+    let mut dec = Indeo5RegistryDecoder::new(params.codec_id.clone());
+    dec.max_pixels = params.limits.max_pixels_per_frame;
+    dec.inner = Iv50Decoder::new().with_max_pixels(dec.max_pixels);
+    Ok(Box::new(dec))
 }
 
 /// An [`oxideav_core`] [`Decoder`] backed by the in-crate stateful
@@ -103,6 +107,8 @@ pub struct Indeo5RegistryDecoder {
     /// A decoded frame held back behind its [`Frame::StreamParams`]
     /// event.
     held: Option<VideoFrame>,
+    /// Picture area bound handed to every [`Iv50Decoder`] it creates.
+    max_pixels: u64,
 }
 
 impl Indeo5RegistryDecoder {
@@ -116,6 +122,7 @@ impl Indeo5RegistryDecoder {
             shape: None,
             generation: 0,
             held: None,
+            max_pixels: u64::MAX,
         }
     }
 }
@@ -267,7 +274,7 @@ impl Decoder for Indeo5RegistryDecoder {
         self.pending = None;
         self.held = None;
         self.eof = false;
-        self.inner = Iv50Decoder::new();
+        self.inner = Iv50Decoder::new().with_max_pixels(self.max_pixels);
         Ok(())
     }
 

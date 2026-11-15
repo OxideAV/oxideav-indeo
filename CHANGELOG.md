@@ -36,6 +36,16 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   phases, whole-sample vectors, intra and skipped macroblocks in inter
   frames, runs and escapes, quantiser deltas, the quantiser range
 
+- indeo5: `Iv50Decoder::with_max_pixels` lowers the picture-area bound
+  (default `MAX_PICTURE_PIXELS`); the registry decoder takes it from
+  the stream parameters' `limits.max_pixels_per_frame`
+- indeo5: hostile-input tests: every staged frame truncated at every
+  length, with every byte changed and header bits flipped, corrupted
+  inter frames against a clean reference, random band data, the same
+  sweeps over synthetic streams (four bands with one-axis transforms,
+  half-size chroma, inherited vectors, escapes), and the picture-area
+  bound
+
 ### Changed
 
 - indeo5: the decoder's comments cite the staged specification
